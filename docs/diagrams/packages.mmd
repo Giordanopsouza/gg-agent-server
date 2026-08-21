@@ -1,0 +1,12 @@
+flowchart TD
+  SDK[openhands-sdk<br/>Agent, Conversation, Workspace, events, LLM]
+  TOOLS[openhands-tools<br/>TerminalTool, FileEditor]
+  AS[openhands-agent-server<br/>FastAPI, EventService]
+  WS[openhands-workspace<br/>Docker, API, Cloud launchers]
+
+  TOOLS --> SDK
+  AS --> SDK
+  AS --> TOOLS
+  WS --> SDK
+  WS --> TOOLS
+  WS -.->|image build helper only| AS

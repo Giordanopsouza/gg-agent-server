@@ -1,0 +1,19 @@
+[project]
+name = "gg-server"
+version = "0.1.0"
+description = "gg-agent-server — FastAPI process for remote agent conversations"
+requires-python = ">=3.12"
+dependencies = [
+    "gg-sdk",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.setuptools.packages.find]
+include = ["gg.server*"]
+namespaces = true

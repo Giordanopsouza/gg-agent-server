@@ -1,0 +1,31 @@
+sequenceDiagram
+  participant C as RemoteConversation
+  participant R as conversation_router
+  participant CS as ConversationService
+  participant ES as EventService
+  participant LC as LocalConversation
+  participant EL as EventLog files
+  participant PS as PubSub
+  participant WS as WebSocket /sockets/events/id
+
+  C->>R: POST /api/conversations
+  R->>CS: start_conversation()
+  CS->>ES: create and start()
+  ES->>ES: claim ConversationLease
+  ES->>LC: LocalWorkspace, meta.json, base_state.json
+  R-->>C: 201
+
+  C->>WS: connect plus auth frame
+  WS->>PS: subscribe
+
+  C->>R: POST events with run false
+  C->>R: POST run
+  R->>ES: run()
+  ES->>LC: arun or run_in_executor
+
+  loop each agent step
+    LC->>ES: on_event
+    ES->>EL: append event JSON
+    ES->>PS: publish
+    PS-->>WS: push to the client
+  end

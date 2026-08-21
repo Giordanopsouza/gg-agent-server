@@ -1,0 +1,32 @@
+flowchart LR
+  subgraph client [Client SDK process]
+    SDK[RemoteConversation]
+    DW[DockerWorkspace]
+    AW[APIRemoteWorkspace]
+    CW[OpenHandsCloudWorkspace]
+    LW[LocalWorkspace and LocalConversation]
+  end
+
+  subgraph docker [Docker container is the sandbox]
+    AS1[agent-server on port 8000]
+    FS1[(container disk at /workspace)]
+    AS1 --- FS1
+  end
+
+  subgraph pod [Runtime API pod is the sandbox]
+    AS2[agent-server on port 60000]
+    FS2[(pod disk)]
+    AS2 --- FS2
+  end
+
+  subgraph cloud [Cloud sandbox]
+    AS3[agent-server on port 60000]
+    FS3[(sandbox disk at /workspace/project)]
+    AS3 --- FS3
+  end
+
+  DW -->|docker run, then HTTP| AS1
+  AW -->|POST /start, then HTTP| AS2
+  CW -->|POST /sandboxes, then HTTP| AS3
+  SDK -->|REST and WebSocket| AS1
+  LW -.->|no server| LW
