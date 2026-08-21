@@ -14,14 +14,18 @@ from gg.sdk.event_log import (
     save_base_state,
     save_meta,
 )
+from gg.sdk.local_workspace import CommandResult, LocalWorkspace
+
 
 __all__ = [
     "BaseState",
+    "CommandResult",
     "ConversationRecord",
     "ConversationStatus",
     "Event",
     "EventKind",
     "EventLog",
+    "LocalWorkspace",
     "load_base_state",
     "load_meta",
     "save_base_state",

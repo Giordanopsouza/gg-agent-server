@@ -1,18 +1,21 @@
 from __future__ import annotations
+
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
+
 from pydantic import BaseModel, ConfigDict, Field
 
-class ConversationStatus(str, Enum):
+
+class ConversationStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     FINISHED = "finished"
     ERROR = "error"
 
 
-class EventKind(str, Enum):
+class EventKind(StrEnum):
     MESSAGE = "message"
     ACTION = "action"
     OBSERVATION = "observation"
