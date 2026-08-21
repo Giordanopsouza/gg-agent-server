@@ -1,7 +1,7 @@
 ---
 id: 005-write-file-tool
 feature: loop
-status: pending
+status: done
 depends_on: [002-domain-types, 004-local-workspace]
 ---
 
@@ -21,16 +21,20 @@ Add a tool protocol and a `write_file` implementation the dummy agent can call.
 
 ## Acceptance criteria
 
-- [ ] `Tool` has `name`, `run(args, workspace) -> Observation`.
-- [ ] `write_file` args are `path` and `content`.
-- [ ] A successful run leaves the file on disk and returns an observation payload.
-- [ ] Unknown tool names fail at the registry, not inside the workspace.
+- [x] `Tool` has `name`, `run(args, workspace) -> Observation`.
+- [x] `write_file` args are `path` and `content`.
+- [x] A successful run leaves the file on disk and returns an observation payload.
+- [x] Unknown tool names fail at the registry, not inside the workspace.
 
 ## Out of scope
 
 - Shell tool. Browser. The agent loop that *chooses* the tool (`006`).
 
 ## Log
+
+### [SWE] 2026-08-21 16:45 — Write-file tool landed
+
+`gg.sdk.tools` with `Observation`, `Tool`, `WriteFileTool`, `ToolRegistry`, and `test_tools.py`.
 
 ### [PA] 2026-08-21 13:45 — Grooming
 
