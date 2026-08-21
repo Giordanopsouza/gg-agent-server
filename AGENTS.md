@@ -22,4 +22,15 @@ uv run pytest
 uv run ruff check .
 ```
 
-Workspace packages live under `packages/gg-sdk` and `packages/gg-server`. Task 001 is [repo scaffolding](docs/tasks/001-repo-scaffolding.md).
+Workspace packages live under `packages/gg-sdk` and `packages/gg-server`.
+
+## Git workflow
+
+One task → one branch → one PR → merge to `main` → delete branch.
+
+1. `git checkout main && git pull --ff-only`
+2. `git checkout -b NNN-slug` (match `tasks/NNN-*.md`)
+3. Implement, commit, push, open PR, merge
+4. Delete the branch; start the next task from fresh `main`
+
+Do not stack tasks on a long-lived branch. Worktrees only for parallel tasks.

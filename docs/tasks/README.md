@@ -13,7 +13,7 @@ behind HTTP. Do not skip 1a.
 
 | Slice | Feature slug | Tasks | Stop when |
 |---|---|---|---|
-| 1a | `scaffold`, `loop` | [001](001-repo-scaffolding.md) … [007](007-in-process-demo.md) | `NOTES.md` from a Python module, no server |
+| 1a | `scaffold`, `loop` | [001](done/001-repo-scaffolding.md) … [007](007-in-process-demo.md) | `NOTES.md` from a Python module, no server |
 | 1b | `server` | [008](008-server-config.md) … [016](016-local-server-demo.md) | Reconnect to a local server and still see events |
 | 2 | `docker` | [017](017-server-dockerfile.md) … [020](020-docker-sandbox-demo.md) | `NOTES.md` inside a container |
 | 3 | `runtime` | [021](021-runtime-control-api.md) … [023](023-runtime-api-demo.md) | Same demo through `POST /start` |
@@ -35,8 +35,11 @@ The frontmatter `status:` remains authoritative after a move.
 
 ```
 tasks/
-├── 001-repo-scaffolding.md        # status: pending
-├── 002-domain-types.md
+├── 004-local-workspace.md         # status: pending
+├── done/
+│   ├── 001-repo-scaffolding.md    # status: done
+│   ├── 002-domain-types.md        # status: done
+│   └── 003-event-log.md           # status: done
 └── overview.md
 ```
 
@@ -52,7 +55,7 @@ Optional frontmatter: `feature:` slug, `depends_on:` list of task ids.
 id: 003-bash-tool
 feature: tools          # the feature slug this task belongs to
 status: pending         # pending | in-progress | done
-depends_on: [002-domain-types]
+depends_on: 
 ---
 
 # Bash tool
