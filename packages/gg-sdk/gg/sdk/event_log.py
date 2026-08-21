@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event
 
+
 EVENTS_DIR = "events"
 META_FILE = "meta.json"
 BASE_STATE_FILE = "base_state.json"
