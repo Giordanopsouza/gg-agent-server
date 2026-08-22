@@ -4,8 +4,10 @@ version = "0.1.0"
 description = "gg-agent-server — FastAPI process for remote agent conversations"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.104",
     "gg-sdk",
     "pydantic>=2.0",
+    "uvicorn>=0.31.1",
 ]
 
 [build-system]

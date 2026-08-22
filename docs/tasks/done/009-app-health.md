@@ -1,7 +1,7 @@
 ---
 id: 009-app-health
 feature: server
-status: pending
+status: done
 depends_on: [008-server-config]
 ---
 
@@ -21,10 +21,10 @@ Stand up FastAPI: `create_app`, lifespan, `/health`, `/ready`, CLI entry.
 
 ## Acceptance criteria
 
-- [ ] `create_app(settings)` returns a FastAPI app.
-- [ ] `GET /health` is liveness. `GET /ready` is 200 after lifespan startup.
-- [ ] `uv run python -m gg.server --host 127.0.0.1 --port 8000` serves those routes.
-- [ ] Tests use httpx `ASGITransport`. They do not require a real port.
+- [x] `create_app(settings)` returns a FastAPI app.
+- [x] `GET /health` is liveness. `GET /ready` is 200 after lifespan startup.
+- [x] `uv run python -m gg.server --host 127.0.0.1 --port 8000` serves those routes.
+- [x] Tests use httpx `ASGITransport`. They do not require a real port.
 
 ## Out of scope
 
@@ -35,3 +35,15 @@ Stand up FastAPI: `create_app`, lifespan, `/health`, `/ready`, CLI entry.
 ### [PA] 2026-08-21 13:45 — Grooming
 
 Keep `/ready` honest. We are not building deferred init, so `/ready` may mean the API is usable. Do not copy OpenHands warm-pool semantics.
+
+### [SWE] 2026-08-22 13:55 — Implementation
+
+Added `gg/server/app.py` with `create_app(settings)`, lifespan `ready_event`, and
+`/health` + `/ready` routes. Added `gg/server/__main__.py` CLI (`python -m gg.server`)
+with `resolve_bind_host()` defaulting to loopback when no session keys are set.
+Exported `create_app` from `gg.server`. Tests in `test_app_health.py` use httpx
+`ASGITransport` with `AsyncClient`.
+
+### [Tester] 2026-08-22 13:55 — Verified
+
+`uv run pytest` passed (54 tests). Smoke-tested `/health` and `/ready` on live server.
