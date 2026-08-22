@@ -19,3 +19,11 @@ class InvalidConversationStateError(ConversationError):
         self.status = status
         self.operation = operation
         super().__init__(f"cannot {operation} while status is {status}")
+
+
+class ConversationNotFoundError(ConversationError):
+    """A conversation id has no on-disk catalog entry."""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = conversation_id
+        super().__init__(f"conversation not found: {conversation_id}")

@@ -5,7 +5,13 @@ from typing import Any
 
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event, EventKind
 from gg.sdk.dummy_agent import plan_write_notes
-from gg.sdk.event_log import EventLog, save_base_state, save_meta
+from gg.sdk.event_log import (
+    EventLog,
+    load_base_state,
+    load_meta,
+    save_base_state,
+    save_meta,
+)
 from gg.sdk.exceptions import (
     ConversationAlreadyRunningError,
     InvalidConversationStateError,
@@ -50,6 +56,28 @@ class LocalConversation:
             ),
         )
         self._persist_status()
+
+    @classmethod
+    def open(
+        cls,
+        *,
+        conversation_dir: Path | str,
+        workspace: LocalWorkspace | None = None,
+        tool_registry: ToolRegistry | None = None,
+    ) -> LocalConversation:
+        """Load an existing conversation from disk without resetting its state."""
+        dir_path = Path(conversation_dir)
+        meta = load_meta(dir_path)
+        state = load_base_state(dir_path)
+        ws = workspace or LocalWorkspace(working_dir=state.working_dir)
+        obj = cls.__new__(cls)
+        obj.conversation_dir = dir_path
+        obj.workspace = ws
+        obj._tool_registry = tool_registry or default_tool_registry()
+        obj._event_log = EventLog(dir_path)
+        obj._status = state.status
+        obj.id = meta.id
+        return obj
 
     # Expose the current conversation status (idle, running, finished, …).
     @property

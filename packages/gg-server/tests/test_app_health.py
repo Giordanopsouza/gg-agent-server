@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 from httpx import ASGITransport
 
 from gg.server import Settings, create_app
 from gg.server.__main__ import resolve_bind_host
+from gg.server.conversation_service import ConversationService
 
 
 @pytest.mark.anyio
@@ -66,3 +69,24 @@ def test_resolve_bind_host_defaults_to_all_interfaces_with_keys() -> None:
 
 def test_resolve_bind_host_honors_explicit_host() -> None:
     assert resolve_bind_host("10.0.0.5", session_api_keys=[]) == "10.0.0.5"
+
+
+@pytest.mark.anyio
+async def test_lifespan_wires_conversation_service(tmp_path: Path) -> None:
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "project",
+    )
+    app = create_app(settings)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            service = app.state.conversation_service
+            assert isinstance(service, ConversationService)
+            record = service.create("demo")
+            response = await client.get("/ready")
+
+    assert record.id
+    assert response.status_code == 200

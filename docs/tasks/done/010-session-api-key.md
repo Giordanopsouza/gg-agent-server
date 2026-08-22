@@ -41,3 +41,7 @@ One header. Localhost bind is the other half of safety. Do not invent a user tab
 Added `check_session_api_key` in `dependencies.py`, a placeholder `api_router` with
 `GET /api/_auth_check`, and wired the dependency onto the router in `create_app`.
 Tests cover open mode, keyed 401/200, and public `/health`.
+
+### [SWE] 2026-08-22 14:20 — Archived
+
+Moved to `tasks/done/`; acceptance criteria met and tests green.
