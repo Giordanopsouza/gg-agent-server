@@ -5,9 +5,11 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response
+from fastapi import Depends, FastAPI, Response
 
+from gg.server.api import api_router
 from gg.server.config import Settings
+from gg.server.dependencies import check_session_api_key
 
 
 @asynccontextmanager
@@ -47,5 +49,10 @@ def create_app(settings: Settings) -> FastAPI:
             return {"status": "ready"}
         response.status_code = 503
         return {"status": "initializing"}
+
+    app.include_router(
+        api_router,
+        dependencies=[Depends(check_session_api_key)],
+    )
 
     return app
