@@ -17,6 +17,7 @@ from gg.sdk.event_log import (
 from gg.sdk.exceptions import (
     ConversationAlreadyRunningError,
     ConversationError,
+    ConversationNotFoundError,
     InvalidConversationStateError,
 )
 from gg.sdk.local_conversation import LocalConversation
@@ -36,6 +37,7 @@ __all__ = [
     "CommandResult",
     "ConversationAlreadyRunningError",
     "ConversationError",
+    "ConversationNotFoundError",
     "ConversationRecord",
     "ConversationStatus",
     "Event",
