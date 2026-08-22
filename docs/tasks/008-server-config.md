@@ -1,7 +1,7 @@
 ---
 id: 008-server-config
 feature: server
-status: pending
+status: in-progress
 depends_on: [001-repo-scaffolding]
 ---
 
@@ -21,10 +21,10 @@ Typed config for host, port, conversations dir, workspace dir, and optional sess
 
 ## Acceptance criteria
 
-- [ ] `GG_HOST`, `GG_PORT`, `GG_CONVERSATIONS_DIR`, `GG_WORKSPACE_DIR`, `GG_SESSION_API_KEYS` parse into settings.
-- [ ] Missing optional keys means `session_api_keys` is empty.
-- [ ] Invalid port fails at load with a message that names the variable.
-- [ ] `get_settings()` is the only public accessor.
+- [x] `GG_HOST`, `GG_PORT`, `GG_CONVERSATIONS_DIR`, `GG_WORKSPACE_DIR`, `GG_SESSION_API_KEYS` parse into settings.
+- [x] Missing optional keys means `session_api_keys` is empty.
+- [x] Invalid port fails at load with a message that names the variable.
+- [x] `get_settings()` is the only public accessor.
 
 ## Out of scope
 
@@ -35,3 +35,17 @@ Typed config for host, port, conversations dir, workspace dir, and optional sess
 ### [PA] 2026-08-21 13:45 — Grooming
 
 Parse at the boundary. The rest of the server trusts Settings.
+
+### [SWE] 2026-08-22 12:47 — Implementation
+
+`gg/server/config.py` holds a frozen `Settings` pydantic model and a cached
+`get_settings()` singleton. `_load_settings()` is the only place that reads
+`os.getenv`; it parses `GG_HOST`, `GG_PORT`, `GG_CONVERSATIONS_DIR`,
+`GG_WORKSPACE_DIR`, and `GG_SESSION_API_KEYS` (comma-separated). Invalid port
+raises `ValueError` naming `GG_PORT`. `reset_settings()` is a test-only cache
+clear. Exported `Settings` and `get_settings` from `gg.server.__init__`.
+
+Boundary enforced by `tests/test_server_config_boundary.py`, which AST-scans
+every `gg/server/*.py` except `config.py` for `os.environ`/`os.getenv` (and
+`from os import environ/getenv`) and fails on any hit. Parsing tests live in
+`packages/gg-server/tests/test_config.py`.
