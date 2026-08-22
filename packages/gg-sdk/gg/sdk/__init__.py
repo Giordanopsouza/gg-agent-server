@@ -14,6 +14,12 @@ from gg.sdk.event_log import (
     save_base_state,
     save_meta,
 )
+from gg.sdk.exceptions import (
+    ConversationAlreadyRunningError,
+    ConversationError,
+    InvalidConversationStateError,
+)
+from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import CommandResult, LocalWorkspace
 from gg.sdk.tools import (
     Observation,
@@ -28,11 +34,15 @@ from gg.sdk.tools import (
 __all__ = [
     "BaseState",
     "CommandResult",
+    "ConversationAlreadyRunningError",
+    "ConversationError",
     "ConversationRecord",
     "ConversationStatus",
     "Event",
     "EventKind",
     "EventLog",
+    "InvalidConversationStateError",
+    "LocalConversation",
     "LocalWorkspace",
     "Observation",
     "Tool",
