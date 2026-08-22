@@ -1,7 +1,7 @@
 ---
 id: 008-server-config
 feature: server
-status: in-progress
+status: done
 depends_on: [001-repo-scaffolding]
 ---
 
@@ -49,3 +49,7 @@ Boundary enforced by `tests/test_server_config_boundary.py`, which AST-scans
 every `gg/server/*.py` except `config.py` for `os.environ`/`os.getenv` (and
 `from os import environ/getenv`) and fails on any hit. Parsing tests live in
 `packages/gg-server/tests/test_config.py`.
+
+### [Tester] 2026-08-22 13:24 — Verified
+
+`uv run pytest` passed (45 tests). Merged in PR #5.

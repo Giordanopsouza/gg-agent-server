@@ -14,7 +14,7 @@ behind HTTP. Do not skip 1a.
 | Slice | Feature slug | Tasks | Stop when |
 |---|---|---|---|
 | 1a | `scaffold`, `loop` | [001](done/001-repo-scaffolding.md) … [007](done/007-in-process-demo.md) | `NOTES.md` from a Python module, no server |
-| 1b | `server` | [008](008-server-config.md) … [016](016-local-server-demo.md) | Reconnect to a local server and still see events |
+| 1b | `server` | [008](done/008-server-config.md) … [016](016-local-server-demo.md) | Reconnect to a local server and still see events |
 | 2 | `docker` | [017](017-server-dockerfile.md) … [020](020-docker-sandbox-demo.md) | `NOTES.md` inside a container |
 | 3 | `runtime` | [021](021-runtime-control-api.md) … [023](023-runtime-api-demo.md) | Same demo through `POST /start` |
 | later | `loop` | [backlog/024](backlog/024-real-llm-loop.md) | Real LLM, after 016 |
@@ -35,7 +35,6 @@ The frontmatter `status:` remains authoritative after a move.
 
 ```
 tasks/
-├── 008-server-config.md           # status: pending
 ├── done/
 │   ├── 001-repo-scaffolding.md    # status: done
 │   ├── 002-domain-types.md        # status: done
@@ -43,7 +42,8 @@ tasks/
 │   ├── 004-local-workspace.md     # status: done
 │   ├── 005-write-file-tool.md     # status: done
 │   ├── 006-local-conversation-loop.md # status: done
-│   └── 007-in-process-demo.md     # status: done
+│   ├── 007-in-process-demo.md     # status: done
+│   └── 008-server-config.md       # status: done
 └── overview.md
 ```
 
