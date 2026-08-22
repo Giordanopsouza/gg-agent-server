@@ -9,6 +9,8 @@ gg-server = { workspace = true }
 dev = [
     "gg-sdk",
     "gg-server",
+    "ipykernel>=6.29",
+    "jupyter>=1.0",
     "pytest>=8.0",
     "ruff>=0.8",
 ]
