@@ -35,13 +35,14 @@ The frontmatter `status:` remains authoritative after a move.
 
 ```
 tasks/
-├── 006-local-conversation-loop.md # status: pending
+├── 007-in-process-demo.md         # status: pending
 ├── done/
 │   ├── 001-repo-scaffolding.md    # status: done
 │   ├── 002-domain-types.md        # status: done
 │   ├── 003-event-log.md           # status: done
 │   ├── 004-local-workspace.md     # status: done
-│   └── 005-write-file-tool.md     # status: done
+│   ├── 005-write-file-tool.md     # status: done
+│   └── 006-local-conversation-loop.md # status: done
 └── overview.md
 ```
 
