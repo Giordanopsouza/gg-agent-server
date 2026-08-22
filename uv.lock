@@ -504,10 +504,14 @@ version = "0.1.0"
 source = { editable = "packages/gg-server" }
 dependencies = [
     { name = "gg-sdk" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "gg-sdk", editable = "packages/gg-sdk" }]
+requires-dist = [
+    { name = "gg-sdk", editable = "packages/gg-sdk" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
 
 [[package]]
 name = "h11"
