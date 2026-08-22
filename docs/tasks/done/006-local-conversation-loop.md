@@ -1,7 +1,7 @@
 ---
 id: 006-local-conversation-loop
 feature: loop
-status: pending
+status: done
 depends_on: [003-event-log, 004-local-workspace, 005-write-file-tool]
 ---
 
@@ -21,11 +21,11 @@ Implement `LocalConversation.send_message`, `run`, and a dummy agent that always
 
 ## Acceptance criteria
 
-- [ ] `send_message` appends an `EventKind.message` event and stays `idle` until `run`.
-- [ ] `run` sets `running`, calls the dummy agent, executes tools, appends action and observation events, then sets `finished`.
-- [ ] A second `run` while `running` raises a domain error.
-- [ ] After `run`, `NOTES.md` exists in `working_dir` and the event log has message, action, observation, status.
-- [ ] Restarting `EventLog` in a new object still lists those events.
+- [x] `send_message` appends an `EventKind.message` event and stays `idle` until `run`.
+- [x] `run` sets `running`, calls the dummy agent, executes tools, appends action and observation events, then sets `finished`.
+- [x] A second `run` while `running` raises a domain error.
+- [x] After `run`, `NOTES.md` exists in `working_dir` and the event log has message, action, observation, status.
+- [x] Restarting `EventLog` in a new object still lists those events.
 
 ## Out of scope
 
@@ -33,6 +33,10 @@ Implement `LocalConversation.send_message`, `run`, and a dummy agent that always
 - HTTP wrappers (`011` to `015`).
 
 ## Log
+
+### [SWE] 2026-08-22 11:30 — Local conversation loop landed
+
+`LocalConversation` with `send_message`, `run`, dummy agent, domain errors, and `test_local_conversation.py`.
 
 ### [PA] 2026-08-21 13:45 — Grooming
 
