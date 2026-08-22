@@ -9,18 +9,22 @@ from fastapi import Depends, FastAPI, Response
 
 from gg.server.api import api_router
 from gg.server.config import Settings
+from gg.server.conversation_service import ConversationService
 from gg.server.dependencies import check_session_api_key
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run startup work, then mark the app ready for traffic."""
+    settings: Settings = app.state.settings
+    app.state.conversation_service = ConversationService(settings)
     ready_event: asyncio.Event = app.state.ready_event
     ready_event.set()
     try:
         yield
     finally:
         ready_event.clear()
+        app.state.conversation_service = None
 
 
 def create_app(settings: Settings) -> FastAPI:
