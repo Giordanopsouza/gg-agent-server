@@ -1,12 +1,15 @@
 """Process-wide manager for live and on-disk conversations."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
 from gg.sdk import (
+    ConversationAlreadyRunningError,
     ConversationNotFoundError,
     ConversationRecord,
+    Event,
     LocalConversation,
     LocalWorkspace,
     StartConversationRequest,
@@ -24,6 +27,8 @@ class ConversationService:
         self._conversations_dir = settings.conversations_dir
         self._conversations_dir.mkdir(parents=True, exist_ok=True)
         self._live: dict[str, LocalConversation] = {}
+        self._run_lock = asyncio.Lock()
+        self._run_tasks: dict[str, asyncio.Task[None]] = {}
 
     def create(
         self,
@@ -80,6 +85,30 @@ class ConversationService:
                 records.append(load_meta(child))
         records.sort(key=lambda record: record.created_at)
         return records
+
+    def send_message(self, conversation_id: str, content: str) -> Event:
+        """Append a user message. Does not start the agent loop."""
+        return self.get(conversation_id).send_message(content)
+
+    def list_events(self, conversation_id: str) -> list[Event]:
+        """Return persisted events in seq order."""
+        return self.get(conversation_id).list_events()
+
+    async def run(self, conversation_id: str) -> ConversationRecord:
+        """Run the dummy loop and wait until it finishes.
+
+        A second call while a run task is still in flight raises
+        ``ConversationAlreadyRunningError``.
+        """
+        conversation = self.get(conversation_id)
+        async with self._run_lock:
+            existing = self._run_tasks.get(conversation_id)
+            if existing is not None and not existing.done():
+                raise ConversationAlreadyRunningError()
+            task = asyncio.create_task(asyncio.to_thread(conversation.run))
+            self._run_tasks[conversation_id] = task
+        await task
+        return load_meta(conversation.conversation_dir)
 
     def _exists(self, conversation_id: str) -> bool:
         if conversation_id in self._live:

@@ -46,3 +46,12 @@ class StartConversationRequest(BaseModel):
 
     working_dir: str
     id: str | None = None
+
+
+class SendMessageRequest(BaseModel):
+    """HTTP send-message payload. REST defaults to run=false, matching OpenHands."""
+
+    model_config = ConfigDict(frozen=True)
+
+    content: str
+    run: bool = False

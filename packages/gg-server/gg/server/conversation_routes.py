@@ -1,11 +1,13 @@
-"""REST routes for conversation create, get, and list."""
+"""REST routes for conversation create, get, list, and run."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from gg.sdk import (
+    ConversationAlreadyRunningError,
     ConversationNotFoundError,
     ConversationRecord,
+    InvalidConversationStateError,
     StartConversationRequest,
 )
 from gg.server.conversation_service import ConversationService
@@ -47,3 +49,19 @@ async def get_conversation(
         return service.get_record(conversation_id)
     except ConversationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@conversation_router.post("/{conversation_id}/run")
+async def run_conversation(
+    conversation_id: str,
+    service: ConversationService = Depends(get_conversation_service),
+) -> ConversationRecord:
+    """Run the dummy agent and return when the loop has finished."""
+    try:
+        return await service.run(conversation_id)
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ConversationAlreadyRunningError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidConversationStateError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

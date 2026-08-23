@@ -85,9 +85,13 @@ class LocalConversation:
         return self._status
 
     # Record a user message in the event log; status stays idle until run().
-    def send_message(self, text: str) -> None:
+    def send_message(self, text: str) -> Event:
         self._transition("send_message")
-        self._append_event(EventKind.MESSAGE, {"text": text})
+        return self._append_event(EventKind.MESSAGE, {"text": text})
+
+    def list_events(self) -> list[Event]:
+        """Return persisted events in seq order."""
+        return self._event_log.list()
 
     # Run the dummy agent once: plan action, execute tool, then finish.
     def run(self) -> None:
