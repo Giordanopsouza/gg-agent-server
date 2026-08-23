@@ -8,6 +8,7 @@ from gg.sdk import (
     ConversationStatus,
     Event,
     EventKind,
+    SendMessageRequest,
     StartConversationRequest,
 )
 
@@ -37,6 +38,14 @@ def test_conversation_record_rejects_invalid_status() -> None:
                 "created_at": "2026-08-21T12:00:00+00:00",
             }
         )
+
+
+def test_send_message_request_defaults_run_to_false() -> None:
+    request = SendMessageRequest.model_validate({"content": "hello"})
+    assert request.content == "hello"
+    assert request.run is False
+    with pytest.raises(ValidationError):
+        SendMessageRequest.model_validate({})
 
 
 def test_start_conversation_request_requires_working_dir() -> None:
