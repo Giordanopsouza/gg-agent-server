@@ -109,6 +109,22 @@ def test_get_unknown_id_raises_domain_error(tmp_path: Path) -> None:
         service.get("missing-id")
 
 
+def test_send_message_does_not_run(tmp_path: Path) -> None:
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "project",
+    )
+    service = ConversationService(settings)
+    record = service.create("work")
+
+    event = service.send_message(record.id, "stay idle")
+
+    assert event.kind.value == "message"
+    assert event.payload == {"text": "stay idle"}
+    assert service.get_record(record.id).status == ConversationStatus.IDLE
+    assert service.list_events(record.id) == [event]
+
+
 def test_local_conversation_open_preserves_status(tmp_path: Path) -> None:
     workspace = LocalWorkspace(working_dir=tmp_path / "work")
     conv_dir = tmp_path / "conv-1"
