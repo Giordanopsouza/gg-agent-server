@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from gg.sdk import ConversationRecord, ConversationStatus, Event, EventKind
+from gg.sdk import (
+    ConversationRecord,
+    ConversationStatus,
+    Event,
+    EventKind,
+    StartConversationRequest,
+)
 
 
 @pytest.mark.parametrize("status", list(ConversationStatus))
@@ -31,6 +37,14 @@ def test_conversation_record_rejects_invalid_status() -> None:
                 "created_at": "2026-08-21T12:00:00+00:00",
             }
         )
+
+
+def test_start_conversation_request_requires_working_dir() -> None:
+    request = StartConversationRequest.model_validate({"working_dir": "/tmp/work"})
+    assert request.working_dir == "/tmp/work"
+    assert request.id is None
+    with pytest.raises(ValidationError):
+        StartConversationRequest.model_validate({})
 
 
 def test_event_fields() -> None:

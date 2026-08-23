@@ -9,6 +9,7 @@ from gg.sdk import (
     ConversationStatus,
     LocalConversation,
     LocalWorkspace,
+    StartConversationRequest,
     load_meta,
 )
 from gg.server.config import Settings
@@ -76,6 +77,24 @@ def test_list_includes_conversations_from_previous_process(tmp_path: Path) -> No
     records = second_process.list()
 
     assert {record.id for record in records} == {first.id, second.id}
+
+
+def test_start_reattaches_existing_id(tmp_path: Path) -> None:
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "project",
+    )
+    service = ConversationService(settings)
+    created = service.start(StartConversationRequest(working_dir="work"))
+    record, is_new = created
+    reattached, reattach_is_new = service.start(
+        StartConversationRequest(working_dir="other", id=record.id)
+    )
+
+    assert is_new is True
+    assert reattach_is_new is False
+    assert reattached.id == record.id
+    assert reattached.working_dir == record.working_dir
 
 
 def test_get_unknown_id_raises_domain_error(tmp_path: Path) -> None:

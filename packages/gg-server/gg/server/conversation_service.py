@@ -9,6 +9,7 @@ from gg.sdk import (
     ConversationRecord,
     LocalConversation,
     LocalWorkspace,
+    StartConversationRequest,
     load_meta,
 )
 from gg.sdk.event_log import META_FILE
@@ -24,9 +25,13 @@ class ConversationService:
         self._conversations_dir.mkdir(parents=True, exist_ok=True)
         self._live: dict[str, LocalConversation] = {}
 
-    def create(self, working_dir: Path | str) -> ConversationRecord:
+    def create(
+        self,
+        working_dir: Path | str,
+        conversation_id: str | None = None,
+    ) -> ConversationRecord:
         """Allocate an id, persist meta, and return the catalog record."""
-        conversation_id = str(uuid4())
+        conversation_id = conversation_id or str(uuid4())
         conversation_dir = self._conversations_dir / conversation_id
         workspace = LocalWorkspace(working_dir=self._resolve_working_dir(working_dir))
         conversation = LocalConversation(
@@ -36,6 +41,14 @@ class ConversationService:
         )
         self._live[conversation_id] = conversation
         return load_meta(conversation_dir)
+
+    def start(
+        self, request: StartConversationRequest
+    ) -> tuple[ConversationRecord, bool]:
+        """Create a conversation, or reattach when the id already exists."""
+        if request.id is not None and self._exists(request.id):
+            return self.get_record(request.id), False
+        return self.create(request.working_dir, conversation_id=request.id), True
 
     def get(self, conversation_id: str) -> LocalConversation:
         """Return a live object, hydrating from disk on first access."""
@@ -50,6 +63,11 @@ class ConversationService:
         self._live[conversation_id] = conversation
         return conversation
 
+    def get_record(self, conversation_id: str) -> ConversationRecord:
+        """Return the catalog record, hydrating the live object if needed."""
+        conversation = self.get(conversation_id)
+        return load_meta(conversation.conversation_dir)
+
     def list(self) -> list[ConversationRecord]:
         """Return catalog records from ``conversations_dir/*/meta.json``."""
         if not self._conversations_dir.is_dir():
@@ -62,6 +80,11 @@ class ConversationService:
                 records.append(load_meta(child))
         records.sort(key=lambda record: record.created_at)
         return records
+
+    def _exists(self, conversation_id: str) -> bool:
+        if conversation_id in self._live:
+            return True
+        return (self._conversations_dir / conversation_id / META_FILE).is_file()
 
     def _resolve_working_dir(self, working_dir: Path | str) -> Path:
         path = Path(working_dir)
