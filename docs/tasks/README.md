@@ -48,7 +48,8 @@ tasks/
 │   ├── 010-session-api-key.md     # status: done
 │   ├── 011-conversation-service.md # status: done
 │   ├── 012-conversation-routes.md # status: done
-│   └── 013-event-routes-and-run.md # status: done
+│   ├── 013-event-routes-and-run.md # status: done
+│   └── 014-pubsub.md               # status: done
 └── overview.md
 ```
 
