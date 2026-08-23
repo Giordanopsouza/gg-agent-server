@@ -1,13 +1,10 @@
-"""Placeholder /api router. Real conversation routes land in task 012."""
+"""Mounted /api router. Auth from task 010 applies to every route here."""
 from __future__ import annotations
 
 from fastapi import APIRouter
 
+from gg.server.conversation_routes import conversation_router
+
 
 api_router = APIRouter(prefix="/api")
-
-
-@api_router.get("/_auth_check")
-async def auth_check() -> dict[str, str]:
-    """Stub route so task 010 can prove auth wiring before conversation routes exist."""
-    return {"status": "ok"}
+api_router.include_router(conversation_router)

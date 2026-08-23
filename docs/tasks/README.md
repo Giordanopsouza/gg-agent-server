@@ -46,7 +46,8 @@ tasks/
 │   ├── 008-server-config.md       # status: done
 │   ├── 009-app-health.md          # status: done
 │   ├── 010-session-api-key.md     # status: done
-│   └── 011-conversation-service.md # status: done
+│   ├── 011-conversation-service.md # status: done
+│   └── 012-conversation-routes.md # status: done
 └── overview.md
 ```
 
