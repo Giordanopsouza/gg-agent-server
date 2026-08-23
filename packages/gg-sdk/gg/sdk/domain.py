@@ -37,3 +37,12 @@ class ConversationRecord(BaseModel):
     status: ConversationStatus
     working_dir: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class StartConversationRequest(BaseModel):
+    """HTTP create/reattach payload. Parsed at the router, not as a raw dict."""
+
+    model_config = ConfigDict(frozen=True)
+
+    working_dir: str
+    id: str | None = None

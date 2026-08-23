@@ -5,6 +5,7 @@ from gg.sdk.domain import (
     ConversationStatus,
     Event,
     EventKind,
+    StartConversationRequest,
 )
 from gg.sdk.event_log import (
     BaseState,
@@ -46,6 +47,7 @@ __all__ = [
     "InvalidConversationStateError",
     "LocalConversation",
     "LocalWorkspace",
+    "StartConversationRequest",
     "Observation",
     "Tool",
     "ToolNotFoundError",
