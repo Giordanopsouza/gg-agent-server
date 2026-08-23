@@ -58,7 +58,7 @@ async def run_conversation(
 ) -> ConversationRecord:
     """Run the dummy agent and return when the loop has finished."""
     try:
-        return await service.run(conversation_id)
+        return await service.run_and_publish(conversation_id)
     except ConversationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ConversationAlreadyRunningError as exc:

@@ -1,7 +1,7 @@
 ---
 id: 015-events-websocket
 feature: server
-status: pending
+status: done
 depends_on: [013-event-routes-and-run, 014-pubsub]
 ---
 
@@ -36,3 +36,22 @@ Wire pub/sub to a WebSocket and auto-run inbound messages.
 ### [PA] 2026-08-21 13:45 — Grooming
 
 Pick snapshot-on-subscribe or "client calls GET /events". Either is fine. Log the choice. OpenHands pushes a state snapshot then live events.
+
+### [SWE] 2026-08-23 13:28 — Implementation
+
+Added `WS /sockets/events/{id}` with first-frame session-key authentication,
+conversation-specific pub/sub, and inbound message frames that auto-run the
+dummy agent. REST message submission remains idle by default. The server takes
+a persisted-event snapshot before subscribing, so reconnecting sockets replay
+history and then receive live events.
+
+### [Tester] 2026-08-23 13:28 — Verified
+
+`PYTHONPATH=packages/gg-server:packages/gg-sdk uv run pytest
+packages/gg-server/tests/test_event_websocket.py
+packages/gg-server/tests/test_event_routes.py
+packages/gg-server/tests/test_pubsub.py` passed (13 tests), and task-scoped
+Ruff passed. The full suite reached 93 passed; two existing session-key tests
+fail because the user-owned untracked `workspace/conversations` catalog makes
+their default workspace non-empty. Full-repository Ruff has seven existing
+errors outside this task (the notebook and `test_local_conversation.py`).

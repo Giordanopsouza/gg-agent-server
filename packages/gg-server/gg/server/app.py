@@ -11,6 +11,7 @@ from gg.server.api import api_router
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
 from gg.server.dependencies import check_session_api_key
+from gg.server.websocket_routes import event_socket_router
 
 
 @asynccontextmanager
@@ -58,5 +59,6 @@ def create_app(settings: Settings) -> FastAPI:
         api_router,
         dependencies=[Depends(check_session_api_key)],
     )
+    app.include_router(event_socket_router)
 
     return app

@@ -28,9 +28,9 @@ async def send_message(
 ) -> Event:
     """Append a user message. Does not start the loop unless ``run`` is true."""
     try:
-        event = service.send_message(conversation_id, request.content)
+        event = await service.send_message_and_publish(conversation_id, request.content)
         if request.run:
-            await service.run(conversation_id)
+            await service.run_and_publish(conversation_id)
         return event
     except ConversationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
