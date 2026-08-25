@@ -23,6 +23,7 @@ class RuntimeSettings(BaseModel):
 
     @field_validator("api_key")
     @classmethod
+    # The control-plane key must be present and not have stray spaces.
     def validate_api_key(cls, value: str) -> str:
         if not value or value != value.strip():
             raise ValueError(
@@ -32,12 +33,14 @@ class RuntimeSettings(BaseModel):
 
     @field_validator("image")
     @classmethod
+    # The Docker image name cannot be blank.
     def validate_image(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("image must not be empty")
         return value
 
 
+# Turn GG_RUNTIME_PORT into an int, or use 8001 if unset.
 def _parse_port(raw: str | None) -> int:
     if raw is None or raw == "":
         return DEFAULT_PORT
@@ -50,6 +53,7 @@ def _parse_port(raw: str | None) -> int:
     return value
 
 
+# Read all runtime settings from environment variables at startup.
 def load_settings() -> RuntimeSettings:
     """Read runtime configuration once at the process boundary."""
     api_key = os.getenv("GG_RUNTIME_API_KEY")
