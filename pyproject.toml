@@ -35,3 +35,6 @@ testpaths = [
 ]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "docker: opt-in tests that require Docker and the gg-agent-server:dev image",
+]
