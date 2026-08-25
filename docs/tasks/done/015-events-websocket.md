@@ -21,11 +21,11 @@ Wire pub/sub to a WebSocket and auto-run inbound messages.
 
 ## Acceptance criteria
 
-- [ ] After connect and auth, the client receives events produced by `POST .../run`.
-- [ ] An inbound chat JSON appends a message and runs the dummy agent.
-- [ ] REST send still does not auto-run.
-- [ ] Tests use Starlette/httpx websocket client against `create_app`.
-- [ ] Reconnect on a new socket still sees persisted events via an initial snapshot or a REST list. Document which one you picked in the task log.
+- [x] After connect and auth, the client receives events produced by `POST .../run`.
+- [x] An inbound chat JSON appends a message and runs the dummy agent.
+- [x] REST send still does not auto-run.
+- [x] Tests use Starlette/httpx websocket client against `create_app`.
+- [x] Reconnect on a new socket still sees persisted events via an initial snapshot or a REST list. Document which one you picked in the task log.
 
 ## Out of scope
 

@@ -1,0 +1,1 @@
+{"id":"5b1f46b0-38de-494a-8666-41ce47d4baeb","seq":3,"kind":"action","payload":{"tool":"write_file","args":{"path":"NOTES.md","content":"# Notes\n\nhello from the local-server demo\n"}},"created_at":"2026-08-25T15:32:18.746191Z"}
