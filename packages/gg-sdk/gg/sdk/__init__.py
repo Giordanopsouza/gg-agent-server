@@ -1,5 +1,6 @@
 """Client-side agent SDK for gg-agent-server."""
 
+from gg.sdk.conversation import Conversation
 from gg.sdk.domain import (
     ConversationRecord,
     ConversationStatus,
@@ -24,6 +25,8 @@ from gg.sdk.exceptions import (
 )
 from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import CommandResult, LocalWorkspace
+from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscription
+from gg.sdk.remote_workspace import RemoteWorkspace
 from gg.sdk.tools import (
     Observation,
     Tool,
@@ -37,6 +40,7 @@ from gg.sdk.tools import (
 __all__ = [
     "BaseState",
     "CommandResult",
+    "Conversation",
     "ConversationAlreadyRunningError",
     "ConversationError",
     "ConversationNotFoundError",
@@ -48,6 +52,9 @@ __all__ = [
     "InvalidConversationStateError",
     "LocalConversation",
     "LocalWorkspace",
+    "RemoteConversation",
+    "RemoteEventSubscription",
+    "RemoteWorkspace",
     "SendMessageRequest",
     "StartConversationRequest",
     "Observation",
