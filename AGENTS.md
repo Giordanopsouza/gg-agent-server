@@ -16,12 +16,15 @@ Diagram sources:
 ## Develop
 
 ```bash
-uv sync
+uv sync --no-editable
 uv run pytest
 uv run ruff check .
+uv run python -m gg.server --host 127.0.0.1 --port 8000
 ```
 
 Workspace packages live under `packages/gg-sdk` and `packages/gg-server`.
+
+**Editable install quirk:** default `uv sync` installs workspace packages in editable mode, but Python 3.12 skips the generated `__editable__*.pth` hook files, so `import gg` fails. Use `uv sync --no-editable` (or `UV_NO_EDITABLE=1 uv sync`).
 
 ## Git workflow
 
