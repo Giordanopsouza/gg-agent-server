@@ -1,6 +1,7 @@
 """Client-side agent SDK for gg-agent-server."""
 
 from gg.sdk.conversation import Conversation
+from gg.sdk.docker_workspace import DockerWorkspace, DockerWorkspaceError
 from gg.sdk.domain import (
     ConversationRecord,
     ConversationStatus,
@@ -46,6 +47,8 @@ __all__ = [
     "ConversationNotFoundError",
     "ConversationRecord",
     "ConversationStatus",
+    "DockerWorkspace",
+    "DockerWorkspaceError",
     "Event",
     "EventKind",
     "EventLog",
