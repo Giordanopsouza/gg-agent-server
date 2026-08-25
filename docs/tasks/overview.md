@@ -20,6 +20,7 @@ Excluded:
 - Leases, idle eviction, crash recovery, Fernet, profiles, deferred init.
 - VSCode, VNC, git router, a second bash event channel, MCP, OpenAI gateway.
 - A real LLM until the dummy agent can write `NOTES.md`. That work sits in [backlog/024-real-llm-loop.md](backlog/024-real-llm-loop.md).
+- ACP / bring-your-own-agent (Claude Code, Codex, Gemini) until the Docker sandbox exists. That work sits in [backlog/025-acp-agent.md](backlog/025-acp-agent.md).
 
 ## Constraints
 
@@ -56,7 +57,7 @@ Slice 1a is the old "slice 0". The loop has to exist before the server.
 | Slice | Goal | Tasks |
 |---|---|---|
 | 1a In-process loop | A dummy agent writes `NOTES.md` with no HTTP | [001](done/001-repo-scaffolding.md) to [007](done/007-in-process-demo.md) |
-| 1b Local server | Same loop over HTTP and WebSocket, reconnect works | [008](done/008-server-config.md) to [016](016-local-server-demo.md) |
+| 1b Local server | Same loop over HTTP and WebSocket, reconnect works | [008](done/008-server-config.md) to [016](done/016-local-server-demo.md) |
 | 2 Docker sandbox | Same server inside a container | [017](017-server-dockerfile.md) to [020](020-docker-sandbox-demo.md) |
 | 3 Fake runtime | HTTP provisioner that starts that container | [021](021-runtime-control-api.md) to [023](023-runtime-api-demo.md) |
 
@@ -69,6 +70,7 @@ uv run pytest
 uv run ruff check .
 uv run python -m gg.sdk.demo.write_notes
 uv run python -m gg.server --host 127.0.0.1 --port 8000
+uv run python -m gg.sdk.demo.local_server_notes
 uv run python -m gg.sdk.demo.docker_notes
 uv run python -m gg.sdk.demo.runtime_notes
 ```

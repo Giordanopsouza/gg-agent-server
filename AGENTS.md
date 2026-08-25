@@ -5,8 +5,7 @@ Learning clone of the OpenHands agent-server. The upstream tree this is based on
 ## Read
 
 - [Architecture](docs/architecture.md) explains the sandbox inversion and package graph. Open it in the editor preview so the diagrams render.
-- [Plan overview](docs/tasks/overview.md) lists slices 1 to 3 and verification commands.
-- [Task tracker](docs/tasks/README.md) is one file per atomic task.
+- Start with the [plan overview](docs/tasks/overview.md) for slices and verification, then walk the numbered files in the [task tracker](docs/tasks/README.md).
 
 Diagram sources:
 
@@ -28,9 +27,5 @@ Workspace packages live under `packages/gg-sdk` and `packages/gg-server`.
 
 One task → one branch → one PR → merge to `main` → delete branch.
 
-1. `git checkout main && git pull --ff-only`
-2. `git checkout -b NNN-slug` (match `tasks/NNN-*.md`)
-3. Implement, commit, push, open PR, merge
-4. Delete the branch; start the next task from fresh `main`
-
-Do not stack tasks on a long-lived branch. Worktrees only for parallel tasks.
+1. Implement, commit, push, open PR, merge
+2. Delete the branch; start the next task from fresh `main`
