@@ -55,3 +55,7 @@ The focused launcher and import-boundary suite passes with 19 tests. The full
 suite passes from a clean temporary working directory with 133 passed and one
 opt-in Docker test skipped. Task files pass Ruff lint and format checks. Full-repo
 Ruff retains the seven pre-existing notebook and local-conversation findings.
+
+### [SWE] 2026-08-25 17:51 — Archived
+
+Moved the completed task into `docs/tasks/done` for merge.
