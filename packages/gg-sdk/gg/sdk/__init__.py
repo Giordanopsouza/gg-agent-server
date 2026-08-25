@@ -28,6 +28,7 @@ from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import CommandResult, LocalWorkspace
 from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscription
 from gg.sdk.remote_workspace import RemoteWorkspace
+from gg.sdk.runtime_workspace import RuntimeWorkspace
 from gg.sdk.tools import (
     Observation,
     Tool,
@@ -58,6 +59,7 @@ __all__ = [
     "RemoteConversation",
     "RemoteEventSubscription",
     "RemoteWorkspace",
+    "RuntimeWorkspace",
     "SendMessageRequest",
     "StartConversationRequest",
     "Observation",
