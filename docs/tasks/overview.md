@@ -39,6 +39,10 @@ Excluded:
 
 Chosen path: loop, then local server, then Docker, then fake runtime.
 
+Kubernetes or Cloud would replace only the fake runtime API process. The SDK's
+`RuntimeWorkspace` control-plane call and its agent-server HTTP conversation
+remain the same; the provisioner swaps Docker for the real sandbox backend.
+
 ## Applicable skills
 
 - **how** before changing an unfamiliar file.
@@ -59,7 +63,7 @@ Slice 1a is the old "slice 0". The loop has to exist before the server.
 | 1a In-process loop | A dummy agent writes `NOTES.md` with no HTTP | [001](done/001-repo-scaffolding.md) to [007](done/007-in-process-demo.md) |
 | 1b Local server | Same loop over HTTP and WebSocket, reconnect works | [008](done/008-server-config.md) to [016](done/016-local-server-demo.md) |
 | 2 Docker sandbox | Same server inside a container | [017](done/017-server-dockerfile.md) to [020](020-docker-sandbox-demo.md) |
-| 3 Fake runtime | HTTP provisioner that starts that container | [021](done/021-runtime-control-api.md) to [023](023-runtime-api-demo.md) |
+| 3 Fake runtime | HTTP provisioner that starts that container | [021](done/021-runtime-control-api.md) to [023](done/023-runtime-api-demo.md) |
 
 ## Verification
 
