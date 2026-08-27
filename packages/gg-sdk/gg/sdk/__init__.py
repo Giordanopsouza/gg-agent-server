@@ -1,5 +1,6 @@
 """Client-side agent SDK for gg-agent-server."""
 
+from gg.sdk.agent_backend import AgentBackend, EventEmitter
 from gg.sdk.conversation import Conversation
 from gg.sdk.docker_workspace import DockerWorkspace, DockerWorkspaceError
 from gg.sdk.domain import (
@@ -10,6 +11,7 @@ from gg.sdk.domain import (
     SendMessageRequest,
     StartConversationRequest,
 )
+from gg.sdk.dummy_agent import DummyAgentBackend
 from gg.sdk.event_log import (
     BaseState,
     EventLog,
@@ -40,6 +42,7 @@ from gg.sdk.tools import (
 
 
 __all__ = [
+    "AgentBackend",
     "BaseState",
     "CommandResult",
     "Conversation",
@@ -50,9 +53,11 @@ __all__ = [
     "ConversationStatus",
     "DockerWorkspace",
     "DockerWorkspaceError",
+    "DummyAgentBackend",
     "Event",
     "EventKind",
     "EventLog",
+    "EventEmitter",
     "InvalidConversationStateError",
     "LocalConversation",
     "LocalWorkspace",

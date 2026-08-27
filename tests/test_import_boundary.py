@@ -23,6 +23,7 @@ def _imported_modules(node: ast.AST) -> set[str]:
                 modules.add(alias.name)
         elif isinstance(child, ast.ImportFrom) and child.module is not None:
             modules.add(child.module)
+            modules.update(f"{child.module}.{alias.name}" for alias in child.names)
 
     return modules
 
@@ -48,3 +49,9 @@ def test_sdk_does_not_import_server(path: Path) -> None:
         if _violates_boundary(module_name)
     )
     assert not offenders, f"{path} imports forbidden server modules: {offenders}"
+
+
+def test_boundary_detector_rejects_from_gg_import_server() -> None:
+    tree = ast.parse("from gg import server")
+
+    assert any(_violates_boundary(module) for module in _imported_modules(tree))
