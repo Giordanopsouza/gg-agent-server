@@ -20,6 +20,8 @@ class EventKind(StrEnum):
     ACTION = "action"
     OBSERVATION = "observation"
     STATUS = "status"
+    ERROR = "error"
+
 
 class Event(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -29,6 +31,7 @@ class Event(BaseModel):
     kind: EventKind
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
 
 class ConversationRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
