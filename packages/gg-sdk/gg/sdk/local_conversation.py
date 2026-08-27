@@ -14,6 +14,7 @@ from gg.sdk.event_log import (
     save_meta,
 )
 from gg.sdk.exceptions import (
+    AgentError,
     ConversationAlreadyRunningError,
     InvalidConversationStateError,
 )
@@ -26,6 +27,7 @@ _ALLOWED_TRANSITIONS: dict[tuple[ConversationStatus, str], ConversationStatus] =
     (ConversationStatus.IDLE, "send_message"): ConversationStatus.IDLE,
     (ConversationStatus.IDLE, "run"): ConversationStatus.RUNNING,
     (ConversationStatus.RUNNING, "finish"): ConversationStatus.FINISHED,
+    (ConversationStatus.RUNNING, "error"): ConversationStatus.ERROR,
 }
 
 
@@ -104,11 +106,17 @@ class LocalConversation:
         self._apply_status(ConversationStatus.RUNNING)
 
         user_message = self._latest_user_message()
-        self._agent_backend.run(
-            user_message,
-            self.workspace,
-            self._append_event,
-        )
+        try:
+            self._agent_backend.run(
+                user_message,
+                self.workspace,
+                self._append_event,
+            )
+        except AgentError as exc:
+            self._append_event(EventKind.ERROR, exc.to_event_payload())
+            self._transition("error")
+            self._apply_status(ConversationStatus.ERROR)
+            raise
 
         self._transition("finish")
         self._apply_status(ConversationStatus.FINISHED)

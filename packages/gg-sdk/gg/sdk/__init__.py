@@ -21,6 +21,12 @@ from gg.sdk.event_log import (
     save_meta,
 )
 from gg.sdk.exceptions import (
+    AgentError,
+    AgentProcessError,
+    AgentPromptError,
+    AgentProtocolError,
+    AgentStartupError,
+    AgentTimeoutError,
     ConversationAlreadyRunningError,
     ConversationError,
     ConversationNotFoundError,
@@ -28,6 +34,7 @@ from gg.sdk.exceptions import (
 )
 from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import CommandResult, LocalWorkspace
+from gg.sdk.pi_agent import PiAgentSettings, PiRpcAgent
 from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscription
 from gg.sdk.remote_workspace import RemoteWorkspace
 from gg.sdk.runtime_workspace import RuntimeWorkspace
@@ -43,6 +50,12 @@ from gg.sdk.tools import (
 
 __all__ = [
     "AgentBackend",
+    "AgentError",
+    "AgentProcessError",
+    "AgentPromptError",
+    "AgentProtocolError",
+    "AgentStartupError",
+    "AgentTimeoutError",
     "BaseState",
     "CommandResult",
     "Conversation",
@@ -61,6 +74,8 @@ __all__ = [
     "InvalidConversationStateError",
     "LocalConversation",
     "LocalWorkspace",
+    "PiAgentSettings",
+    "PiRpcAgent",
     "RemoteConversation",
     "RemoteEventSubscription",
     "RemoteWorkspace",
