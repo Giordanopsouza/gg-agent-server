@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from gg.sdk.agent_backend import AgentBackend
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event, EventKind
-from gg.sdk.dummy_agent import plan_write_notes
+from gg.sdk.dummy_agent import DummyAgentBackend
 from gg.sdk.event_log import (
     EventLog,
     load_base_state,
@@ -17,7 +18,7 @@ from gg.sdk.exceptions import (
     InvalidConversationStateError,
 )
 from gg.sdk.local_workspace import LocalWorkspace
-from gg.sdk.tools import ToolRegistry, default_tool_registry
+from gg.sdk.tools import ToolRegistry
 
 
 # (current status, operation) -> next status
@@ -29,7 +30,7 @@ _ALLOWED_TRANSITIONS: dict[tuple[ConversationStatus, str], ConversationStatus] =
 
 
 class LocalConversation:
-    """In-process conversation: event log, workspace, and a dummy agent loop."""
+    """In-process conversation that persists events around an agent backend."""
 
     # Wire up workspace, event log, and on-disk meta; start in idle.
     def __init__(
@@ -39,10 +40,11 @@ class LocalConversation:
         workspace: LocalWorkspace,
         tool_registry: ToolRegistry | None = None,
         conversation_id: str | None = None,
+        agent_backend: AgentBackend | None = None,
     ) -> None:
         self.conversation_dir = Path(conversation_dir)
         self.workspace = workspace
-        self._tool_registry = tool_registry or default_tool_registry()
+        self._agent_backend = agent_backend or DummyAgentBackend(tool_registry)
         self._event_log = EventLog(self.conversation_dir)
         self._status = ConversationStatus.IDLE
         self.id = conversation_id or str(self.conversation_dir.name)
@@ -64,6 +66,7 @@ class LocalConversation:
         conversation_dir: Path | str,
         workspace: LocalWorkspace | None = None,
         tool_registry: ToolRegistry | None = None,
+        agent_backend: AgentBackend | None = None,
     ) -> LocalConversation:
         """Load an existing conversation from disk without resetting its state."""
         dir_path = Path(conversation_dir)
@@ -73,7 +76,7 @@ class LocalConversation:
         obj = cls.__new__(cls)
         obj.conversation_dir = dir_path
         obj.workspace = ws
-        obj._tool_registry = tool_registry or default_tool_registry()
+        obj._agent_backend = agent_backend or DummyAgentBackend(tool_registry)
         obj._event_log = EventLog(dir_path)
         obj._status = state.status
         obj.id = meta.id
@@ -93,7 +96,7 @@ class LocalConversation:
         """Return persisted events in seq order."""
         return self._event_log.list()
 
-    # Run the dummy agent once: plan action, execute tool, then finish.
+    # Run the selected backend once, persisting every event it emits.
     def run(self) -> None:
         if self._status == ConversationStatus.RUNNING:
             raise ConversationAlreadyRunningError()
@@ -101,18 +104,11 @@ class LocalConversation:
         self._apply_status(ConversationStatus.RUNNING)
 
         user_message = self._latest_user_message()
-        action = plan_write_notes(user_message=user_message)
-
-        self._append_event(
-            EventKind.ACTION,
-            {"tool": action["tool"], "args": action["args"]},
-        )
-        observation = self._tool_registry.run(
-            action["tool"],
-            action["args"],
+        self._agent_backend.run(
+            user_message,
             self.workspace,
+            self._append_event,
         )
-        self._append_event(EventKind.OBSERVATION, observation.payload)
 
         self._transition("finish")
         self._apply_status(ConversationStatus.FINISHED)
