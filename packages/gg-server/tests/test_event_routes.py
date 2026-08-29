@@ -8,7 +8,16 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from gg.sdk import ConversationStatus, EventKind, LocalConversation
+from gg.sdk import (
+    AgentProcessError,
+    AgentProtocolError,
+    ConversationStatus,
+    EventKind,
+    LocalConversation,
+    local_conversation as local_conversation_module,
+)
+from gg.sdk.agent_backend import EventEmitter
+from gg.sdk.local_workspace import LocalWorkspace
 from gg.server import Settings, create_app
 
 
@@ -26,6 +35,32 @@ async def _start_conversation(client: httpx.AsyncClient) -> dict:
     )
     assert response.status_code == 201
     return response.json()
+
+
+class SuccessfulPiBackend:
+    def run(
+        self,
+        prompt: str,
+        workspace: LocalWorkspace,
+        emit: EventEmitter,
+    ) -> None:
+        assert prompt == "pi prompt"
+        emit(EventKind.MESSAGE, {"role": "assistant", "text": "done"})
+        emit(EventKind.ACTION, {"tool": "write", "args": {}})
+        emit(EventKind.OBSERVATION, {"result": "ok", "is_error": False})
+
+
+class FailingPiBackend:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def run(
+        self,
+        prompt: str,
+        workspace: LocalWorkspace,
+        emit: EventEmitter,
+    ) -> None:
+        raise self.error
 
 
 @pytest.mark.anyio
@@ -47,7 +82,7 @@ async def test_post_events_appends_message_and_does_not_run(tmp_path: Path) -> N
 
     assert sent.status_code == 200
     assert sent.json()["kind"] == EventKind.MESSAGE
-    assert sent.json()["payload"] == {"text": "hello from http"}
+    assert sent.json()["payload"] == {"role": "user", "text": "hello from http"}
     assert record.json()["status"] == ConversationStatus.IDLE
     assert [item["kind"] for item in events.json()] == [EventKind.MESSAGE]
     assert not (Path(created["working_dir"]) / "NOTES.md").exists()
@@ -81,6 +116,125 @@ async def test_post_run_finishes_and_writes_notes(tmp_path: Path) -> None:
     assert EventKind.OBSERVATION in kinds
     seqs = [item["seq"] for item in events.json()]
     assert seqs == sorted(seqs)
+
+
+@pytest.mark.anyio
+async def test_pi_run_persists_and_lists_translated_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        local_conversation_module,
+        "create_agent_backend",
+        lambda config, tool_registry=None: SuccessfulPiBackend(),
+    )
+    app = create_app(_settings(tmp_path))
+    transport = ASGITransport(app=app)
+    published = []
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            created = await client.post(
+                "/api/conversations",
+                json={"working_dir": "work", "agent": {"kind": "pi"}},
+            )
+            conversation_id = created.json()["id"]
+            await client.post(
+                f"/api/conversations/{conversation_id}/events",
+                json={"content": "pi prompt"},
+            )
+            stream = app.state.conversation_service.event_stream(conversation_id)
+
+            async def capture(event) -> None:
+                published.append(event)
+
+            stream.subscribe(capture)
+            ran = await client.post(f"/api/conversations/{conversation_id}/run")
+            listed = await client.get(
+                f"/api/conversations/{conversation_id}/events"
+            )
+
+    assert ran.status_code == 200
+    assert ran.json()["status"] == ConversationStatus.FINISHED
+    assert [event["kind"] for event in listed.json()] == [
+        EventKind.MESSAGE,
+        EventKind.STATUS,
+        EventKind.MESSAGE,
+        EventKind.ACTION,
+        EventKind.OBSERVATION,
+        EventKind.STATUS,
+    ]
+    assert listed.json()[0]["payload"] == {"role": "user", "text": "pi prompt"}
+    assert [event.kind for event in published] == [
+        EventKind.STATUS,
+        EventKind.MESSAGE,
+        EventKind.ACTION,
+        EventKind.OBSERVATION,
+        EventKind.STATUS,
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("error", "error_type"),
+    [
+        (AgentProtocolError("Pi emitted malformed JSONL"), "agent_protocol_error"),
+        (AgentProcessError("Pi exited early"), "agent_process_error"),
+    ],
+)
+async def test_pi_failure_returns_502_persists_error_and_publishes_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    error_type: str,
+) -> None:
+    monkeypatch.setattr(
+        local_conversation_module,
+        "create_agent_backend",
+        lambda config, tool_registry=None: FailingPiBackend(error),
+    )
+    app = create_app(_settings(tmp_path))
+    transport = ASGITransport(app=app)
+    published = []
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            created = await client.post(
+                "/api/conversations",
+                json={"working_dir": "work", "agent": {"kind": "pi"}},
+            )
+            conversation_id = created.json()["id"]
+            await client.post(
+                f"/api/conversations/{conversation_id}/events",
+                json={"content": "pi prompt"},
+            )
+            stream = app.state.conversation_service.event_stream(conversation_id)
+
+            async def capture(event) -> None:
+                published.append(event)
+
+            stream.subscribe(capture)
+            ran = await client.post(f"/api/conversations/{conversation_id}/run")
+            record = await client.get(f"/api/conversations/{conversation_id}")
+            listed = await client.get(
+                f"/api/conversations/{conversation_id}/events"
+            )
+
+    assert ran.status_code == 502
+    assert record.json()["status"] == ConversationStatus.ERROR
+    assert [event["kind"] for event in listed.json()][-3:] == [
+        EventKind.STATUS,
+        EventKind.ERROR,
+        EventKind.STATUS,
+    ]
+    assert listed.json()[-2]["payload"]["type"] == error_type
+    assert [event.kind for event in published] == [
+        EventKind.STATUS,
+        EventKind.ERROR,
+        EventKind.STATUS,
+    ]
 
 
 @pytest.mark.anyio

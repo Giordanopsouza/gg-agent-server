@@ -21,7 +21,7 @@ async def stream_events(websocket: WebSocket, conversation_id: str) -> None:
 
     Keyed servers require the first incoming frame to carry the session key.
     Once connected, a ``{\"type\": \"message\", \"content\": ...}`` frame
-    appends a message and starts the dummy agent, unlike the REST default.
+    appends a message and starts the selected agent, unlike the REST default.
     """
     await websocket.accept()
     service = _conversation_service(websocket)

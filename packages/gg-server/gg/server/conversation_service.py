@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from gg.sdk import (
+    AgentConfig,
     ConversationAlreadyRunningError,
     ConversationNotFoundError,
     ConversationRecord,
@@ -36,6 +37,7 @@ class ConversationService:
         self,
         working_dir: Path | str,
         conversation_id: str | None = None,
+        agent: AgentConfig | None = None,
     ) -> ConversationRecord:
         """Allocate an id, persist meta, and return the catalog record."""
         conversation_id = conversation_id or str(uuid4())
@@ -45,6 +47,7 @@ class ConversationService:
             conversation_dir=conversation_dir,
             workspace=workspace,
             conversation_id=conversation_id,
+            agent=agent,
         )
         self._live[conversation_id] = conversation
         return load_meta(conversation_dir)
@@ -55,7 +58,14 @@ class ConversationService:
         """Create a conversation, or reattach when the id already exists."""
         if request.id is not None and self._exists(request.id):
             return self.get_record(request.id), False
-        return self.create(request.working_dir, conversation_id=request.id), True
+        return (
+            self.create(
+                request.working_dir,
+                conversation_id=request.id,
+                agent=request.agent,
+            ),
+            True,
+        )
 
     def get(self, conversation_id: str) -> LocalConversation:
         """Return a live object, hydrating from disk on first access."""
@@ -110,7 +120,7 @@ class ConversationService:
         return event
 
     async def run(self, conversation_id: str) -> ConversationRecord:
-        """Run the dummy loop and wait until it finishes.
+        """Run the selected backend and wait until it finishes.
 
         A second call while a run task is still in flight raises
         ``ConversationAlreadyRunningError``.
@@ -126,7 +136,7 @@ class ConversationService:
         return load_meta(conversation.conversation_dir)
 
     async def run_and_publish(self, conversation_id: str) -> ConversationRecord:
-        """Run the dummy loop and fan out the events it appended.
+        """Run the selected backend and fan out the events it appended.
 
         ``LocalConversation`` deliberately owns only persistence. The server
         compares the persisted log before and after a run so its transport
@@ -136,11 +146,12 @@ class ConversationService:
         existing_event_ids = {
             event.id for event in self.list_events(conversation_id)
         }
-        record = await self.run(conversation_id)
-        for event in self.list_events(conversation_id):
-            if event.id not in existing_event_ids:
-                await self.event_stream(conversation_id).publish(event)
-        return record
+        try:
+            return await self.run(conversation_id)
+        finally:
+            for event in self.list_events(conversation_id):
+                if event.id not in existing_event_ids:
+                    await self.event_stream(conversation_id).publish(event)
 
     def _exists(self, conversation_id: str) -> bool:
         if conversation_id in self._live:

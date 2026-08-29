@@ -1,6 +1,13 @@
 """Client-side agent SDK for gg-agent-server."""
 
-from gg.sdk.agent_backend import AgentBackend, EventEmitter
+from gg.sdk.agent_backend import (
+    AgentBackend,
+    AgentConfig,
+    DummyAgentConfig,
+    EventEmitter,
+    PiAgentConfig,
+    create_agent_backend,
+)
 from gg.sdk.conversation import Conversation
 from gg.sdk.docker_workspace import DockerWorkspace, DockerWorkspaceError
 from gg.sdk.domain import (
@@ -50,6 +57,7 @@ from gg.sdk.tools import (
 
 __all__ = [
     "AgentBackend",
+    "AgentConfig",
     "AgentError",
     "AgentProcessError",
     "AgentPromptError",
@@ -67,6 +75,7 @@ __all__ = [
     "DockerWorkspace",
     "DockerWorkspaceError",
     "DummyAgentBackend",
+    "DummyAgentConfig",
     "Event",
     "EventKind",
     "EventLog",
@@ -75,6 +84,7 @@ __all__ = [
     "LocalConversation",
     "LocalWorkspace",
     "PiAgentSettings",
+    "PiAgentConfig",
     "PiRpcAgent",
     "RemoteConversation",
     "RemoteEventSubscription",
@@ -88,6 +98,7 @@ __all__ = [
     "ToolRegistry",
     "WriteFileTool",
     "default_tool_registry",
+    "create_agent_backend",
     "load_base_state",
     "load_meta",
     "save_base_state",
