@@ -6,8 +6,10 @@ from pydantic import ValidationError
 from gg.sdk import (
     ConversationRecord,
     ConversationStatus,
+    DummyAgentConfig,
     Event,
     EventKind,
+    PiAgentConfig,
     SendMessageRequest,
     StartConversationRequest,
 )
@@ -52,8 +54,47 @@ def test_start_conversation_request_requires_working_dir() -> None:
     request = StartConversationRequest.model_validate({"working_dir": "/tmp/work"})
     assert request.working_dir == "/tmp/work"
     assert request.id is None
+    assert request.agent == DummyAgentConfig()
     with pytest.raises(ValidationError):
         StartConversationRequest.model_validate({})
+
+
+def test_start_conversation_request_parses_pi_agent_configuration() -> None:
+    request = StartConversationRequest.model_validate(
+        {
+            "working_dir": "/tmp/work",
+            "agent": {
+                "kind": "pi",
+                "provider": "openrouter",
+                "model": "test/model",
+                "timeout_seconds": 42,
+            },
+        }
+    )
+
+    assert request.agent == PiAgentConfig(
+        provider="openrouter",
+        model="test/model",
+        timeout_seconds=42,
+    )
+
+
+@pytest.mark.parametrize(
+    "agent",
+    [
+        {"kind": "pi", "provider": "unsupported"},
+        {"kind": "pi", "model": ""},
+        {"kind": "pi", "timeout_seconds": 0},
+        {"kind": "pi", "api_key": "must-not-cross-the-boundary"},
+    ],
+)
+def test_start_conversation_request_rejects_invalid_pi_configuration(
+    agent: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        StartConversationRequest.model_validate(
+            {"working_dir": "/tmp/work", "agent": agent}
+        )
 
 
 def test_event_fields() -> None:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import httpx
@@ -11,6 +12,7 @@ from gg.sdk.remote_workspace import RemoteWorkspace
 
 
 _CONTAINER_PORT = "8000/tcp"
+_SUPPORTED_SECRET_ENV_NAMES = frozenset({"OPENROUTER_API_KEY"})
 
 
 class DockerWorkspaceError(RuntimeError):
@@ -32,6 +34,7 @@ class DockerWorkspace(RemoteWorkspace):
         working_dir: str | Path = "/workspace/project",
         api_key: str | None = None,
         volumes: Sequence[str] | None = None,
+        secret_env_names: Sequence[str] | None = None,
         timeout: float = 30.0,
         health_timeout: float = 30.0,
         poll_interval: float = 0.1,
@@ -49,6 +52,13 @@ class DockerWorkspace(RemoteWorkspace):
             raise ValueError("health_timeout must be non-negative")
         if poll_interval < 0:
             raise ValueError("poll_interval must be non-negative")
+        requested_secret_names = tuple(secret_env_names or ())
+        unsupported_secret_names = sorted(
+            set(requested_secret_names) - _SUPPORTED_SECRET_ENV_NAMES
+        )
+        if unsupported_secret_names:
+            unsupported = ", ".join(unsupported_secret_names)
+            raise ValueError(f"unsupported secret environment name: {unsupported}")
 
         # Docker chooses the real port on entry. Port zero keeps this object a
         # valid RemoteWorkspace without claiming that it is reachable yet.
@@ -60,6 +70,7 @@ class DockerWorkspace(RemoteWorkspace):
         )
         self.image = image
         self.volumes = tuple(volumes or ())
+        self.secret_env_names = requested_secret_names
         self.health_timeout = health_timeout
         self.poll_interval = poll_interval
         self.container_id: str | None = None
@@ -78,12 +89,24 @@ class DockerWorkspace(RemoteWorkspace):
         ]
         if self.api_key is not None:
             command.extend(["--env", f"GG_SESSION_API_KEYS={self.api_key}"])
+        secret_environment = self._secret_environment()
+        for name in self.secret_env_names:
+            command.extend(["--env", name])
         for volume in self.volumes:
             command.extend(["--volume", volume])
         command.append(self.image)
 
         try:
-            result = self._docker(command[1:])
+            if secret_environment is None:
+                result = self._docker(command[1:])
+            else:
+                result = self._docker(
+                    command[1:],
+                    env=secret_environment,
+                    redact_values=tuple(
+                        secret_environment[name] for name in self.secret_env_names
+                    ),
+                )
             self.container_id = result.stdout.strip()
             if not self.container_id:
                 raise DockerWorkspaceError("docker run returned no container id")
@@ -97,6 +120,19 @@ class DockerWorkspace(RemoteWorkspace):
             self.stop()
             raise
         return self
+
+    def _secret_environment(self) -> dict[str, str] | None:
+        if not self.secret_env_names:
+            return None
+
+        environment = os.environ.copy()
+        missing = [name for name in self.secret_env_names if not environment.get(name)]
+        if missing:
+            names = ", ".join(missing)
+            raise DockerWorkspaceError(
+                f"requested secret environment variable is missing or empty: {names}"
+            )
+        return environment
 
     def __exit__(self, *_: object) -> None:
         self.stop()
@@ -167,6 +203,8 @@ class DockerWorkspace(RemoteWorkspace):
         arguments: Sequence[str],
         *,
         check: bool = True,
+        env: Mapping[str, str] | None = None,
+        redact_values: Sequence[str] = (),
     ) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
@@ -174,6 +212,7 @@ class DockerWorkspace(RemoteWorkspace):
                 check=check,
                 capture_output=True,
                 text=True,
+                env=env,
             )
         except FileNotFoundError as exc:
             raise DockerWorkspaceError(
@@ -182,6 +221,8 @@ class DockerWorkspace(RemoteWorkspace):
             ) from exc
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or exc.stdout or "unknown Docker error").strip()
+            for value in redact_values:
+                detail = detail.replace(value, "[REDACTED]")
             raise DockerWorkspaceError(
                 f"Docker command failed (`{' '.join(exc.cmd)}`): {detail}"
             ) from exc

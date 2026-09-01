@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gg.sdk.agent_backend import AgentConfig, DummyAgentConfig
+
 
 class ConversationStatus(StrEnum):
     IDLE = "idle"
@@ -45,10 +47,11 @@ class ConversationRecord(BaseModel):
 class StartConversationRequest(BaseModel):
     """HTTP create/reattach payload. Parsed at the router, not as a raw dict."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     working_dir: str
     id: str | None = None
+    agent: AgentConfig = Field(default_factory=DummyAgentConfig)
 
 
 class SendMessageRequest(BaseModel):

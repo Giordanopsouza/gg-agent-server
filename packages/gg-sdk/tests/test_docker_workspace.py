@@ -128,6 +128,122 @@ def test_explicit_volumes_are_forwarded_to_docker(
     ]
 
 
+def test_openrouter_secret_is_forwarded_by_name_with_host_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "openrouter-test-secret"
+    docker_calls: list[tuple[list[str], dict[str, str] | None, tuple[str, ...]]] = []
+
+    def fake_docker(
+        arguments: Sequence[str],
+        *,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+        redact_values: Sequence[str] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        command = list(arguments)
+        docker_calls.append((command, env, tuple(redact_values)))
+        if command[0] == "run":
+            return _completed(command, stdout="container-secret\n")
+        if command[0] == "port":
+            return _completed(command, stdout="127.0.0.1:49155\n")
+        return _completed(command)
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", secret)
+    monkeypatch.setattr(DockerWorkspace, "_docker", staticmethod(fake_docker))
+    workspace = DockerWorkspace(
+        image="gg-agent-server:dev",
+        secret_env_names=["OPENROUTER_API_KEY"],
+    )
+    workspace._client = httpx.Client(
+        base_url="http://127.0.0.1:49155",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"status": "ok"})
+        ),
+    )
+
+    with workspace:
+        pass
+
+    run_command, environment, redacted_values = docker_calls[0]
+    assert run_command[-3:] == [
+        "--env",
+        "OPENROUTER_API_KEY",
+        "gg-agent-server:dev",
+    ]
+    assert secret not in repr(run_command)
+    assert environment is not None
+    assert environment["OPENROUTER_API_KEY"] == secret
+    assert redacted_values == (secret,)
+    assert secret not in repr(workspace)
+
+
+def test_unsupported_secret_environment_name_is_rejected() -> None:
+    with pytest.raises(
+        ValueError,
+        match="unsupported secret environment name: OTHER_KEY",
+    ):
+        DockerWorkspace(
+            image="gg-agent-server:dev",
+            secret_env_names=["OTHER_KEY"],
+        )
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_requested_openrouter_secret_must_be_present_before_docker_run(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str | None,
+) -> None:
+    docker_was_called = False
+
+    def fake_docker(*_: Any, **__: Any) -> None:
+        nonlocal docker_was_called
+        docker_was_called = True
+
+    if value is None:
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OPENROUTER_API_KEY", value)
+    monkeypatch.setattr(DockerWorkspace, "_docker", staticmethod(fake_docker))
+    workspace = DockerWorkspace(
+        image="gg-agent-server:dev",
+        secret_env_names=["OPENROUTER_API_KEY"],
+    )
+
+    with pytest.raises(DockerWorkspaceError, match="missing or empty"):
+        with workspace:
+            pass
+
+    assert not docker_was_called
+
+
+def test_docker_failure_redacts_forwarded_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "openrouter-must-not-leak"
+
+    def failed_run(command: list[str], **_: Any) -> None:
+        raise subprocess.CalledProcessError(
+            125,
+            command,
+            stderr=f"daemon rejected {secret}",
+        )
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", secret)
+    monkeypatch.setattr(docker_module.subprocess, "run", failed_run)
+    workspace = DockerWorkspace(
+        image="gg-agent-server:dev",
+        secret_env_names=["OPENROUTER_API_KEY"],
+    )
+
+    with pytest.raises(DockerWorkspaceError) as exc_info:
+        with workspace:
+            pass
+
+    assert secret not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
+
+
 def test_health_wait_reports_container_exit_and_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

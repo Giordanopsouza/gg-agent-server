@@ -7,6 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from websockets.sync.client import ClientConnection, connect
 
+from gg.sdk.agent_backend import AgentConfig
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event
 from gg.sdk.remote_workspace import RemoteWorkspace
 
@@ -70,14 +71,17 @@ class RemoteConversation:
         *,
         workspace: RemoteWorkspace,
         conversation_id: str | None = None,
+        agent: AgentConfig | None = None,
         client: httpx.Client | None = None,
     ) -> None:
         self.workspace = workspace
         self._client = client or workspace.client
 
-        payload: dict[str, str] = {"working_dir": workspace.working_dir}
+        payload: dict[str, object] = {"working_dir": workspace.working_dir}
         if conversation_id is not None:
             payload["id"] = conversation_id
+        if agent is not None:
+            payload["agent"] = agent.model_dump(mode="json")
         response = self._client.post(
             "/api/conversations",
             json=payload,

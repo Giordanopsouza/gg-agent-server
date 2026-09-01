@@ -6,7 +6,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from gg.sdk import ConversationStatus
+from gg.sdk import ConversationStatus, PiAgentConfig, load_base_state
 from gg.server import Settings, create_app
 
 
@@ -63,6 +63,82 @@ async def test_post_existing_id_reattaches(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["id"] == conversation_id
     assert response.json()["working_dir"] == created.json()["working_dir"]
+
+
+@pytest.mark.anyio
+async def test_post_pi_persists_configuration_and_reattaches(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    app = create_app(settings)
+    transport = ASGITransport(app=app)
+    agent = {
+        "kind": "pi",
+        "provider": "openrouter",
+        "model": "test/model",
+        "timeout_seconds": 19,
+    }
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            created = await client.post(
+                "/api/conversations",
+                json={"working_dir": "work", "agent": agent},
+            )
+            conversation_id = created.json()["id"]
+            reattached = await client.post(
+                "/api/conversations",
+                json={"working_dir": "ignored", "id": conversation_id},
+            )
+
+    state = load_base_state(settings.conversations_dir / conversation_id)
+    assert created.status_code == 201
+    assert reattached.status_code == 200
+    assert state.agent == PiAgentConfig(model="test/model", timeout_seconds=19)
+    raw = (settings.conversations_dir / conversation_id / "base_state.json").read_text()
+    assert "api_key" not in raw
+
+
+@pytest.mark.anyio
+async def test_post_invalid_pi_configuration_returns_sanitized_400(
+    tmp_path: Path,
+) -> None:
+    app = create_app(_settings(tmp_path))
+    transport = ASGITransport(app=app)
+    secret = "not-allowed-secret-value"
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            response = await client.post(
+                "/api/conversations",
+                json={
+                    "working_dir": "work",
+                    "agent": {
+                        "kind": "pi",
+                        "provider": "unsupported",
+                        "api_key": secret,
+                    },
+                },
+            )
+
+    assert response.status_code == 400
+    assert secret not in response.text
+
+
+@pytest.mark.anyio
+async def test_post_agent_without_discriminator_returns_400(tmp_path: Path) -> None:
+    app = create_app(_settings(tmp_path))
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            response = await client.post(
+                "/api/conversations",
+                json={"working_dir": "work", "agent": {"model": "test/model"}},
+            )
+
+    assert response.status_code == 400
 
 
 @pytest.mark.anyio

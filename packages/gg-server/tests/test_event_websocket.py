@@ -66,8 +66,8 @@ def test_socket_message_runs_agent_while_rest_message_stays_idle(
 
     assert rest_message.status_code == 200
     assert idle.json()["status"] == ConversationStatus.IDLE
-    assert snapshot["payload"] == {"text": "rest stays idle"}
-    assert received[0]["payload"] == {"text": "socket runs"}
+    assert snapshot["payload"] == {"role": "user", "text": "rest stays idle"}
+    assert received[0]["payload"] == {"role": "user", "text": "socket runs"}
     assert received[-1]["payload"] == {"status": ConversationStatus.FINISHED}
     assert (tmp_path / "project" / "work" / "NOTES.md").is_file()
 
