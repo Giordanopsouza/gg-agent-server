@@ -12,3 +12,4 @@ tests/
 .agents/
 .audit/
 **/build/
+.env
