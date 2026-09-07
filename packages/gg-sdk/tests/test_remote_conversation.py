@@ -13,6 +13,7 @@ from gg.sdk import (
     EventKind,
     LocalConversation,
     LocalWorkspace,
+    PiAgentConfig,
     RemoteConversation,
     RemoteWorkspace,
     remote_conversation as remote_module,
@@ -47,6 +48,21 @@ def test_factory_selects_local_conversation(tmp_path: Path) -> None:
     )
 
     assert isinstance(conversation, LocalConversation)
+
+
+def test_factory_forwards_pi_configuration_to_local_conversation(
+    tmp_path: Path,
+) -> None:
+    agent = PiAgentConfig(model="test/model", timeout_seconds=29)
+
+    conversation = Conversation(
+        workspace=LocalWorkspace(working_dir=tmp_path / "work"),
+        conversation_dir=tmp_path / "conversation",
+        agent=agent,
+    )
+
+    assert isinstance(conversation, LocalConversation)
+    assert conversation._agent == agent
 
 
 def test_remote_conversation_uses_transport_contract() -> None:
@@ -122,6 +138,27 @@ def test_remote_conversation_reattaches_with_requested_id() -> None:
         )
 
     assert conversation.id == "known-id"
+
+
+def test_remote_conversation_forwards_pi_agent_configuration() -> None:
+    agent = PiAgentConfig(model="test/model", timeout_seconds=17)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.read().decode() == (
+            '{"working_dir":"/workspace/project","agent":'
+            '{"kind":"pi","provider":"openrouter","model":"test/model",'
+            '"timeout_seconds":17.0}}'
+        )
+        return httpx.Response(201, json=_record("pi-id"))
+
+    workspace = RemoteWorkspace(host="http://agent.example")
+    with httpx.Client(
+        base_url=workspace.host,
+        transport=httpx.MockTransport(handle),
+    ) as client:
+        conversation = Conversation(workspace=workspace, agent=agent, client=client)
+
+    assert conversation.id == "pi-id"
 
 
 def test_subscription_uses_websocket_url_and_authenticates(

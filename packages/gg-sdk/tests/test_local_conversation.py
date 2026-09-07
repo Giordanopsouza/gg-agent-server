@@ -50,7 +50,7 @@ def test_send_message_appends_event_and_stays_idle(tmp_path: Path) -> None:
     events = EventLog(tmp_path / "conv-1").list()
     assert len(events) == 1
     assert events[0].kind == EventKind.MESSAGE
-    assert events[0].payload == {"text": "remember to buy milk"}
+    assert events[0].payload == {"role": "user", "text": "remember to buy milk"}
 
 
 # The happy path writes NOTES.md, logs each event, and ends finished.
@@ -74,7 +74,7 @@ def test_run_writes_notes_and_finishes(tmp_path: Path) -> None:
         EventKind.OBSERVATION,
         EventKind.STATUS,
     ]
-    assert events[0].payload == {"text": "first task"}
+    assert events[0].payload == {"role": "user", "text": "first task"}
     assert events[1].payload == {"status": ConversationStatus.RUNNING}
     assert events[2].payload["tool"] == "write_file"
     assert events[3].payload["path"] == "NOTES.md"
@@ -110,6 +110,32 @@ def test_run_delegates_prompt_workspace_and_event_emission(tmp_path: Path) -> No
     ]
     assert events[3].payload == {"tool": "record", "args": {}}
     assert events[4].payload == {"recorded": True}
+
+
+def test_latest_prompt_ignores_assistant_but_accepts_legacy_message(
+    tmp_path: Path,
+) -> None:
+    workspace = LocalWorkspace(working_dir=tmp_path / "work")
+    backend = RecordingBackend()
+    conversation = LocalConversation(
+        conversation_dir=tmp_path / "conv-1",
+        workspace=workspace,
+        agent_backend=backend,
+    )
+    conversation._event_log.append(
+        Event(seq=1, kind=EventKind.MESSAGE, payload={"text": "legacy user"})
+    )
+    conversation._event_log.append(
+        Event(
+            seq=2,
+            kind=EventKind.MESSAGE,
+            payload={"role": "assistant", "text": "not the prompt"},
+        )
+    )
+
+    conversation.run()
+
+    assert backend.prompt == "legacy user"
 
 
 # A run cannot start while the conversation is already running.

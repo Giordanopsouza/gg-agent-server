@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from gg.sdk import (
+    AgentError,
     ConversationAlreadyRunningError,
     ConversationNotFoundError,
     Event,
@@ -38,6 +39,8 @@ async def send_message(
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidConversationStateError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except AgentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @event_router.get("")
