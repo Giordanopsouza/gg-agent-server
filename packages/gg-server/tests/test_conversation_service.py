@@ -9,7 +9,10 @@ from gg.sdk import (
     ConversationStatus,
     LocalConversation,
     LocalWorkspace,
+    PiAgentConfig,
+    PiRpcAgent,
     StartConversationRequest,
+    load_base_state,
     load_meta,
 )
 from gg.server.config import Settings
@@ -62,6 +65,23 @@ def test_get_hydrates_from_disk(tmp_path: Path) -> None:
 
     assert restored.status == ConversationStatus.FINISHED
     assert restored.id == record.id
+
+
+def test_get_hydrates_persisted_pi_backend(tmp_path: Path) -> None:
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "project",
+    )
+    agent = PiAgentConfig(model="test/model", timeout_seconds=31)
+    creator = ConversationService(settings)
+    record = creator.create("work", agent=agent)
+
+    state = load_base_state(settings.conversations_dir / record.id)
+    restored = ConversationService(settings).get(record.id)
+
+    assert state.agent == agent
+    assert isinstance(restored._agent_backend, PiRpcAgent)
+    assert restored._agent_backend.settings.model == "test/model"
 
 
 def test_list_includes_conversations_from_previous_process(tmp_path: Path) -> None:
@@ -120,7 +140,7 @@ def test_send_message_does_not_run(tmp_path: Path) -> None:
     event = service.send_message(record.id, "stay idle")
 
     assert event.kind.value == "message"
-    assert event.payload == {"text": "stay idle"}
+    assert event.payload == {"role": "user", "text": "stay idle"}
     assert service.get_record(record.id).status == ConversationStatus.IDLE
     assert service.list_events(record.id) == [event]
 

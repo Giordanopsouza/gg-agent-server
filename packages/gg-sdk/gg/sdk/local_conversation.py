@@ -3,9 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from gg.sdk.agent_backend import AgentBackend
+from gg.sdk.agent_backend import (
+    AgentBackend,
+    AgentConfig,
+    DummyAgentConfig,
+    create_agent_backend,
+)
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event, EventKind
-from gg.sdk.dummy_agent import DummyAgentBackend
 from gg.sdk.event_log import (
     EventLog,
     load_base_state,
@@ -42,11 +46,16 @@ class LocalConversation:
         workspace: LocalWorkspace,
         tool_registry: ToolRegistry | None = None,
         conversation_id: str | None = None,
+        agent: AgentConfig | None = None,
         agent_backend: AgentBackend | None = None,
     ) -> None:
         self.conversation_dir = Path(conversation_dir)
         self.workspace = workspace
-        self._agent_backend = agent_backend or DummyAgentBackend(tool_registry)
+        self._agent = agent or DummyAgentConfig()
+        self._agent_backend = agent_backend or create_agent_backend(
+            self._agent,
+            tool_registry=tool_registry,
+        )
         self._event_log = EventLog(self.conversation_dir)
         self._status = ConversationStatus.IDLE
         self.id = conversation_id or str(self.conversation_dir.name)
@@ -78,7 +87,11 @@ class LocalConversation:
         obj = cls.__new__(cls)
         obj.conversation_dir = dir_path
         obj.workspace = ws
-        obj._agent_backend = agent_backend or DummyAgentBackend(tool_registry)
+        obj._agent = state.agent
+        obj._agent_backend = agent_backend or create_agent_backend(
+            state.agent,
+            tool_registry=tool_registry,
+        )
         obj._event_log = EventLog(dir_path)
         obj._status = state.status
         obj.id = meta.id
@@ -92,7 +105,10 @@ class LocalConversation:
     # Record a user message in the event log; status stays idle until run().
     def send_message(self, text: str) -> Event:
         self._transition("send_message")
-        return self._append_event(EventKind.MESSAGE, {"text": text})
+        return self._append_event(
+            EventKind.MESSAGE,
+            {"role": "user", "text": text},
+        )
 
     def list_events(self) -> list[Event]:
         """Return persisted events in seq order."""
@@ -142,6 +158,7 @@ class LocalConversation:
             self.conversation_dir,
             status=self._status,
             working_dir=str(self.workspace.working_dir),
+            agent=self._agent,
         )
         save_meta(
             self.conversation_dir,
@@ -168,7 +185,8 @@ class LocalConversation:
     # Find the most recent message event text for the dummy agent to use.
     def _latest_user_message(self) -> str:
         for event in reversed(self._event_log.list()):
-            if event.kind == EventKind.MESSAGE:
+            role = event.payload.get("role")
+            if event.kind == EventKind.MESSAGE and role in (None, "user"):
                 text = event.payload.get("text")
                 if isinstance(text, str):
                     return text
