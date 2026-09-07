@@ -6,6 +6,11 @@
 
 ARG PYTHON_VERSION=3.12
 
+FROM node:22.23.1-bookworm-slim AS pi-runtime
+
+RUN npm install --global --ignore-scripts --no-audit --no-fund \
+    @earendil-works/pi-coding-agent@0.83.0
+
 FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -31,6 +36,15 @@ RUN groupadd -g ${GID} ${USERNAME} \
  && chown -R ${USERNAME}:${USERNAME} /workspace
 
 COPY --from=builder /app/.venv /app/.venv
+COPY --from=pi-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=pi-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && ln -s ../lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js \
+    /usr/local/bin/pi \
+ && test "$(node --version)" = "v22.23.1" \
+ && test "$(pi --version)" = "0.83.0"
 
 ENV PATH="/app/.venv/bin:$PATH" \
     GG_WORKSPACE_DIR=/workspace/project \
