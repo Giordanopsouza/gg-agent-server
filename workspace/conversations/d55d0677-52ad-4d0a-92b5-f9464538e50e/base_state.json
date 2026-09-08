@@ -1,0 +1,1 @@
+{"status":"finished","working_dir":"workspace/project/pi-test","agent":{"kind":"pi","provider":"openrouter","model":"google/gemini-3.7-flash","timeout_seconds":600.0}}
