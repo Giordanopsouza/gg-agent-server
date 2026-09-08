@@ -53,3 +53,7 @@ covered directly.
 
 Implemented and verified the injectable agent backend boundary while preserving
 the dummy backend as the offline default.
+
+### [SWE] 2026-09-07 14:40 — Archived
+
+Moved the completed task into `docs/tasks/done` before starting slice 4b.

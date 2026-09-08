@@ -56,3 +56,7 @@ unconfigured path.
 
 Implemented the local Pi notes demo, marker and output validation, pinned setup
 guide, offline backend coverage, and explicitly gated paid smoke test.
+
+### [SWE] 2026-09-07 14:40 — Archived
+
+Moved the completed task into `docs/tasks/done` before starting slice 4b.

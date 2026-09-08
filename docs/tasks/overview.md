@@ -1,10 +1,10 @@
-# Plan: local server, Docker, fake runtime
+# Plan: local server, Docker, fake runtime, Pi
 
 Back-link: [task tracker](README.md). Architecture: [About the OpenHands agent-server](../architecture.md).
 
 ## Context
 
-This repo is a learning clone of OpenHands agent-server. The goal is to feel the sandbox inversion by building it, not by reading it. OpenHands has one agent-server process and several launchers. We build that process once, then wrap it in Docker, then put a tiny HTTP provisioner in front of Docker.
+This repo is a learning clone of OpenHands agent-server. The goal is to feel the sandbox inversion by building it, not by reading it. OpenHands has one agent-server process and several launchers. We build that process once, then wrap it in Docker, then put a tiny HTTP provisioner in front of Docker, then swap the dummy agent for Pi.
 
 ## Scope
 
@@ -13,6 +13,8 @@ Included:
 - Slice 1. An in-process conversation loop, then the same loop behind a local FastAPI server with file persistence and one WebSocket.
 - Slice 2. A Docker image of that server plus a client launcher that `docker run`s it and talks HTTP.
 - Slice 3. A fake runtime API that starts and stops those containers and returns `{url, session_api_key}`.
+- Slice 4a. An injectable agent backend, a Pi RPC subprocess backend, and a local Pi demo.
+- Slice 4b. Pi through the conversation HTTP API and inside the Docker sandbox.
 
 Excluded:
 
@@ -26,7 +28,7 @@ Excluded:
 
 - Python 3.12, uv workspace, two packages: `gg-sdk` and `gg-server`. `gg.sdk` must not import `gg.server`.
 - Persistence is JSON files. No database.
-- Dummy agent only. Scripted `write_file` actions, no model calls.
+- Dummy agent remains the default offline path. Pi is opt-in per conversation.
 - Auth is one header, `X-Session-API-Key`. Bind `127.0.0.1` when no key is set.
 - Isolation in slice 2 is the container, not a path jail.
 - Each task is independently shippable and ends in a test or a demo command you can run.
@@ -37,7 +39,7 @@ Excluded:
 2. One Python package. Rejected. The OpenHands lesson is the import DAG. Two packages are the smallest way to keep that lesson.
 3. Real Kubernetes for slice 3. Rejected. Slice 3 exists to show that Cloud and K8s are provisioners. A fake runtime API teaches that. A cluster does not.
 
-Chosen path: loop, then local server, then Docker, then fake runtime.
+Chosen path: loop, then local server, then Docker, then fake runtime, then Pi locally, then Pi over HTTP and Docker.
 
 Kubernetes or Cloud would replace only the fake runtime API process. The SDK's
 `RuntimeWorkspace` control-plane call and its agent-server HTTP conversation
@@ -62,8 +64,10 @@ Slice 1a is the old "slice 0". The loop has to exist before the server.
 |---|---|---|
 | 1a In-process loop | A dummy agent writes `NOTES.md` with no HTTP | [001](done/001-repo-scaffolding.md) to [007](done/007-in-process-demo.md) |
 | 1b Local server | Same loop over HTTP and WebSocket, reconnect works | [008](done/008-server-config.md) to [016](done/016-local-server-demo.md) |
-| 2 Docker sandbox | Same server inside a container | [017](done/017-server-dockerfile.md) to [020](020-docker-sandbox-demo.md) |
+| 2 Docker sandbox | Same server inside a container | [017](done/017-server-dockerfile.md) to [020](done/020-docker-sandbox-demo.md) |
 | 3 Fake runtime | HTTP provisioner that starts that container | [021](done/021-runtime-control-api.md) to [023](done/023-runtime-api-demo.md) |
+| 4a Pi local | Real Pi subprocess writes `PI_NOTES.md` with no server | [026](done/026-agent-backend-boundary.md) to [028](done/028-pi-local-demo.md) |
+| 4b Pi remote | Same Pi path through HTTP and Docker | [029](done/029-pi-conversation-api.md) to [032](032-docker-pi-demo.md) |
 
 ## Verification
 
@@ -77,13 +81,15 @@ uv run python -m gg.server --host 127.0.0.1 --port 8000
 uv run python -m gg.sdk.demo.local_server_notes
 uv run python -m gg.sdk.demo.docker_notes
 uv run python -m gg.sdk.demo.runtime_notes
+uv run python -m gg.sdk.demo.pi_notes
+uv run python -m gg.sdk.demo.docker_pi_notes
 ```
 
 No browser control skill applies. Surface is CLI, HTTP, and Docker. Flag: there is no `control-cli` wiring in this repo yet. Each demo task names the exact command and the file that must appear.
 
 ## Implementation guidance
 
-Do not start 008 until 007 is green. Do not start 017 until 016 is green. Do not start 021 until 020 is green.
+Do not start 008 until 007 is green. Do not start 017 until 016 is green. Do not start 021 until 020 is green. Do not start 029 until 028 is green.
 
 The how skill runs over `gg.sdk` before 008 wraps it, and over `gg.server` before 017 copies it into an image.
 

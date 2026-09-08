@@ -59,3 +59,7 @@ sanitized failures, timeout abort, bounded stderr draining, and forced cleanup.
 
 Implemented and verified the synchronous Pi RPC backend and conversation error
 boundary without adding a server dependency or a network-dependent default test.
+
+### [SWE] 2026-09-07 14:40 — Archived
+
+Moved the completed task into `docs/tasks/done` before starting slice 4b.
