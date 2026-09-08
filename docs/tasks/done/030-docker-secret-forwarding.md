@@ -53,3 +53,7 @@ full source suite passes with 181 tests and two opt-in integration tests skipped
 
 Implemented narrow OpenRouter environment forwarding without placing the
 credential value in Docker arguments, object state, or surfaced failures.
+
+### [SWE] 2026-09-07 17:46 — Archived
+
+Moved the completed task into `docs/tasks/done`.

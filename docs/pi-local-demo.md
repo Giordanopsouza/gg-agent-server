@@ -23,3 +23,6 @@ The paid live smoke test is opt-in. It skips if Pi or the key is unavailable:
 ```bash
 GG_RUN_PI_TESTS=1 uv run --no-editable pytest -m pi
 ```
+
+The same file-writing proof through a remote server in Docker is
+[the Docker Pi demo](docker-pi-demo.md).

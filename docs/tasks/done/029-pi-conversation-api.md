@@ -59,3 +59,7 @@ both protocol and process failures.
 
 Implemented and verified the Pi conversation API while preserving dummy as the
 offline default and keeping credentials outside transport and persistence.
+
+### [SWE] 2026-09-07 17:46 — Archived
+
+Moved the completed task into `docs/tasks/done`.

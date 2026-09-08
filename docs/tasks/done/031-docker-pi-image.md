@@ -63,3 +63,7 @@ and two opt-in integration tests skipped; Ruff and `git diff --check` pass.
 
 Baked the pinned Pi runtime into the existing non-root Python server image
 without changing its entrypoint, workspace, or credential boundary.
+
+### [SWE] 2026-09-07 17:46 — Archived
+
+Moved the completed task into `docs/tasks/done`.
