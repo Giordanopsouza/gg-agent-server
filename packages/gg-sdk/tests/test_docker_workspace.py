@@ -217,6 +217,115 @@ def test_requested_openrouter_secret_must_be_present_before_docker_run(
     assert not docker_was_called
 
 
+@pytest.mark.parametrize("name", ["GH_TOKEN", "GITHUB_TOKEN"])
+def test_github_secret_environment_name_is_accepted(name: str) -> None:
+    workspace = DockerWorkspace(
+        image="gg-agent-server:dev",
+        secret_env_names=[name],
+    )
+    assert workspace.secret_env_names == (name,)
+
+
+def test_multiple_secrets_are_forwarded_by_name_in_one_docker_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openrouter_secret = "openrouter-test-secret"
+    gh_secret = "gh-test-secret"
+    github_secret = "github-test-secret"
+    docker_calls: list[tuple[list[str], dict[str, str] | None, tuple[str, ...]]] = []
+
+    def fake_docker(
+        arguments: Sequence[str],
+        *,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+        redact_values: Sequence[str] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        command = list(arguments)
+        docker_calls.append((command, env, tuple(redact_values)))
+        if command[0] == "run":
+            return _completed(command, stdout="container-multi-secret\n")
+        if command[0] == "port":
+            return _completed(command, stdout="127.0.0.1:49156\n")
+        return _completed(command)
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", openrouter_secret)
+    monkeypatch.setenv("GH_TOKEN", gh_secret)
+    monkeypatch.setenv("GITHUB_TOKEN", github_secret)
+    monkeypatch.setattr(DockerWorkspace, "_docker", staticmethod(fake_docker))
+    workspace = DockerWorkspace(
+        image="gg-agent-server:dev",
+        secret_env_names=["OPENROUTER_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"],
+    )
+    workspace._client = httpx.Client(
+        base_url="http://127.0.0.1:49156",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"status": "ok"})
+        ),
+    )
+
+    with workspace:
+        pass
+
+    run_command, environment, redacted_values = docker_calls[0]
+    assert run_command == [
+        "run",
+        "--detach",
+        "--rm",
+        "--publish",
+        "127.0.0.1::8000",
+        "--env",
+        "OPENROUTER_API_KEY",
+        "--env",
+        "GH_TOKEN",
+        "--env",
+        "GITHUB_TOKEN",
+        "gg-agent-server:dev",
+    ]
+    for secret in (openrouter_secret, gh_secret, github_secret):
+        assert secret not in repr(run_command)
+        assert secret not in repr(workspace)
+    assert environment is not None
+    assert environment["OPENROUTER_API_KEY"] == openrouter_secret
+    assert environment["GH_TOKEN"] == gh_secret
+    assert environment["GITHUB_TOKEN"] == github_secret
+    assert redacted_values == (openrouter_secret, gh_secret, github_secret)
+
+
+@pytest.mark.parametrize("name", ["GH_TOKEN", "GITHUB_TOKEN"])
+@pytest.mark.parametrize("value", [None, ""])
+def test_requested_github_secret_must_be_present_before_docker_run(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str | None,
+) -> None:
+    docker_was_called = False
+
+    def fake_docker(*_: Any, **__: Any) -> None:
+        nonlocal docker_was_called
+        docker_was_called = True
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "present-openrouter-secret")
+    if value is None:
+        monkeypatch.delenv(name, raising=False)
+    else:
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(DockerWorkspace, "_docker", staticmethod(fake_docker))
+    workspace = DockerWorkspace(
+        image="gg-agent-server:dev",
+        secret_env_names=["OPENROUTER_API_KEY", name],
+    )
+
+    with pytest.raises(
+        DockerWorkspaceError,
+        match=f"requested secret environment variable is missing or empty: {name}",
+    ):
+        with workspace:
+            pass
+
+    assert not docker_was_called
+
+
 def test_docker_failure_redacts_forwarded_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -242,6 +351,43 @@ def test_docker_failure_redacts_forwarded_secret(
 
     assert secret not in str(exc_info.value)
     assert "[REDACTED]" in str(exc_info.value)
+
+
+def test_docker_failure_redacts_every_forwarded_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openrouter_secret = "openrouter-must-not-leak"
+    gh_secret = "gh-must-not-leak"
+    github_secret = "github-must-not-leak"
+
+    def failed_run(command: list[str], **_: Any) -> None:
+        raise subprocess.CalledProcessError(
+            125,
+            command,
+            stderr=(
+                f"daemon rejected {openrouter_secret} {gh_secret} {github_secret}"
+            ),
+        )
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", openrouter_secret)
+    monkeypatch.setenv("GH_TOKEN", gh_secret)
+    monkeypatch.setenv("GITHUB_TOKEN", github_secret)
+    monkeypatch.setattr(docker_module.subprocess, "run", failed_run)
+    workspace = DockerWorkspace(
+        image="gg-agent-server:dev",
+        secret_env_names=["OPENROUTER_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"],
+    )
+
+    with pytest.raises(DockerWorkspaceError) as exc_info:
+        with workspace:
+            pass
+
+    message = str(exc_info.value)
+    representation = repr(exc_info.value)
+    for secret in (openrouter_secret, gh_secret, github_secret):
+        assert secret not in message
+        assert secret not in representation
+    assert message.count("[REDACTED]") == 3
 
 
 def test_health_wait_reports_container_exit_and_logs(
