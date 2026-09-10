@@ -12,7 +12,9 @@ from gg.sdk.remote_workspace import RemoteWorkspace
 
 
 _CONTAINER_PORT = "8000/tcp"
-_SUPPORTED_SECRET_ENV_NAMES = frozenset({"OPENROUTER_API_KEY"})
+_SUPPORTED_SECRET_ENV_NAMES = frozenset(
+    {"OPENROUTER_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"}
+)
 
 
 class DockerWorkspaceError(RuntimeError):
