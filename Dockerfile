@@ -29,11 +29,35 @@ FROM python:${PYTHON_VERSION}-slim-bookworm
 ARG USERNAME=gg
 ARG UID=10001
 ARG GID=10001
+ARG TARGETARCH
 
 RUN groupadd -g ${GID} ${USERNAME} \
  && useradd -m -u ${UID} -g ${GID} -s /usr/sbin/nologin ${USERNAME} \
  && mkdir -p /workspace/project /workspace/conversations \
  && chown -R ${USERNAME}:${USERNAME} /workspace
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git=1:2.39.5-0+deb12u3 \
+ && case "${TARGETARCH}" in \
+      amd64) gh_sha256=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be ;; \
+      arm64) gh_sha256=ea4e7a581a32ccad6cc7923cb1576ac5859ba4b9a16ab22eb8f8a96e78e2e961 ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/gh.tar.gz \
+    "https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_${TARGETARCH}.tar.gz" \
+ && echo "${gh_sha256}  /tmp/gh.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gh.tar.gz -C /tmp \
+ && install -m 0755 \
+    /tmp/gh_2.100.0_linux_${TARGETARCH}/bin/gh \
+    /usr/local/bin/gh \
+ && rm -rf /tmp/gh.tar.gz /tmp/gh_2.100.0_linux_${TARGETARCH} \
+ && apt-get purge -y --auto-remove curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && test "$(git --version)" = "git version 2.39.5" \
+ && gh --version | grep -F "gh version 2.100.0"
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=pi-runtime /usr/local/bin/node /usr/local/bin/node

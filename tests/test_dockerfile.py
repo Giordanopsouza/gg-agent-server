@@ -30,6 +30,25 @@ def test_dockerfile_copies_and_verifies_pi_runtime_in_final_image() -> None:
     assert 'test "$(pi --version)" = "0.83.0"' in DOCKERFILE
 
 
+def test_dockerfile_pins_git_and_github_cli() -> None:
+    assert "git=1:2.39.5-0+deb12u3" in DOCKERFILE
+    assert "cli/cli/releases/download/v2.100.0/" in DOCKERFILE
+    assert "gh_2.100.0_linux_${TARGETARCH}.tar.gz" in DOCKERFILE
+    assert "sha256sum -c" in DOCKERFILE
+    assert "apt-get install git" not in DOCKERFILE
+    assert "apt-get install -y gh" not in DOCKERFILE
+
+
+def test_dockerfile_verifies_git_and_gh_versions_in_final_image() -> None:
+    git_install = DOCKERFILE.index("git=1:2.39.5-0+deb12u3")
+    user_switch = DOCKERFILE.index("USER ${USERNAME}")
+    assert git_install < user_switch
+    assert DOCKERFILE.index("/usr/local/bin/gh") < user_switch
+    assert 'test "$(git --version)" = "git version 2.39.5"' in DOCKERFILE
+    assert "gh --version" in DOCKERFILE
+    assert "gh version 2.100.0" in DOCKERFILE
+
+
 def test_dockerfile_preserves_non_root_server_contract() -> None:
     assert "USER ${USERNAME}" in DOCKERFILE
     assert "WORKDIR /workspace/project" in DOCKERFILE
@@ -38,3 +57,9 @@ def test_dockerfile_preserves_non_root_server_contract() -> None:
         '"--port", "8000"]'
     ) in DOCKERFILE
     assert ".pi" not in DOCKERFILE
+    assert "GH_TOKEN" not in DOCKERFILE
+    assert "GITHUB_TOKEN" not in DOCKERFILE
+    assert ".gitconfig" not in DOCKERFILE
+    assert ".ssh" not in DOCKERFILE
+    assert "gh auth" not in DOCKERFILE
+    assert "credential.helper" not in DOCKERFILE
