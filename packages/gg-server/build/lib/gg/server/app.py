@@ -5,7 +5,9 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Response
+from fastapi import Depends, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from gg.server.api import api_router
 from gg.server.config import Settings
@@ -41,6 +43,18 @@ def create_app(settings: Settings) -> FastAPI:
     )
     app.state.settings = settings
     app.state.ready_event = asyncio.Event()
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(
+        _: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        """Expose malformed API configuration as 400 without echoing inputs."""
+        detail = [
+            {key: error[key] for key in ("loc", "msg", "type")}
+            for error in exc.errors()
+        ]
+        return JSONResponse(status_code=400, content={"detail": detail})
 
     @app.get("/health")
     async def health() -> dict[str, str]:

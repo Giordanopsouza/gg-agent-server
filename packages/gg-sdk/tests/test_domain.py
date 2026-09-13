@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from gg.sdk import (
     ConversationRecord,
     ConversationStatus,
-    DummyAgentConfig,
     Event,
     EventKind,
     PiAgentConfig,
@@ -54,7 +53,7 @@ def test_start_conversation_request_requires_working_dir() -> None:
     request = StartConversationRequest.model_validate({"working_dir": "/tmp/work"})
     assert request.working_dir == "/tmp/work"
     assert request.id is None
-    assert request.agent == DummyAgentConfig()
+    assert request.agent == PiAgentConfig()
     with pytest.raises(ValidationError):
         StartConversationRequest.model_validate({})
 

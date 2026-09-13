@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveFloat
 if TYPE_CHECKING:
     from gg.sdk.domain import Event, EventKind
     from gg.sdk.local_workspace import LocalWorkspace
-    from gg.sdk.tools import ToolRegistry
 
 
 class EventEmitter(Protocol):
@@ -26,14 +25,6 @@ class AgentBackend(Protocol):
     ) -> None: ...
 
 
-class DummyAgentConfig(BaseModel):
-    """Persisted selection for the deterministic offline backend."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["dummy"] = "dummy"
-
-
 class PiAgentConfig(BaseModel):
     """Credential-free persisted selection for the Pi RPC backend."""
 
@@ -45,26 +36,17 @@ class PiAgentConfig(BaseModel):
     timeout_seconds: PositiveFloat = 600
 
 
-AgentConfig = Annotated[DummyAgentConfig | PiAgentConfig, Field(discriminator="kind")]
+AgentConfig = Annotated[PiAgentConfig, Field(discriminator="kind")]
 
 
-def create_agent_backend(
-    config: AgentConfig,
-    *,
-    tool_registry: ToolRegistry | None = None,
-) -> AgentBackend:
+def create_agent_backend(config: AgentConfig) -> AgentBackend:
     """Construct a backend from its safe persisted configuration."""
-    if isinstance(config, PiAgentConfig):
-        from gg.sdk.pi_agent import PiAgentSettings, PiRpcAgent
+    from gg.sdk.pi_agent import PiAgentSettings, PiRpcAgent
 
-        return PiRpcAgent(
-            PiAgentSettings(
-                provider=config.provider,
-                model=config.model,
-                timeout_seconds=config.timeout_seconds,
-            )
+    return PiRpcAgent(
+        PiAgentSettings(
+            provider=config.provider,
+            model=config.model,
+            timeout_seconds=config.timeout_seconds,
         )
-
-    from gg.sdk.dummy_agent import DummyAgentBackend
-
-    return DummyAgentBackend(tool_registry)
+    )

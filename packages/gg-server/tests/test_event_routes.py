@@ -85,11 +85,12 @@ async def test_post_events_appends_message_and_does_not_run(tmp_path: Path) -> N
     assert sent.json()["payload"] == {"role": "user", "text": "hello from http"}
     assert record.json()["status"] == ConversationStatus.IDLE
     assert [item["kind"] for item in events.json()] == [EventKind.MESSAGE]
-    assert not (Path(created["working_dir"]) / "NOTES.md").exists()
 
 
 @pytest.mark.anyio
-async def test_post_run_finishes_and_writes_notes(tmp_path: Path) -> None:
+async def test_post_run_finishes_and_lists_events(
+    tmp_path: Path, scripted_agent
+) -> None:
     app = create_app(_settings(tmp_path))
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -107,9 +108,6 @@ async def test_post_run_finishes_and_writes_notes(tmp_path: Path) -> None:
 
     assert ran.status_code == 200
     assert ran.json()["status"] == ConversationStatus.FINISHED
-    notes = Path(created["working_dir"]) / "NOTES.md"
-    assert notes.is_file()
-    assert "ship it" in notes.read_text(encoding="utf-8")
     kinds = [item["kind"] for item in events.json()]
     assert kinds[0] == EventKind.MESSAGE
     assert EventKind.ACTION in kinds
@@ -126,7 +124,7 @@ async def test_pi_run_persists_and_lists_translated_events(
     monkeypatch.setattr(
         local_conversation_module,
         "create_agent_backend",
-        lambda config, tool_registry=None: SuccessfulPiBackend(),
+        lambda config: SuccessfulPiBackend(),
     )
     app = create_app(_settings(tmp_path))
     transport = ASGITransport(app=app)
@@ -192,7 +190,7 @@ async def test_pi_failure_returns_502_persists_error_and_publishes_events(
     monkeypatch.setattr(
         local_conversation_module,
         "create_agent_backend",
-        lambda config, tool_registry=None: FailingPiBackend(error),
+        lambda config: FailingPiBackend(error),
     )
     app = create_app(_settings(tmp_path))
     transport = ASGITransport(app=app)
@@ -239,7 +237,7 @@ async def test_pi_failure_returns_502_persists_error_and_publishes_events(
 
 @pytest.mark.anyio
 async def test_run_while_already_running_returns_409(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scripted_agent
 ) -> None:
     started = threading.Event()
     release = threading.Event()

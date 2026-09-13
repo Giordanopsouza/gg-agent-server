@@ -9,7 +9,6 @@ from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import LocalWorkspace
 from gg.sdk.remote_conversation import RemoteConversation
 from gg.sdk.remote_workspace import RemoteWorkspace
-from gg.sdk.tools import ToolRegistry
 
 
 class Conversation:
@@ -22,7 +21,6 @@ class Conversation:
         conversation_dir: Path | str | None = None,
         conversation_id: str | None = None,
         agent: AgentConfig | None = None,
-        tool_registry: ToolRegistry | None = None,
         client: httpx.Client | None = None,
     ) -> LocalConversation | RemoteConversation:
         if isinstance(workspace, RemoteWorkspace):
@@ -38,7 +36,6 @@ class Conversation:
         return LocalConversation(
             conversation_dir=conversation_dir,
             workspace=workspace,
-            tool_registry=tool_registry,
             conversation_id=conversation_id,
             agent=agent,
         )

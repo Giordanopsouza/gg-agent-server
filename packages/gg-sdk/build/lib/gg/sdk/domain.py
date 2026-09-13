@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gg.sdk.agent_backend import AgentConfig, PiAgentConfig
+
 
 class ConversationStatus(StrEnum):
     IDLE = "idle"
@@ -20,6 +22,8 @@ class EventKind(StrEnum):
     ACTION = "action"
     OBSERVATION = "observation"
     STATUS = "status"
+    ERROR = "error"
+
 
 class Event(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -29,6 +33,7 @@ class Event(BaseModel):
     kind: EventKind
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
 
 class ConversationRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -42,10 +47,11 @@ class ConversationRecord(BaseModel):
 class StartConversationRequest(BaseModel):
     """HTTP create/reattach payload. Parsed at the router, not as a raw dict."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     working_dir: str
     id: str | None = None
+    agent: AgentConfig = Field(default_factory=PiAgentConfig)
 
 
 class SendMessageRequest(BaseModel):

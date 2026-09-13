@@ -155,6 +155,7 @@ class PiRpcAgent:
     ) -> None:
         deadline = time.monotonic() + self.settings.timeout_seconds
         prompt_accepted = False
+        
 
         while True:
             remaining = deadline - time.monotonic()

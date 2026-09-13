@@ -16,12 +16,6 @@ uv run python -m gg.sdk.demo.docker_pi_notes
 Pass `--image` to use a tag other than `gg-agent-server:dev`. The working
 directory inside the container is `/workspace/project`.
 
-The dummy Docker demo remains the offline checkpoint:
-
-```bash
-uv run python -m gg.sdk.demo.docker_notes
-```
-
 The paid live smoke test is opt-in. It skips if Docker, the image, or the key
 is unavailable:
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from gg.sdk import (
+    AgentError,
     ConversationAlreadyRunningError,
     ConversationNotFoundError,
     ConversationRecord,
@@ -56,7 +57,7 @@ async def run_conversation(
     conversation_id: str,
     service: ConversationService = Depends(get_conversation_service),
 ) -> ConversationRecord:
-    """Run the dummy agent and return when the loop has finished."""
+    """Run the selected agent and return when the loop has finished."""
     try:
         return await service.run_and_publish(conversation_id)
     except ConversationNotFoundError as exc:
@@ -65,3 +66,5 @@ async def run_conversation(
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidConversationStateError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except AgentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

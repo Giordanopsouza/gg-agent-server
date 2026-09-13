@@ -82,6 +82,6 @@ class ToolRegistry:
         return tool.run(args, workspace)
 
 
-# Convenience factory with the one tool we need for the dummy agent loop.
+# Convenience factory with the write_file tool used by tests and demos.
 def default_tool_registry() -> ToolRegistry:
     return ToolRegistry([WriteFileTool()])

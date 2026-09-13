@@ -9,7 +9,7 @@ depends_on: [020-docker-sandbox-demo]
 
 ## Migration preflight
 
-- **Target end-state:** `ACPAgent` in `gg.sdk` spawns an ACP-compatible subprocess (Claude Code, Codex, Gemini CLI) inside the sandbox `working_dir`. `ConversationService` can start a conversation with `agent_kind: acp` instead of the dummy or native LLM loop.
+- **Target end-state:** `ACPAgent` in `gg.sdk` spawns an ACP-compatible subprocess (Claude Code, Codex, Gemini CLI) inside the sandbox `working_dir`. `ConversationService` can start a conversation with `agent_kind: acp` instead of Pi.
 - **Temporary legacy bridges:** none.
 - **Forbidden legacy dependencies:** baking ACP subprocess management into `gg.server`. Keep spawn, session, and relay logic in `gg.sdk`.
 - **Bridge removal task:** n/a.
@@ -24,7 +24,7 @@ Add Agent Client Protocol support so users can run third-party coding agents (Cl
 - [ ] `ACPAgentSettings` with `acp_server` (`claude-code`, `codex`, `gemini-cli`, `custom`) and `acp_model` lives in `gg.sdk`.
 - [ ] `ACPAgent` spawns the resolved command as a subprocess with `cwd=workspace.working_dir` and relays `session/prompt` over JSON-RPC stdio.
 - [ ] ACP tool-call events are appended to the conversation event log and stream on the WebSocket.
-- [ ] With no API key for the chosen provider, the conversation fails with a clear error; the dummy agent path is unchanged.
+- [ ] With no API key for the chosen provider, the conversation fails with a clear error; the Pi path is unchanged.
 - [ ] Docker image (`017`) pre-installs pinned `claude-agent-acp` / `codex-acp` / `gemini --acp` binaries on `PATH`.
 - [ ] `uv run python -m gg.sdk.demo.acp_notes` (or equivalent) starts a container, runs Claude Code (or a stub ACP echo server in tests), and shows output under `/workspace`.
 

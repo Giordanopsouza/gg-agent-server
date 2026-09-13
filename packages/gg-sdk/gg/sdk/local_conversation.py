@@ -6,7 +6,7 @@ from typing import Any
 from gg.sdk.agent_backend import (
     AgentBackend,
     AgentConfig,
-    DummyAgentConfig,
+    PiAgentConfig,
     create_agent_backend,
 )
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event, EventKind
@@ -23,7 +23,6 @@ from gg.sdk.exceptions import (
     InvalidConversationStateError,
 )
 from gg.sdk.local_workspace import LocalWorkspace
-from gg.sdk.tools import ToolRegistry
 
 
 # (current status, operation) -> next status
@@ -44,18 +43,14 @@ class LocalConversation:
         *,
         conversation_dir: Path | str,
         workspace: LocalWorkspace,
-        tool_registry: ToolRegistry | None = None,
         conversation_id: str | None = None,
         agent: AgentConfig | None = None,
         agent_backend: AgentBackend | None = None,
     ) -> None:
         self.conversation_dir = Path(conversation_dir)
         self.workspace = workspace
-        self._agent = agent or DummyAgentConfig()
-        self._agent_backend = agent_backend or create_agent_backend(
-            self._agent,
-            tool_registry=tool_registry,
-        )
+        self._agent = agent or PiAgentConfig()
+        self._agent_backend = agent_backend or create_agent_backend(self._agent)
         self._event_log = EventLog(self.conversation_dir)
         self._status = ConversationStatus.IDLE
         self.id = conversation_id or str(self.conversation_dir.name)
@@ -76,7 +71,6 @@ class LocalConversation:
         *,
         conversation_dir: Path | str,
         workspace: LocalWorkspace | None = None,
-        tool_registry: ToolRegistry | None = None,
         agent_backend: AgentBackend | None = None,
     ) -> LocalConversation:
         """Load an existing conversation from disk without resetting its state."""
@@ -88,10 +82,7 @@ class LocalConversation:
         obj.conversation_dir = dir_path
         obj.workspace = ws
         obj._agent = state.agent
-        obj._agent_backend = agent_backend or create_agent_backend(
-            state.agent,
-            tool_registry=tool_registry,
-        )
+        obj._agent_backend = agent_backend or create_agent_backend(state.agent)
         obj._event_log = EventLog(dir_path)
         obj._status = state.status
         obj.id = meta.id
@@ -182,7 +173,7 @@ class LocalConversation:
         self._event_log.append(event)
         return event
 
-    # Find the most recent message event text for the dummy agent to use.
+    # Find the most recent message event text for the selected backend to use.
     def _latest_user_message(self) -> str:
         for event in reversed(self._event_log.list()):
             role = event.payload.get("role")

@@ -6,7 +6,6 @@ from pathlib import Path
 from gg.sdk import (
     ConversationRecord,
     ConversationStatus,
-    DummyAgentConfig,
     Event,
     EventKind,
     EventLog,
@@ -76,7 +75,7 @@ def test_base_state_round_trip(tmp_path: Path) -> None:
 
     assert loaded.status == ConversationStatus.RUNNING
     assert loaded.working_dir == "/tmp/work"
-    assert loaded.agent == DummyAgentConfig()
+    assert loaded.agent == PiAgentConfig()
 
 
 def test_base_state_round_trips_pi_config_without_credentials(tmp_path: Path) -> None:
@@ -97,7 +96,7 @@ def test_base_state_round_trips_pi_config_without_credentials(tmp_path: Path) ->
     assert "api_key" not in raw
 
 
-def test_legacy_base_state_without_agent_defaults_to_dummy(tmp_path: Path) -> None:
+def test_legacy_base_state_without_agent_defaults_to_pi(tmp_path: Path) -> None:
     conv_dir = tmp_path / "conv-1"
     conv_dir.mkdir()
     (conv_dir / "base_state.json").write_text(
@@ -105,4 +104,4 @@ def test_legacy_base_state_without_agent_defaults_to_dummy(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    assert load_base_state(conv_dir).agent == DummyAgentConfig()
+    assert load_base_state(conv_dir).agent == PiAgentConfig()

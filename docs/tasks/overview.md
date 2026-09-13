@@ -21,14 +21,14 @@ Excluded:
 - Real Kubernetes, sysbox, or OpenHands Cloud.
 - Leases, idle eviction, crash recovery, Fernet, profiles, deferred init.
 - VSCode, VNC, git router, a second bash event channel, MCP, OpenAI gateway.
-- A real LLM until the dummy agent can write `NOTES.md`. That work sits in [backlog/024-real-llm-loop.md](backlog/024-real-llm-loop.md).
+- A second native LLM loop. Pi is the default agent. That work sits in [backlog/024-real-llm-loop.md](backlog/024-real-llm-loop.md).
 - ACP / bring-your-own-agent (Claude Code, Codex, Gemini) until the Docker sandbox exists. That work sits in [backlog/025-acp-agent.md](backlog/025-acp-agent.md).
 
 ## Constraints
 
 - Python 3.12, uv workspace, two packages: `gg-sdk` and `gg-server`. `gg.sdk` must not import `gg.server`.
 - Persistence is JSON files. No database.
-- Dummy agent remains the default offline path. Pi is opt-in per conversation.
+- Pi is the default agent. Conversations persist `agent.kind="pi"` and reconstruct `PiRpcAgent`.
 - Auth is one header, `X-Session-API-Key`. Bind `127.0.0.1` when no key is set.
 - Isolation in slice 2 is the container, not a path jail.
 - Each task is independently shippable and ends in a test or a demo command you can run.
@@ -76,11 +76,7 @@ Project-level, once the matching slice exists:
 ```bash
 uv run pytest
 uv run ruff check .
-uv run python -m gg.sdk.demo.write_notes
 uv run python -m gg.server --host 127.0.0.1 --port 8000
-uv run python -m gg.sdk.demo.local_server_notes
-uv run python -m gg.sdk.demo.docker_notes
-uv run python -m gg.sdk.demo.runtime_notes
 uv run python -m gg.sdk.demo.pi_notes
 uv run python -m gg.sdk.demo.docker_pi_notes
 ```

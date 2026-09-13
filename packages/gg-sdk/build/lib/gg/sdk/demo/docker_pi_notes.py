@@ -1,6 +1,6 @@
 """Docker Pi demo: a remote Pi agent writes ``PI_NOTES.md`` in a container.
 
-The workspace-constructor change from the dummy Docker demo is::
+The workspace constructor is::
 
     workspace = DockerWorkspace(
         image="gg-agent-server:dev",

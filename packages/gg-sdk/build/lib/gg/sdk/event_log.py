@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from gg.sdk.agent_backend import AgentConfig, PiAgentConfig
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event
 
 
@@ -17,6 +18,7 @@ class BaseState(BaseModel):
 
     status: ConversationStatus
     working_dir: str
+    agent: AgentConfig = Field(default_factory=PiAgentConfig)
 
 
 # Ensure the conversation directory exists and return it as a Path
@@ -44,8 +46,13 @@ def save_base_state(
     *,
     status: ConversationStatus,
     working_dir: str,
+    agent: AgentConfig | None = None,
 ) -> None:
-    state = BaseState(status=status, working_dir=working_dir)
+    state = BaseState(
+        status=status,
+        working_dir=working_dir,
+        agent=agent or PiAgentConfig(),
+    )
     path = _ensure_conversation_dir(conversation_dir) / BASE_STATE_FILE
     path.write_text(state.model_dump_json(), encoding="utf-8")
 

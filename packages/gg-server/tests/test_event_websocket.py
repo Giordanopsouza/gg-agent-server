@@ -28,7 +28,9 @@ def _event_count_after_run() -> int:
     return 4  # running status, write action, write observation, finished status
 
 
-def test_socket_receives_events_published_by_rest_run(tmp_path: Path) -> None:
+def test_socket_receives_events_published_by_rest_run(
+    tmp_path: Path, scripted_agent
+) -> None:
     app = create_app(_settings(tmp_path))
     with TestClient(app) as client:
         conversation_id = _start_conversation(client)
@@ -49,6 +51,7 @@ def test_socket_receives_events_published_by_rest_run(tmp_path: Path) -> None:
 
 def test_socket_message_runs_agent_while_rest_message_stays_idle(
     tmp_path: Path,
+    scripted_agent,
 ) -> None:
     app = create_app(_settings(tmp_path))
     with TestClient(app) as client:
@@ -69,10 +72,11 @@ def test_socket_message_runs_agent_while_rest_message_stays_idle(
     assert snapshot["payload"] == {"role": "user", "text": "rest stays idle"}
     assert received[0]["payload"] == {"role": "user", "text": "socket runs"}
     assert received[-1]["payload"] == {"status": ConversationStatus.FINISHED}
-    assert (tmp_path / "project" / "work" / "NOTES.md").is_file()
 
 
-def test_reconnect_replays_persisted_event_snapshot(tmp_path: Path) -> None:
+def test_reconnect_replays_persisted_event_snapshot(
+    tmp_path: Path, scripted_agent
+) -> None:
     app = create_app(_settings(tmp_path))
     with TestClient(app) as client:
         conversation_id = _start_conversation(client)

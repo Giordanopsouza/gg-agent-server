@@ -6,7 +6,7 @@ from gg.sdk import Conversation, ConversationStatus, EventKind, RemoteWorkspace
 from gg.server import Settings, create_app
 
 
-def test_remote_client_writes_notes_through_real_app(tmp_path: Path) -> None:
+def test_remote_client_runs_through_real_app(tmp_path: Path, scripted_agent) -> None:
     app = create_app(
         Settings(
             conversations_dir=tmp_path / "conversations",
@@ -26,8 +26,6 @@ def test_remote_client_writes_notes_through_real_app(tmp_path: Path) -> None:
         conversation.run()
         events = conversation.list_events()
 
-    notes = tmp_path / "project" / "work" / "NOTES.md"
-    assert notes.read_text(encoding="utf-8") == "# Notes\n\nremote integration\n"
     assert conversation.status == ConversationStatus.FINISHED
     assert message.kind == EventKind.MESSAGE
     assert [event.kind for event in events] == [

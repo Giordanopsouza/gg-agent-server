@@ -7,6 +7,7 @@ import pytest
 from gg.sdk import (
     ConversationNotFoundError,
     ConversationStatus,
+    EventKind,
     LocalConversation,
     LocalWorkspace,
     PiAgentConfig,
@@ -15,8 +16,20 @@ from gg.sdk import (
     load_base_state,
     load_meta,
 )
+from gg.sdk.agent_backend import EventEmitter
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
+
+
+class _RecordingBackend:
+    def run(
+        self,
+        prompt: str,
+        workspace: LocalWorkspace,
+        emit: EventEmitter,
+    ) -> None:
+        emit(EventKind.ACTION, {"tool": "record", "args": {}})
+        emit(EventKind.OBSERVATION, {"recorded": True})
 
 
 def test_create_allocates_id_and_writes_meta(tmp_path: Path) -> None:
@@ -57,6 +70,7 @@ def test_get_hydrates_from_disk(tmp_path: Path) -> None:
     creator = ConversationService(settings)
     record = creator.create("work")
     conversation = creator.get(record.id)
+    conversation._agent_backend = _RecordingBackend()
     conversation.send_message("hello")
     conversation.run()
 
@@ -148,7 +162,11 @@ def test_send_message_does_not_run(tmp_path: Path) -> None:
 def test_local_conversation_open_preserves_status(tmp_path: Path) -> None:
     workspace = LocalWorkspace(working_dir=tmp_path / "work")
     conv_dir = tmp_path / "conv-1"
-    conversation = LocalConversation(conversation_dir=conv_dir, workspace=workspace)
+    conversation = LocalConversation(
+        conversation_dir=conv_dir,
+        workspace=workspace,
+        agent_backend=_RecordingBackend(),
+    )
     conversation.send_message("persist")
     conversation.run()
 

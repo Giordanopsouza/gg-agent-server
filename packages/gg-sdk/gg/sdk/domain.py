@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from gg.sdk.agent_backend import AgentConfig, DummyAgentConfig
+from gg.sdk.agent_backend import AgentConfig, PiAgentConfig
 
 
 class ConversationStatus(StrEnum):
@@ -51,7 +51,7 @@ class StartConversationRequest(BaseModel):
 
     working_dir: str
     id: str | None = None
-    agent: AgentConfig = Field(default_factory=DummyAgentConfig)
+    agent: AgentConfig = Field(default_factory=PiAgentConfig)
 
 
 class SendMessageRequest(BaseModel):

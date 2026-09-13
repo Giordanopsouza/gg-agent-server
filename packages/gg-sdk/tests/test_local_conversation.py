@@ -53,18 +53,22 @@ def test_send_message_appends_event_and_stays_idle(tmp_path: Path) -> None:
     assert events[0].payload == {"role": "user", "text": "remember to buy milk"}
 
 
-# The happy path writes NOTES.md, logs each event, and ends finished.
-def test_run_writes_notes_and_finishes(tmp_path: Path) -> None:
+# The happy path logs each event and ends finished.
+def test_run_finishes_and_persists_events(tmp_path: Path) -> None:
     workspace = LocalWorkspace(working_dir=tmp_path / "work")
     conv_dir = tmp_path / "conv-1"
-    conversation = LocalConversation(conversation_dir=conv_dir, workspace=workspace)
+    backend = RecordingBackend()
+    conversation = LocalConversation(
+        conversation_dir=conv_dir,
+        workspace=workspace,
+        agent_backend=backend,
+    )
 
     conversation.send_message("first task")
     conversation.run()
 
     assert conversation.status == ConversationStatus.FINISHED
-    notes = workspace.read_file("NOTES.md")
-    assert notes == b"# Notes\n\nfirst task\n"
+    assert backend.prompt == "first task"
 
     events = EventLog(conv_dir).list()
     assert [event.kind for event in events] == [
@@ -76,8 +80,8 @@ def test_run_writes_notes_and_finishes(tmp_path: Path) -> None:
     ]
     assert events[0].payload == {"role": "user", "text": "first task"}
     assert events[1].payload == {"status": ConversationStatus.RUNNING}
-    assert events[2].payload["tool"] == "write_file"
-    assert events[3].payload["path"] == "NOTES.md"
+    assert events[2].payload == {"tool": "record", "args": {}}
+    assert events[3].payload == {"recorded": True}
     assert events[4].payload == {"status": ConversationStatus.FINISHED}
 
     state = load_base_state(conv_dir)
@@ -159,6 +163,7 @@ def test_run_after_finished_raises(tmp_path: Path) -> None:
     conversation = LocalConversation(
         conversation_dir=tmp_path / "conv-1",
         workspace=workspace,
+        agent_backend=RecordingBackend(),
     )
     conversation.send_message("go")
     conversation.run()
@@ -171,7 +176,11 @@ def test_run_after_finished_raises(tmp_path: Path) -> None:
 def test_event_log_survives_restart(tmp_path: Path) -> None:
     workspace = LocalWorkspace(working_dir=tmp_path / "work")
     conv_dir = tmp_path / "conv-1"
-    conversation = LocalConversation(conversation_dir=conv_dir, workspace=workspace)
+    conversation = LocalConversation(
+        conversation_dir=conv_dir,
+        workspace=workspace,
+        agent_backend=RecordingBackend(),
+    )
     conversation.send_message("persist me")
     conversation.run()
 

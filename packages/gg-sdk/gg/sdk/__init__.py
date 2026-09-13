@@ -3,7 +3,6 @@
 from gg.sdk.agent_backend import (
     AgentBackend,
     AgentConfig,
-    DummyAgentConfig,
     EventEmitter,
     PiAgentConfig,
     create_agent_backend,
@@ -18,7 +17,6 @@ from gg.sdk.domain import (
     SendMessageRequest,
     StartConversationRequest,
 )
-from gg.sdk.dummy_agent import DummyAgentBackend
 from gg.sdk.event_log import (
     BaseState,
     EventLog,
@@ -74,8 +72,6 @@ __all__ = [
     "ConversationStatus",
     "DockerWorkspace",
     "DockerWorkspaceError",
-    "DummyAgentBackend",
-    "DummyAgentConfig",
     "Event",
     "EventKind",
     "EventLog",

@@ -21,6 +21,7 @@ from pathlib import Path
 
 try:
     from gg.sdk import (
+        EventKind,
         EventLog,
         LocalConversation,
         LocalWorkspace,
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "gg-sdk"))
     from gg.sdk import (
+        EventKind,
         EventLog,
         LocalConversation,
         LocalWorkspace,
@@ -70,9 +72,24 @@ print(workspace.read_file("hello.txt").decode())
 # --- 2. LocalConversation — wires workspace + event log ------------------
 # On init, the conversation writes meta.json and base_state.json immediately.
 
+class TourBackend:
+    """Offline stand-in so this notebook can show the loop without spawning Pi."""
+
+    def run(self, prompt, workspace, emit):
+        path = "NOTES.md"
+        content = f"# Notes\n\n{prompt}\n"
+        emit(
+            EventKind.ACTION,
+            {"tool": "write_file", "args": {"path": path, "content": content}},
+        )
+        workspace.write_file(path, content)
+        emit(EventKind.OBSERVATION, {"path": path})
+
+
 conversation = LocalConversation(
     conversation_dir=CONVERSATION_DIR,
     workspace=workspace,
+    agent_backend=TourBackend(),
 )
 
 print("id:    ", conversation.id)
@@ -93,7 +110,7 @@ print("event count:", len(events))
 print("latest event:", events[-1].kind, events[-1].payload)
 
 # %%
-# --- 4. run — dummy agent plans, tool executes, events accumulate ----------
+# --- 4. run — backend plans, tool executes, events accumulate --------------
 # This is the same internal loop the HTTP server will call later.
 
 conversation.run()

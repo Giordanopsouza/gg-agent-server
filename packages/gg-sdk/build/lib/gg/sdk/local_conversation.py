@@ -3,8 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from gg.sdk.agent_backend import (
+    AgentBackend,
+    AgentConfig,
+    PiAgentConfig,
+    create_agent_backend,
+)
 from gg.sdk.domain import ConversationRecord, ConversationStatus, Event, EventKind
-from gg.sdk.dummy_agent import plan_write_notes
 from gg.sdk.event_log import (
     EventLog,
     load_base_state,
@@ -13,11 +18,11 @@ from gg.sdk.event_log import (
     save_meta,
 )
 from gg.sdk.exceptions import (
+    AgentError,
     ConversationAlreadyRunningError,
     InvalidConversationStateError,
 )
 from gg.sdk.local_workspace import LocalWorkspace
-from gg.sdk.tools import ToolRegistry, default_tool_registry
 
 
 # (current status, operation) -> next status
@@ -25,11 +30,12 @@ _ALLOWED_TRANSITIONS: dict[tuple[ConversationStatus, str], ConversationStatus] =
     (ConversationStatus.IDLE, "send_message"): ConversationStatus.IDLE,
     (ConversationStatus.IDLE, "run"): ConversationStatus.RUNNING,
     (ConversationStatus.RUNNING, "finish"): ConversationStatus.FINISHED,
+    (ConversationStatus.RUNNING, "error"): ConversationStatus.ERROR,
 }
 
 
 class LocalConversation:
-    """In-process conversation: event log, workspace, and a dummy agent loop."""
+    """In-process conversation that persists events around an agent backend."""
 
     # Wire up workspace, event log, and on-disk meta; start in idle.
     def __init__(
@@ -37,12 +43,14 @@ class LocalConversation:
         *,
         conversation_dir: Path | str,
         workspace: LocalWorkspace,
-        tool_registry: ToolRegistry | None = None,
         conversation_id: str | None = None,
+        agent: AgentConfig | None = None,
+        agent_backend: AgentBackend | None = None,
     ) -> None:
         self.conversation_dir = Path(conversation_dir)
         self.workspace = workspace
-        self._tool_registry = tool_registry or default_tool_registry()
+        self._agent = agent or PiAgentConfig()
+        self._agent_backend = agent_backend or create_agent_backend(self._agent)
         self._event_log = EventLog(self.conversation_dir)
         self._status = ConversationStatus.IDLE
         self.id = conversation_id or str(self.conversation_dir.name)
@@ -63,7 +71,7 @@ class LocalConversation:
         *,
         conversation_dir: Path | str,
         workspace: LocalWorkspace | None = None,
-        tool_registry: ToolRegistry | None = None,
+        agent_backend: AgentBackend | None = None,
     ) -> LocalConversation:
         """Load an existing conversation from disk without resetting its state."""
         dir_path = Path(conversation_dir)
@@ -73,7 +81,8 @@ class LocalConversation:
         obj = cls.__new__(cls)
         obj.conversation_dir = dir_path
         obj.workspace = ws
-        obj._tool_registry = tool_registry or default_tool_registry()
+        obj._agent = state.agent
+        obj._agent_backend = agent_backend or create_agent_backend(state.agent)
         obj._event_log = EventLog(dir_path)
         obj._status = state.status
         obj.id = meta.id
@@ -87,13 +96,16 @@ class LocalConversation:
     # Record a user message in the event log; status stays idle until run().
     def send_message(self, text: str) -> Event:
         self._transition("send_message")
-        return self._append_event(EventKind.MESSAGE, {"text": text})
+        return self._append_event(
+            EventKind.MESSAGE,
+            {"role": "user", "text": text},
+        )
 
     def list_events(self) -> list[Event]:
         """Return persisted events in seq order."""
         return self._event_log.list()
 
-    # Run the dummy agent once: plan action, execute tool, then finish.
+    # Run the selected backend once, persisting every event it emits.
     def run(self) -> None:
         if self._status == ConversationStatus.RUNNING:
             raise ConversationAlreadyRunningError()
@@ -101,18 +113,17 @@ class LocalConversation:
         self._apply_status(ConversationStatus.RUNNING)
 
         user_message = self._latest_user_message()
-        action = plan_write_notes(user_message=user_message)
-
-        self._append_event(
-            EventKind.ACTION,
-            {"tool": action["tool"], "args": action["args"]},
-        )
-        observation = self._tool_registry.run(
-            action["tool"],
-            action["args"],
-            self.workspace,
-        )
-        self._append_event(EventKind.OBSERVATION, observation.payload)
+        try:
+            self._agent_backend.run(
+                user_message,
+                self.workspace,
+                self._append_event,
+            )
+        except AgentError as exc:
+            self._append_event(EventKind.ERROR, exc.to_event_payload())
+            self._transition("error")
+            self._apply_status(ConversationStatus.ERROR)
+            raise
 
         self._transition("finish")
         self._apply_status(ConversationStatus.FINISHED)
@@ -138,6 +149,7 @@ class LocalConversation:
             self.conversation_dir,
             status=self._status,
             working_dir=str(self.workspace.working_dir),
+            agent=self._agent,
         )
         save_meta(
             self.conversation_dir,
@@ -161,10 +173,11 @@ class LocalConversation:
         self._event_log.append(event)
         return event
 
-    # Find the most recent message event text for the dummy agent to use.
+    # Find the most recent message event text for the selected backend to use.
     def _latest_user_message(self) -> str:
         for event in reversed(self._event_log.list()):
-            if event.kind == EventKind.MESSAGE:
+            role = event.payload.get("role")
+            if event.kind == EventKind.MESSAGE and role in (None, "user"):
                 text = event.payload.get("text")
                 if isinstance(text, str):
                     return text
