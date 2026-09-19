@@ -1,6 +1,6 @@
 # gg-agent-server
 
-The agent-server does not launch sandboxes. **The sandbox launches the agent-server.** A client starts a Docker container, then talks HTTP and WebSocket to the process already running inside it.
+The shortest mental model is: **control plane manages sandboxes; client SDK provides the interface; server SDK manages conversation state; Pi Agent executes the work.**
 
 ![Background agents](docs/background-agents.png)
 
@@ -19,12 +19,12 @@ Use `uv sync --no-editable`. Default editable installs break `import gg` on Pyth
 
 ## Demo
 
-Pi runs inside an isolated container, clones a throwaway GitHub repo, opens a pull request, then the container is removed. No host directory is mounted.
+Three isolated containers start at once. Each Pi clones `Giordanopsouza/personal-website`, does one change (title, background color, or font), opens a pull request, then the sandboxes are removed. No host directory is mounted.
 
 ```bash
 docker build -t gg-agent-server:dev .
 set -a && source .env && set +a
-uv run --no-editable python -m gg.sdk.demo.docker_pi_github_pr --repo OWNER/DEMO_REPO
+uv run --no-editable python -m gg.sdk.demo.docker_pi_github_pr
 ```
 
 Needs `OPENROUTER_API_KEY` and a fine-grained `GH_TOKEN` with contents and pull-request write access.
