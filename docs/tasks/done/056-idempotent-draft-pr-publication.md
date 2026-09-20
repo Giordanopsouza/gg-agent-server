@@ -1,7 +1,7 @@
 ---
 id: 056-idempotent-draft-pr-publication
 feature: modal-background-tasks
-status: in-progress
+status: done
 depends_on: [050-durable-background-task-api, 055-repository-task-runner]
 ---
 
@@ -52,3 +52,8 @@ Deterministic tests cover persist-before-side-effect, idempotent restart,
 timeout-after-create, closed PR recovery, remote branch conflict, failed
 checks, no-changes, agent failure, and cancellation. Live draft/authorship
 smoke is opt-in via `GG_RUN_GITHUB_TESTS=1`.
+
+### [PR Reviewer] 2026-09-20 — Merged
+
+PR [#25](https://github.com/Giordanopsouza/gg-agent-server/pull/25) merged to
+`main`. Task archived to `docs/tasks/done/`.
