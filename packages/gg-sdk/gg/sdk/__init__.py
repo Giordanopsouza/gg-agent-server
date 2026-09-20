@@ -49,10 +49,11 @@ from gg.sdk.exceptions import (
 from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import CommandResult, LocalWorkspace
 from gg.sdk.pi_agent import PiAgentSettings, PiRpcAgent
+from gg.sdk.publication import PublicationRecord, PublicationRequest, PublicationState
 from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscription
 from gg.sdk.remote_workspace import RemoteWorkspace
-from gg.sdk.runtime_workspace import RuntimeWorkspace
 from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
+from gg.sdk.runtime_workspace import RuntimeWorkspace
 from gg.sdk.task_execution import (
     AgentOutcome,
     CheckOutcome,
@@ -104,6 +105,9 @@ __all__ = [
     "PiAgentSettings",
     "PiAgentConfig",
     "PiRpcAgent",
+    "PublicationRecord",
+    "PublicationRequest",
+    "PublicationState",
     "RunningAgentBackend",
     "RemoteConversation",
     "RemoteEventSubscription",

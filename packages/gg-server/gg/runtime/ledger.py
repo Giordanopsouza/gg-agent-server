@@ -21,13 +21,15 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
+from gg.sdk.publication import PublicationRecord, PublicationState
+from gg.sdk.task_execution import AgentOutcome, CheckOutcome
 from gg.sdk.tasks import TaskRecord, TaskState
 
 
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSION = 4
 
 
 class SandboxProviderState(StrEnum):
@@ -103,6 +105,29 @@ def _row_to_reservation(row: sqlite3.Row) -> ReservationRecord:
 
 def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _row_to_publication(row: sqlite3.Row) -> PublicationRecord:
+    draft = row["pr_draft"]
+    return PublicationRecord(
+        task_id=row["task_id"],
+        repository=row["repository"],
+        task_branch=row["task_branch"],
+        base_ref=row["base_ref"],
+        task_marker=row["task_marker"],
+        state=PublicationState(row["state"]),
+        commit_sha=row["commit_sha"],
+        check_outcome=CheckOutcome(row["check_outcome"]),
+        agent_outcome=AgentOutcome(row["agent_outcome"]),
+        pr_number=row["pr_number"],
+        pr_url=row["pr_url"],
+        pr_draft=None if draft is None else bool(draft),
+        pr_author=row["pr_author"],
+        pr_state=row["pr_state"],
+        detail=row["detail"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
 
 
 def _row_to_record(row: sqlite3.Row) -> TaskRecord:
@@ -265,10 +290,30 @@ class TaskLedger:
                     self._conn.execute("ROLLBACK")
                     raise
 
+            actual = int(
+                self._conn.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()["value"]
+            )
+            if actual < 4 <= self._expected_schema_version:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._create_publication_schema()
+                    self._conn.execute(
+                        "UPDATE schema_meta SET value = '4' "
+                        "WHERE key = 'schema_version'"
+                    )
+                    self._conn.execute("COMMIT")
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+
             if self._expected_schema_version >= 2:
                 self._create_sandbox_schema()
             if self._expected_schema_version >= 3:
                 self._create_reservation_schema()
+            if self._expected_schema_version >= 4:
+                self._create_publication_schema()
 
     def _create_sandbox_schema(self) -> None:
         assert self._conn is not None
@@ -356,6 +401,33 @@ class TaskLedger:
                 TaskState.STARTING.value,
                 TaskState.QUEUED.value,
             ),
+        )
+
+    def _create_publication_schema(self) -> None:
+        assert self._conn is not None
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS publication_intents (
+                task_id TEXT PRIMARY KEY,
+                repository TEXT NOT NULL,
+                task_branch TEXT NOT NULL,
+                base_ref TEXT NOT NULL,
+                task_marker TEXT NOT NULL,
+                commit_sha TEXT,
+                state TEXT NOT NULL,
+                check_outcome TEXT NOT NULL,
+                agent_outcome TEXT NOT NULL,
+                pr_number INTEGER,
+                pr_url TEXT,
+                pr_draft INTEGER,
+                pr_author TEXT,
+                pr_state TEXT,
+                detail TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+            """
         )
 
     # Atomically insert a new queued task or return an existing one by
@@ -733,9 +805,188 @@ class TaskLedger:
             raise KeyError(f"no sandbox creation intent for task {task_id}")
         return _row_to_sandbox_record(row)
 
+    def begin_publication(
+        self,
+        *,
+        task_id: str,
+        repository: str,
+        task_branch: str,
+        base_ref: str,
+        task_marker: str,
+        commit_sha: str | None,
+        check_outcome: CheckOutcome,
+        agent_outcome: AgentOutcome,
+        state: PublicationState = PublicationState.PENDING,
+        detail: str | None = None,
+    ) -> tuple[PublicationRecord, bool]:
+        """Persist publication identity before push/create side effects."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._conn.execute(
+                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                if existing is not None:
+                    record = _row_to_publication(existing)
+                    if (
+                        record.repository != repository
+                        or record.task_branch != task_branch
+                        or record.base_ref != base_ref
+                        or record.task_marker != task_marker
+                    ):
+                        self._conn.execute("COMMIT")
+                        raise PublicationIdentityError(
+                            "existing publication identity does not match "
+                            f"task {task_id}"
+                        )
+                    if (
+                        record.commit_sha is not None
+                        and commit_sha is not None
+                        and record.commit_sha != commit_sha
+                    ):
+                        self._conn.execute("COMMIT")
+                        raise PublicationIdentityError(
+                            f"existing publication commit does not match task {task_id}"
+                        )
+                    self._conn.execute("COMMIT")
+                    return record, False
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    INSERT INTO publication_intents (
+                        task_id, repository, task_branch, base_ref, task_marker,
+                        commit_sha, state, check_outcome, agent_outcome,
+                        pr_number, pr_url, pr_draft, pr_author, pr_state,
+                        detail, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL,
+                              NULL, ?, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        repository,
+                        task_branch,
+                        base_ref,
+                        task_marker,
+                        commit_sha,
+                        state.value,
+                        check_outcome.value,
+                        agent_outcome.value,
+                        detail,
+                        now,
+                        now,
+                    ),
+                )
+                row = self._conn.execute(
+                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except PublicationIdentityError:
+                raise
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return _row_to_publication(row), True
+
+    def get_publication(self, task_id: str) -> PublicationRecord | None:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM publication_intents WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        return _row_to_publication(row) if row is not None else None
+
+    def update_publication(
+        self,
+        task_id: str,
+        *,
+        state: PublicationState,
+        commit_sha: str | None = None,
+        pr_number: int | None = None,
+        pr_url: str | None = None,
+        pr_draft: bool | None = None,
+        pr_author: str | None = None,
+        pr_state: str | None = None,
+        detail: str | None = None,
+        check_status: str | None = None,
+        outcome_detail: str | None = None,
+    ) -> PublicationRecord:
+        """Record publication progress without storing credentials."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                current = self._conn.execute(
+                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                if current is None:
+                    raise KeyError(f"no publication intent for task {task_id}")
+                draft_value = current["pr_draft"] if pr_draft is None else int(pr_draft)
+                self._conn.execute(
+                    """
+                    UPDATE publication_intents
+                    SET state = ?,
+                        commit_sha = COALESCE(?, commit_sha),
+                        pr_number = COALESCE(?, pr_number),
+                        pr_url = COALESCE(?, pr_url),
+                        pr_draft = ?,
+                        pr_author = COALESCE(?, pr_author),
+                        pr_state = COALESCE(?, pr_state),
+                        detail = ?,
+                        updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (
+                        state.value,
+                        commit_sha,
+                        pr_number,
+                        pr_url,
+                        draft_value,
+                        pr_author,
+                        pr_state,
+                        detail,
+                        now,
+                        task_id,
+                    ),
+                )
+                if check_status is not None or outcome_detail is not None:
+                    self._conn.execute(
+                        """
+                        UPDATE tasks
+                        SET check_status = COALESCE(?, check_status),
+                            outcome_detail = COALESCE(?, outcome_detail),
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (check_status, outcome_detail, now, task_id),
+                    )
+                row = self._conn.execute(
+                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return _row_to_publication(row)
+
+
+class PublicationIdentityError(RuntimeError):
+    """A task's stored publication identity does not match a retry."""
+
 
 __all__ = [
     "SUPPORTED_SCHEMA_VERSION",
+    "PublicationIdentityError",
     "ReservationPhase",
     "ReservationRecord",
     "SandboxCreationRecord",

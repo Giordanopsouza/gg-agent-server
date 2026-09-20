@@ -157,6 +157,32 @@ def test_v2_migration_backfills_existing_provider_ownership(tmp_path) -> None:
     assert public_task.state.value == "running"
 
 
+def test_ledger_migrates_v3_to_publication_journal(tmp_path) -> None:
+    from gg.sdk.publication import PublicationState
+    from gg.sdk.task_execution import AgentOutcome, CheckOutcome
+
+    db_path = str(tmp_path / "tasks.sqlite")
+    with TaskLedger(db_path=db_path, schema_version=3) as old_ledger:
+        task, _ = _submit(old_ledger, key="k1")
+
+    with TaskLedger(db_path=db_path) as migrated:
+        record, created = migrated.begin_publication(
+            task_id=task.id,
+            repository="owner/name",
+            task_branch="gg/task/1",
+            base_ref="main",
+            task_marker="task:1",
+            commit_sha="abc123",
+            check_outcome=CheckOutcome.PASSED,
+            agent_outcome=AgentOutcome.SUCCEEDED,
+        )
+
+    assert created is True
+    assert record.state is PublicationState.PENDING
+    assert record.commit_sha == "abc123"
+    assert record.pr_number is None
+
+
 def test_ledger_file_is_private_because_it_contains_sandbox_credentials(
     tmp_path,
 ) -> None:

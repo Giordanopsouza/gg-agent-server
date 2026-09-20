@@ -39,4 +39,5 @@ markers = [
     "docker: opt-in tests that require Docker and the gg-agent-server:dev image",
     "modal: opt-in tests that require Modal credentials and the published image",
     "pi: opt-in tests that require Pi and a configured OpenRouter API key",
+    "github: opt-in tests that require GitHub credentials and a live repository",
 ]
