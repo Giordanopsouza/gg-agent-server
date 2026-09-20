@@ -1,7 +1,7 @@
 ---
 id: 051-modal-sandbox-lifecycle
 feature: modal-background-tasks
-status: in-progress
+status: done
 depends_on: [050-durable-background-task-api]
 ---
 
@@ -71,3 +71,8 @@ argument test also passed in the 12-test lifecycle suite. Repository lint and
 both package builds passed. Changed task files pass Ruff formatting; the
 repository-wide format check remains blocked by nine pre-existing SDK formatting
 differences outside task 051.
+
+### [SWE] 2026-09-20 16:30 UTC — Task archived
+
+Implementation commit `bb8d0ed` recorded on the task branch. All acceptance
+criteria are complete; moved the tracker entry to `docs/tasks/done/`.
