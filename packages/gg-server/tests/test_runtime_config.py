@@ -138,17 +138,17 @@ def test_capacity_cannot_exceed_release_limit() -> None:
         RuntimeSettings(api_key="control-secret", task_capacity=11)
 
 
-def test_production_dispatch_refuses_activation_until_task_057() -> None:
-    with pytest.raises(ValidationError, match="task 057"):
-        RuntimeSettings(api_key="control-secret", task_dispatch_enabled=True)
+def test_production_dispatch_can_be_enabled() -> None:
+    settings = RuntimeSettings(api_key="control-secret", task_dispatch_enabled=True)
+    assert settings.task_dispatch_enabled is True
 
 
-def test_load_settings_rejects_dispatch_enablement(
+def test_load_settings_accepts_dispatch_enablement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("GG_RUNTIME_API_KEY", "control-secret")
     monkeypatch.setenv("GG_TASK_DISPATCH_ENABLED", "true")
 
-    with pytest.raises(ValidationError, match="task 057"):
-        load_settings()
+    settings = load_settings()
+    assert settings.task_dispatch_enabled is True

@@ -21,15 +21,16 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
+from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.publication import PublicationRecord, PublicationState
-from gg.sdk.task_execution import AgentOutcome, CheckOutcome
+from gg.sdk.task_execution import AgentOutcome, CheckOutcome, TaskResultManifest
 from gg.sdk.tasks import TaskRecord, TaskState
 
 
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSION = 5
 
 
 class SandboxProviderState(StrEnum):
@@ -60,6 +61,33 @@ class ReservationRecord:
     condition: str | None
     reserved_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class SupervisionRecord:
+    """Persisted sandbox execution identity for one background task."""
+
+    task_id: str
+    execution_id: str
+    task_branch: str
+    start_key: str
+    conversation_id: str | None
+    cancel_requested: bool
+    tail_gap_possible: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class TaskResultArchive:
+    """Durable control-plane copy of one task's evidence manifest."""
+
+    task_id: str
+    execution_id: str | None
+    manifest: TaskResultManifest | None
+    evidence_complete: bool
+    evidence_detail: str | None
+    archived_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -308,12 +336,32 @@ class TaskLedger:
                     self._conn.execute("ROLLBACK")
                     raise
 
+            actual = int(
+                self._conn.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()["value"]
+            )
+            if actual < 5 <= self._expected_schema_version:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._create_supervision_schema()
+                    self._conn.execute(
+                        "UPDATE schema_meta SET value = '5' "
+                        "WHERE key = 'schema_version'"
+                    )
+                    self._conn.execute("COMMIT")
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+
             if self._expected_schema_version >= 2:
                 self._create_sandbox_schema()
             if self._expected_schema_version >= 3:
                 self._create_reservation_schema()
             if self._expected_schema_version >= 4:
                 self._create_publication_schema()
+            if self._expected_schema_version >= 5:
+                self._create_supervision_schema()
 
     def _create_sandbox_schema(self) -> None:
         assert self._conn is not None
@@ -401,6 +449,74 @@ class TaskLedger:
                 TaskState.STARTING.value,
                 TaskState.QUEUED.value,
             ),
+        )
+
+    def _create_supervision_schema(self) -> None:
+        assert self._conn is not None
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_supervisions (
+                task_id TEXT PRIMARY KEY,
+                execution_id TEXT NOT NULL,
+                task_branch TEXT NOT NULL,
+                start_key TEXT NOT NULL UNIQUE,
+                conversation_id TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                tail_gap_possible INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_event_copies (
+                task_id TEXT NOT NULL,
+                cursor_seq INTEGER NOT NULL,
+                source_id TEXT NOT NULL,
+                source_seq INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, cursor_seq),
+                UNIQUE (task_id, source_id, source_seq),
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_task_event_copies_task
+            ON task_event_copies(task_id, cursor_seq)
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_message_receipts (
+                task_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, message_id),
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_results (
+                task_id TEXT PRIMARY KEY,
+                execution_id TEXT,
+                manifest_json TEXT,
+                evidence_complete INTEGER NOT NULL DEFAULT 0,
+                evidence_detail TEXT,
+                archived_at TEXT,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+            """
         )
 
     def _create_publication_schema(self) -> None:
@@ -979,6 +1095,462 @@ class TaskLedger:
         assert row is not None
         return _row_to_publication(row)
 
+    def begin_supervision(
+        self,
+        *,
+        task_id: str,
+        execution_id: str,
+        task_branch: str,
+        start_key: str,
+        conversation_id: str | None = None,
+    ) -> tuple[SupervisionRecord, bool]:
+        """Persist execution identity before nonblocking sandbox startup."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._conn.execute(
+                    """
+                    SELECT * FROM task_supervisions
+                    WHERE task_id = ? OR start_key = ?
+                    """,
+                    (task_id, start_key),
+                ).fetchone()
+                if existing is not None:
+                    record = _row_to_supervision(existing)
+                    if record.task_id != task_id or record.start_key != start_key:
+                        raise SupervisionIdentityError(
+                            "start_key already bound to a different task"
+                        )
+                    self._conn.execute("COMMIT")
+                    return record, False
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    INSERT INTO task_supervisions (
+                        task_id, execution_id, task_branch, start_key,
+                        conversation_id, cancel_requested, tail_gap_possible,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        execution_id,
+                        task_branch,
+                        start_key,
+                        conversation_id,
+                        now,
+                        now,
+                    ),
+                )
+                row = self._conn.execute(
+                    "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except SupervisionIdentityError:
+                raise
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return _row_to_supervision(row), True
+
+    def get_supervision(self, task_id: str) -> SupervisionRecord | None:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return _row_to_supervision(row) if row is not None else None
+
+    def update_supervision(
+        self,
+        task_id: str,
+        *,
+        execution_id: str | None = None,
+        conversation_id: str | None = None,
+        cancel_requested: bool | None = None,
+        tail_gap_possible: bool | None = None,
+    ) -> SupervisionRecord:
+        assert self._conn is not None
+        with self._lock:
+            now = _utcnow_iso()
+            current = self._conn.execute(
+                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if current is None:
+                raise KeyError(f"no supervision record for task {task_id}")
+            execution = execution_id or current["execution_id"]
+            conversation = (
+                current["conversation_id"]
+                if conversation_id is None
+                else conversation_id
+            )
+            cancel = (
+                bool(current["cancel_requested"])
+                if cancel_requested is None
+                else cancel_requested
+            )
+            tail = (
+                bool(current["tail_gap_possible"])
+                if tail_gap_possible is None
+                else tail_gap_possible
+            )
+            self._conn.execute(
+                """
+                UPDATE task_supervisions
+                SET execution_id = ?, conversation_id = ?,
+                    cancel_requested = ?, tail_gap_possible = ?, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (execution, conversation, int(cancel), int(tail), now, task_id),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        assert row is not None
+        return _row_to_supervision(row)
+
+    def copy_task_event(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        source_seq: int,
+        event: Event,
+    ) -> int | None:
+        """Insert one copied event; return cursor or None when deduplicated."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._conn.execute(
+                    """
+                    SELECT cursor_seq FROM task_event_copies
+                    WHERE task_id = ? AND source_id = ? AND source_seq = ?
+                    """,
+                    (task_id, source_id, source_seq),
+                ).fetchone()
+                if existing is not None:
+                    self._conn.execute("COMMIT")
+                    return int(existing["cursor_seq"])
+                next_row = self._conn.execute(
+                    """
+                    SELECT COALESCE(MAX(cursor_seq), 0) + 1 AS next_cursor
+                    FROM task_event_copies WHERE task_id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                cursor = int(next_row["next_cursor"])
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    INSERT INTO task_event_copies (
+                        task_id, cursor_seq, source_id, source_seq,
+                        event_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        cursor,
+                        source_id,
+                        source_seq,
+                        event.model_dump_json(),
+                        now,
+                    ),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return cursor
+
+    def list_task_events(
+        self, task_id: str, *, after_cursor: int = 0
+    ) -> list[tuple[int, str, int, Event]]:
+        assert self._conn is not None
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT cursor_seq, source_id, source_seq, event_json
+                FROM task_event_copies
+                WHERE task_id = ? AND cursor_seq > ?
+                ORDER BY cursor_seq ASC
+                """,
+                (task_id, after_cursor),
+            ).fetchall()
+        copied: list[tuple[int, str, int, Event]] = []
+        for row in rows:
+            copied.append(
+                (
+                    int(row["cursor_seq"]),
+                    row["source_id"],
+                    int(row["source_seq"]),
+                    Event.model_validate_json(row["event_json"]),
+                )
+            )
+        return copied
+
+    def save_task_message_receipt(self, task_id: str, receipt: MessageReceipt) -> None:
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO task_message_receipts (
+                        task_id, message_id, content, status, detail,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id, message_id) DO UPDATE SET
+                        content = excluded.content,
+                        status = excluded.status,
+                        detail = excluded.detail,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        task_id,
+                        receipt.id,
+                        receipt.content,
+                        receipt.status.value,
+                        receipt.detail,
+                        receipt.created_at.isoformat(),
+                        receipt.updated_at.isoformat(),
+                    ),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def get_task_message_receipt(
+        self, task_id: str, message_id: str
+    ) -> MessageReceipt | None:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM task_message_receipts
+                WHERE task_id = ? AND message_id = ?
+                """,
+                (task_id, message_id),
+            ).fetchone()
+        return _row_to_message_receipt(row) if row is not None else None
+
+    def list_task_message_receipts(self, task_id: str) -> list[MessageReceipt]:
+        assert self._conn is not None
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM task_message_receipts
+                WHERE task_id = ? ORDER BY created_at, message_id
+                """,
+                (task_id,),
+            ).fetchall()
+        return [_row_to_message_receipt(row) for row in rows]
+
+    def list_accepted_task_messages(self, task_id: str) -> list[MessageReceipt]:
+        receipts = self.list_task_message_receipts(task_id)
+        return [
+            item
+            for item in receipts
+            if item.status
+            in {
+                MessageDeliveryStatus.ACCEPTED,
+                MessageDeliveryStatus.UNKNOWN,
+            }
+        ]
+
+    def archive_task_result(
+        self,
+        *,
+        task_id: str,
+        execution_id: str | None,
+        manifest: TaskResultManifest | None,
+        evidence_complete: bool,
+        evidence_detail: str | None,
+    ) -> TaskResultArchive:
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                manifest_json = None if manifest is None else manifest.model_dump_json()
+                self._conn.execute(
+                    """
+                    INSERT INTO task_results (
+                        task_id, execution_id, manifest_json,
+                        evidence_complete, evidence_detail, archived_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        execution_id = excluded.execution_id,
+                        manifest_json = excluded.manifest_json,
+                        evidence_complete = excluded.evidence_complete,
+                        evidence_detail = excluded.evidence_detail,
+                        archived_at = excluded.archived_at
+                    """,
+                    (
+                        task_id,
+                        execution_id,
+                        manifest_json,
+                        int(evidence_complete),
+                        evidence_detail,
+                        now,
+                    ),
+                )
+                row = self._conn.execute(
+                    "SELECT * FROM task_results WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return _row_to_task_result(row)
+
+    def get_task_result(self, task_id: str) -> TaskResultArchive | None:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM task_results WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return _row_to_task_result(row) if row is not None else None
+
+    def cancel_queued_task(self, task_id: str) -> TaskRecord | None:
+        """Cancel a queued task before sandbox allocation."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+                if row is None:
+                    self._conn.execute("COMMIT")
+                    return None
+                if TaskState(row["state"]) is not TaskState.QUEUED:
+                    self._conn.execute("COMMIT")
+                    return _row_to_record(row)
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    UPDATE tasks
+                    SET state = ?, outcome_detail = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        TaskState.CANCELLED.value,
+                        "cancelled_before_allocation",
+                        now,
+                        task_id,
+                    ),
+                )
+                updated = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert updated is not None
+        return _row_to_record(updated)
+
+    def request_task_cancel(self, task_id: str) -> SupervisionRecord | None:
+        """Mark a running task for cooperative cancellation."""
+
+        supervision = self.get_supervision(task_id)
+        if supervision is None:
+            return None
+        return self.update_supervision(task_id, cancel_requested=True)
+
+    def finish_task(
+        self,
+        task_id: str,
+        *,
+        state: TaskState,
+        outcome_detail: str | None = None,
+        check_status: str | None = None,
+    ) -> TaskRecord:
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    UPDATE tasks
+                    SET state = ?,
+                        outcome_detail = COALESCE(?, outcome_detail),
+                        check_status = COALESCE(?, check_status),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (state.value, outcome_detail, check_status, now, task_id),
+                )
+                row = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        if row is None:
+            raise KeyError(f"no task {task_id}")
+        return _row_to_record(row)
+
+
+def _row_to_supervision(row: sqlite3.Row) -> SupervisionRecord:
+    return SupervisionRecord(
+        task_id=row["task_id"],
+        execution_id=row["execution_id"],
+        task_branch=row["task_branch"],
+        start_key=row["start_key"],
+        conversation_id=row["conversation_id"],
+        cancel_requested=bool(row["cancel_requested"]),
+        tail_gap_possible=bool(row["tail_gap_possible"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_message_receipt(row: sqlite3.Row) -> MessageReceipt:
+    return MessageReceipt(
+        id=row["message_id"],
+        content=row["content"],
+        status=MessageDeliveryStatus(row["status"]),
+        detail=row["detail"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_task_result(row: sqlite3.Row) -> TaskResultArchive:
+    manifest = (
+        None
+        if row["manifest_json"] is None
+        else TaskResultManifest.model_validate_json(row["manifest_json"])
+    )
+    archived_at = (
+        None
+        if row["archived_at"] is None
+        else datetime.fromisoformat(row["archived_at"])
+    )
+    return TaskResultArchive(
+        task_id=row["task_id"],
+        execution_id=row["execution_id"],
+        manifest=manifest,
+        evidence_complete=bool(row["evidence_complete"]),
+        evidence_detail=row["evidence_detail"],
+        archived_at=archived_at,
+    )
+
+
+class SupervisionIdentityError(RuntimeError):
+    """Supervision identity does not match the requested task."""
+
 
 class PublicationIdentityError(RuntimeError):
     """A task's stored publication identity does not match a retry."""
@@ -991,5 +1563,8 @@ __all__ = [
     "ReservationRecord",
     "SandboxCreationRecord",
     "SandboxProviderState",
+    "SupervisionIdentityError",
+    "SupervisionRecord",
     "TaskLedger",
+    "TaskResultArchive",
 ]

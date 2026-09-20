@@ -63,6 +63,12 @@ from gg.sdk.task_execution import (
     TaskExecutionRecord,
     TaskResultManifest,
 )
+from gg.sdk.task_supervision import (
+    RetryTaskRequest,
+    TaskEventCopy,
+    TaskMessageRequest,
+    TaskResultRecord,
+)
 from gg.sdk.tasks import CreateTaskRequest, TaskRecord, TaskState
 from gg.sdk.tools import (
     Observation,
@@ -129,9 +135,13 @@ __all__ = [
     "StartTaskExecutionRequest",
     "TaskExecutionPhase",
     "TaskExecutionRecord",
+    "TaskEventCopy",
+    "TaskMessageRequest",
     "TaskRecord",
     "TaskResultManifest",
+    "TaskResultRecord",
     "TaskState",
+    "RetryTaskRequest",
     "load_repository_profiles",
     "Observation",
     "Tool",

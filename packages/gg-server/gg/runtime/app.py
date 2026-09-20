@@ -15,11 +15,14 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
+from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
-from gg.runtime.task_routes import router as task_router
+from gg.runtime.task_routes import event_socket_router, router as task_router
 from gg.runtime.task_service import TaskService
+from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.docker_workspace import DockerWorkspace
 
 
@@ -209,6 +212,7 @@ def create_app(
     task_ledger: TaskLedger | None = None,
     modal_lifecycle: ModalSandboxLifecycle | None = None,
     task_scheduler: TaskScheduler | None = None,
+    task_supervision: TaskSupervisionManager | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app with an injectable Docker boundary."""
     service = RuntimeService(
@@ -222,6 +226,24 @@ def create_app(
     lifecycle = modal_lifecycle or lifecycle_from_settings(
         ledger=ledger, settings=settings
     )
+    publisher = None
+    if settings.github_clone_token:
+        publisher = DraftPublisher(
+            ledger=ledger,
+            github=HttpGitHubGateway(token=settings.github_clone_token),
+            bot=BotIdentity(
+                name="gg-bot",
+                email="gg-bot@users.noreply.github.com",
+                login="gg-bot",
+            ),
+            github_token=settings.github_clone_token,
+        )
+    supervision = task_supervision or TaskSupervisionManager(
+        ledger=ledger,
+        lifecycle=lifecycle,
+        settings=settings,
+        publisher=publisher,
+    )
     scheduler = task_scheduler or TaskScheduler(
         ledger=ledger,
         lifecycle=lifecycle,
@@ -231,10 +253,9 @@ def create_app(
             db_path=settings.task_db_path,
             deployment=settings.modal_deployment,
         ),
-        # RuntimeSettings deliberately rejects True until task 057 removes
-        # the gate after the complete supervisor/finalizer is wired.
         admission_enabled=settings.task_dispatch_enabled,
         poll_seconds=settings.dispatch_poll_seconds,
+        supervision=supervision,
     )
 
     # The durable scheduler detaches Modal sandboxes on shutdown. The legacy
@@ -243,12 +264,14 @@ def create_app(
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         scheduler_started = False
         try:
+            await supervision.startup()
             await scheduler.start()
             scheduler_started = True
             yield
         finally:
             if scheduler_started:
                 await scheduler.stop()
+            await supervision.shutdown()
             service.close()
             ledger.close()
 
@@ -258,8 +281,9 @@ def create_app(
     app.state.task_ledger = ledger
     app.state.task_service = task_service
     app.state.task_scheduler = scheduler
-    # The durable task API is protected by the same control-plane key.
+    app.state.task_supervision = supervision
     app.include_router(task_router, dependencies=[Depends(_check_api_key)])
+    app.include_router(event_socket_router, dependencies=[Depends(_check_api_key)])
 
     @app.post(
         "/start",

@@ -66,10 +66,11 @@ termination states against the configured capacity. `GG_TASK_CAPACITY` defaults
 to 10 and may only be lowered. `GET /tasks/dispatch/status` reports pending work
 and provider conditions to authenticated operators.
 
-Production admission is deliberately unavailable until task 057 connects the
-task supervisor, final result archival, and automatic cleanup. Setting
-`GG_TASK_DISPATCH_ENABLED=true` therefore fails configuration instead of
-provisioning incomplete production work.
+Production admission provisions sandboxes, starts sandbox task execution,
+archives evidence to SQLite, runs optional draft-PR finalization, and
+terminates sandboxes after confirmed cleanup. Enable it with
+`GG_TASK_DISPATCH_ENABLED=true` once repository profiles and credentials are
+configured.
 
 To exercise only reservation, provisioning, detach/reconnect, and confirmed
 termination against Modal, use the standalone demo after publishing the image:

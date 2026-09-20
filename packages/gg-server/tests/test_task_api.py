@@ -86,7 +86,7 @@ async def test_dispatch_status_keeps_queued_work_visibly_pending() -> None:
     assert response.json()["enabled"] is False
     assert response.json()["reconciled"] is True
     assert response.json()["pending"] == 1
-    assert "task 057" in response.json()["disabled_reason"]
+    assert response.json()["disabled_reason"] == "dispatch disabled"
 
 
 @pytest.mark.anyio
