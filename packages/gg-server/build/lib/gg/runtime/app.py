@@ -14,6 +14,9 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.ledger import TaskLedger
+from gg.runtime.task_routes import router as task_router
+from gg.runtime.task_service import TaskService
 from gg.sdk.docker_workspace import DockerWorkspace
 
 
@@ -200,6 +203,7 @@ def create_app(
     settings: RuntimeSettings,
     *,
     launcher: SandboxLauncher | None = None,
+    task_ledger: TaskLedger | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app with an injectable Docker boundary."""
     service = RuntimeService(
@@ -207,17 +211,27 @@ def create_app(
         control_api_key=settings.api_key,
     )
 
-    # Stop all sandboxes when uvicorn exits, even on crash or Ctrl+C.
+    ledger = task_ledger or TaskLedger(db_path=settings.task_db_path)
+    ledger.open()
+    task_service = TaskService(ledger=ledger, settings=settings)
+
+    # Stop all sandboxes and close the ledger when uvicorn exits, even on
+    # crash or Ctrl+C.
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
             service.close()
+            ledger.close()
 
     app = FastAPI(title="gg-runtime", lifespan=lifespan)
     app.state.settings = settings
     app.state.runtime_service = service
+    app.state.task_ledger = ledger
+    app.state.task_service = task_service
+    # The durable task API is protected by the same control-plane key.
+    app.include_router(task_router, dependencies=[Depends(_check_api_key)])
 
     @app.post(
         "/start",

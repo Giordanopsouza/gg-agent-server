@@ -33,9 +33,7 @@ class FakeLauncher:
         self.session_api_keys: list[str] = []
 
     def start(self, session_api_key: str) -> FakeSandbox:
-        sandbox = FakeSandbox(
-            url=f"http://127.0.0.1:{49151 + len(self.sandboxes) + 1}"
-        )
+        sandbox = FakeSandbox(url=f"http://127.0.0.1:{49151 + len(self.sandboxes) + 1}")
         self.sandboxes.append(sandbox)
         self.session_api_keys.append(session_api_key)
         return sandbox
@@ -48,7 +46,11 @@ class FailingLauncher:
 
 def _app(launcher: FakeLauncher):
     return create_app(
-        RuntimeSettings(api_key="control-secret", image="test-image:dev"),
+        RuntimeSettings(
+            api_key="control-secret",
+            image="test-image:dev",
+            task_db_path=":memory:",
+        ),
         launcher=launcher,
     )
 
@@ -88,12 +90,8 @@ async def test_get_checks_health_and_stop_marks_session_stopped() -> None:
             session_id = started["id"]
 
             running = await client.get(f"/sessions/{session_id}", headers=_AUTH)
-            stopped = await client.post(
-                "/stop", headers=_AUTH, json={"id": session_id}
-            )
-            after_stop = await client.get(
-                f"/sessions/{session_id}", headers=_AUTH
-            )
+            stopped = await client.post("/stop", headers=_AUTH, json={"id": session_id})
+            after_stop = await client.get(f"/sessions/{session_id}", headers=_AUTH)
 
     assert running.status_code == 200
     assert running.json()["status"] == "running"
@@ -117,9 +115,7 @@ async def test_failed_health_check_transitions_session_to_stopped() -> None:
         async with app.router.lifespan_context(app):
             started = (await client.post("/start", headers=_AUTH)).json()
             launcher.sandboxes[0].healthy = False
-            response = await client.get(
-                f"/sessions/{started['id']}", headers=_AUTH
-            )
+            response = await client.get(f"/sessions/{started['id']}", headers=_AUTH)
 
     assert response.status_code == 200
     assert response.json()["status"] == "stopped"
@@ -163,7 +159,7 @@ async def test_unknown_session_returns_404() -> None:
 @pytest.mark.anyio
 async def test_start_reports_launcher_failure_as_service_unavailable() -> None:
     app = create_app(
-        RuntimeSettings(api_key="control-secret"),
+        RuntimeSettings(api_key="control-secret", task_db_path=":memory:"),
         launcher=FailingLauncher(),
     )
     transport = ASGITransport(app=app)

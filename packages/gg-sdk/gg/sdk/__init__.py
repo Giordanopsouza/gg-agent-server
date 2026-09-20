@@ -43,6 +43,7 @@ from gg.sdk.pi_agent import PiAgentSettings, PiRpcAgent
 from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscription
 from gg.sdk.remote_workspace import RemoteWorkspace
 from gg.sdk.runtime_workspace import RuntimeWorkspace
+from gg.sdk.tasks import CreateTaskRequest, TaskRecord, TaskState
 from gg.sdk.tools import (
     Observation,
     Tool,
@@ -88,6 +89,9 @@ __all__ = [
     "RuntimeWorkspace",
     "SendMessageRequest",
     "StartConversationRequest",
+    "CreateTaskRequest",
+    "TaskRecord",
+    "TaskState",
     "Observation",
     "Tool",
     "ToolNotFoundError",
