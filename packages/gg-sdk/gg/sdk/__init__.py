@@ -52,6 +52,16 @@ from gg.sdk.pi_agent import PiAgentSettings, PiRpcAgent
 from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscription
 from gg.sdk.remote_workspace import RemoteWorkspace
 from gg.sdk.runtime_workspace import RuntimeWorkspace
+from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
+from gg.sdk.task_execution import (
+    AgentOutcome,
+    CheckOutcome,
+    CommandCapture,
+    StartTaskExecutionRequest,
+    TaskExecutionPhase,
+    TaskExecutionRecord,
+    TaskResultManifest,
+)
 from gg.sdk.tasks import CreateTaskRequest, TaskRecord, TaskState
 from gg.sdk.tools import (
     Observation,
@@ -107,9 +117,18 @@ __all__ = [
     "MessageIdConflictError",
     "MessageReceipt",
     "MessageReceiptStore",
+    "AgentOutcome",
+    "CheckOutcome",
+    "CommandCapture",
     "CreateTaskRequest",
+    "RepositoryProfile",
+    "StartTaskExecutionRequest",
+    "TaskExecutionPhase",
+    "TaskExecutionRecord",
     "TaskRecord",
+    "TaskResultManifest",
     "TaskState",
+    "load_repository_profiles",
     "Observation",
     "Tool",
     "ToolNotFoundError",

@@ -83,3 +83,17 @@ The demo uses a private temporary ledger by default, accepts no HTTP coding
 requests, and fails if its final reconciliation cannot confirm cleanup of every
 demo-owned sandbox. Set `GG_LIFECYCLE_DEMO_DB_PATH` to retain its ledger for
 diagnosis.
+
+## Repository task demo
+
+After publishing the image and configuring `GG_REPOSITORY_PROFILES_PATH`,
+`GG_GITHUB_CLONE_TOKEN`, and `OPENROUTER_API_KEY`, run:
+
+```console
+GG_RUNTIME_API_KEY=demo-only \
+  uv run --no-editable python -m gg.runtime.modal_repository_task_demo
+```
+
+The demo provisions one sandbox, starts a nonblocking repository execution,
+polls for completion, and prints the local result manifest (check output and
+agent outcome). Production dispatch remains disabled until task 057.

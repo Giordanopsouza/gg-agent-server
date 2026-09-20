@@ -6,6 +6,7 @@ from fastapi.security import APIKeyHeader
 
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
+from gg.server.task_supervisor.service import TaskSupervisorService
 
 
 _SESSION_API_KEY_HEADER = APIKeyHeader(name="X-Session-API-Key", auto_error=False)
@@ -33,5 +34,15 @@ def get_conversation_service(request: Request) -> ConversationService:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Conversation service is not available",
+        )
+    return service
+
+
+def get_task_supervisor_service(request: Request) -> TaskSupervisorService:
+    service = getattr(request.app.state, "task_supervisor_service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Task supervisor is not available",
         )
     return service
