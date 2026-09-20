@@ -13,6 +13,7 @@ from gg.sdk import (
     EventKind,
     LocalConversation,
     LocalWorkspace,
+    MessageDeliveryStatus,
     PiAgentConfig,
     RemoteConversation,
     RemoteWorkspace,
@@ -147,7 +148,8 @@ def test_remote_conversation_forwards_pi_agent_configuration() -> None:
         assert request.read().decode() == (
             '{"working_dir":"/workspace/project","agent":'
             '{"kind":"pi","provider":"openrouter","model":"test/model",'
-            '"timeout_seconds":17.0}}'
+            '"timeout_seconds":17.0,"command_ack_timeout_seconds":5.0,'
+            '"cancel_grace_seconds":5.0}}'
         )
         return httpx.Response(201, json=_record("pi-id"))
 
@@ -159,6 +161,47 @@ def test_remote_conversation_forwards_pi_agent_configuration() -> None:
         conversation = Conversation(workspace=workspace, agent=agent, client=client)
 
     assert conversation.id == "pi-id"
+
+
+def test_remote_conversation_controls_active_run() -> None:
+    conversation_id = "controlled"
+    receipt = {
+        "id": "message-1",
+        "content": "steer",
+        "status": "delivered_to_pi",
+        "detail": None,
+        "created_at": "2026-09-20T12:00:00Z",
+        "updated_at": "2026-09-20T12:00:01Z",
+    }
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/conversations":
+            return httpx.Response(201, json=_record(conversation_id))
+        if request.url.path.endswith("/messages"):
+            assert request.read().decode() == ('{"id":"message-1","content":"steer"}')
+            return httpx.Response(200, json=receipt)
+        if request.url.path.endswith("/messages/message-1"):
+            return httpx.Response(200, json=receipt)
+        if request.url.path.endswith("/cancel"):
+            return httpx.Response(
+                200,
+                json=_record(conversation_id, status="cancelled"),
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    workspace = RemoteWorkspace(host="http://agent.example")
+    with httpx.Client(
+        base_url=workspace.host,
+        transport=httpx.MockTransport(handle),
+    ) as client:
+        conversation = RemoteConversation(workspace=workspace, client=client)
+        delivered = conversation.steer("message-1", "steer")
+        loaded = conversation.get_message_receipt("message-1")
+        conversation.cancel()
+
+    assert delivered == loaded
+    assert delivered.status == MessageDeliveryStatus.DELIVERED
+    assert conversation.status == ConversationStatus.CANCELLED
 
 
 def test_subscription_uses_websocket_url_and_authenticates(

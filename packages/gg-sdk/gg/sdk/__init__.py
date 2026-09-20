@@ -5,6 +5,7 @@ from gg.sdk.agent_backend import (
     AgentConfig,
     EventEmitter,
     PiAgentConfig,
+    RunningAgentBackend,
     create_agent_backend,
 )
 from gg.sdk.conversation import Conversation
@@ -14,18 +15,25 @@ from gg.sdk.domain import (
     ConversationStatus,
     Event,
     EventKind,
+    MessageDeliveryStatus,
+    MessageReceipt,
     SendMessageRequest,
+    SocketReceiptFrame,
     StartConversationRequest,
+    SteerMessageRequest,
 )
 from gg.sdk.event_log import (
     BaseState,
     EventLog,
+    MessageReceiptStore,
     load_base_state,
     load_meta,
     save_base_state,
     save_meta,
 )
 from gg.sdk.exceptions import (
+    AgentCancelledError,
+    AgentControlError,
     AgentError,
     AgentProcessError,
     AgentPromptError,
@@ -36,6 +44,7 @@ from gg.sdk.exceptions import (
     ConversationError,
     ConversationNotFoundError,
     InvalidConversationStateError,
+    MessageIdConflictError,
 )
 from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import CommandResult, LocalWorkspace
@@ -56,7 +65,9 @@ from gg.sdk.tools import (
 
 __all__ = [
     "AgentBackend",
+    "AgentCancelledError",
     "AgentConfig",
+    "AgentControlError",
     "AgentError",
     "AgentProcessError",
     "AgentPromptError",
@@ -83,12 +94,19 @@ __all__ = [
     "PiAgentSettings",
     "PiAgentConfig",
     "PiRpcAgent",
+    "RunningAgentBackend",
     "RemoteConversation",
     "RemoteEventSubscription",
     "RemoteWorkspace",
     "RuntimeWorkspace",
     "SendMessageRequest",
+    "SocketReceiptFrame",
     "StartConversationRequest",
+    "SteerMessageRequest",
+    "MessageDeliveryStatus",
+    "MessageIdConflictError",
+    "MessageReceipt",
+    "MessageReceiptStore",
     "CreateTaskRequest",
     "TaskRecord",
     "TaskState",

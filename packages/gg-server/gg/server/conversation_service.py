@@ -14,6 +14,7 @@ from gg.sdk import (
     Event,
     LocalConversation,
     LocalWorkspace,
+    MessageReceipt,
     StartConversationRequest,
     load_meta,
 )
@@ -106,6 +107,33 @@ class ConversationService:
     def list_events(self, conversation_id: str) -> list[Event]:
         """Return persisted events in seq order."""
         return self.get(conversation_id).list_events()
+
+    async def steer(
+        self,
+        conversation_id: str,
+        message_id: str,
+        content: str,
+    ) -> MessageReceipt:
+        """Persist and forward an idempotent message to the active agent."""
+        return await asyncio.to_thread(
+            self.get(conversation_id).steer,
+            message_id,
+            content,
+        )
+
+    def get_message_receipt(
+        self, conversation_id: str, message_id: str
+    ) -> MessageReceipt | None:
+        return self.get(conversation_id).get_message_receipt(message_id)
+
+    async def cancel(self, conversation_id: str) -> ConversationRecord:
+        """Cancel a live run and wait until its process and state are settled."""
+        conversation = self.get(conversation_id)
+        await asyncio.to_thread(conversation.cancel)
+        task = self._run_tasks.get(conversation_id)
+        if task is not None:
+            await task
+        return load_meta(conversation.conversation_dir)
 
     def event_stream(self, conversation_id: str) -> PubSub[Event]:
         """Return the live event stream for an existing conversation."""

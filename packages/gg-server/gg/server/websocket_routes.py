@@ -8,7 +8,16 @@ from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 
-from gg.sdk import ConversationNotFoundError, Event, SendMessageRequest
+from gg.sdk import (
+    AgentControlError,
+    ConversationNotFoundError,
+    Event,
+    InvalidConversationStateError,
+    MessageIdConflictError,
+    SendMessageRequest,
+    SocketReceiptFrame,
+    SteerMessageRequest,
+)
 from gg.server.conversation_service import ConversationService
 from gg.server.pubsub import SubscriberLimitExceededError
 
@@ -143,13 +152,55 @@ async def _serve_connection(
                 await websocket.send_json(event.model_dump(mode="json"))
                 last_sent = event.seq
         if incoming in done:
-            await _handle_message(service, conversation_id, incoming.result())
+            await _handle_message(
+                websocket,
+                service,
+                conversation_id,
+                incoming.result(),
+            )
 
 
 async def _handle_message(
-    service: ConversationService, conversation_id: str, payload: Any
+    websocket: WebSocket,
+    service: ConversationService,
+    conversation_id: str,
+    payload: Any,
 ) -> None:
-    """Validate a chat frame and deliberately run the agent after it is stored."""
+    """Handle legacy prompts plus idempotent steer and cancel controls."""
+    if isinstance(payload, dict) and payload.get("type") == "steer":
+        request = SteerMessageRequest.model_validate(
+            {key: value for key, value in payload.items() if key != "type"}
+        )
+        try:
+            receipt = await service.steer(
+                conversation_id,
+                request.id,
+                request.content,
+            )
+        except (
+            AgentControlError,
+            InvalidConversationStateError,
+            MessageIdConflictError,
+        ) as exc:
+            await websocket.send_json(
+                {"type": "control_error", "operation": "steer", "detail": str(exc)}
+            )
+            return
+        frame = SocketReceiptFrame(receipt=receipt)
+        await websocket.send_json(frame.model_dump(mode="json"))
+        return
+    if isinstance(payload, dict) and payload.get("type") == "cancel":
+        try:
+            record = await service.cancel(conversation_id)
+        except (AgentControlError, InvalidConversationStateError) as exc:
+            await websocket.send_json(
+                {"type": "control_error", "operation": "cancel", "detail": str(exc)}
+            )
+            return
+        await websocket.send_json(
+            {"type": "cancelled", "conversation": record.model_dump(mode="json")}
+        )
+        return
     request = SendMessageRequest.model_validate(payload)
     await service.send_message_and_publish(conversation_id, request.content)
     task = asyncio.create_task(service.run(conversation_id))

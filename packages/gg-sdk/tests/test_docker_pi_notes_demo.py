@@ -172,6 +172,8 @@ def test_docker_pi_demo_forwards_pi_agent_and_cleans_up(
             "provider": "openrouter",
             "model": "google/gemini-3.7-flash",
             "timeout_seconds": 600.0,
+            "command_ack_timeout_seconds": 5.0,
+            "cancel_grace_seconds": 5.0,
         },
     }
     assert "/workspace/project/PI_NOTES.md" in message_payload["content"]
@@ -249,6 +251,7 @@ def test_docker_pi_demo_cli_prints_file_and_event_summary_without_secret(
         workspace_factory=FakeDockerWorkspace,
         container_file_reader=read_container_file,
     )
+
     def fake_run_demo(*, image: str) -> docker_pi_notes.DockerPiDemoResult:
         assert image == "gg-agent-server:cli"
         return result
@@ -287,7 +290,7 @@ def test_docker_pi_demo_source_has_no_local_conversation_or_host_mount() -> None
     assert "gg.sdk.local_conversation" not in imported
     assert "LocalConversation" not in imported
     assert "volumes=" not in source
-    assert 'secret_env_names=[OPENROUTER_SECRET_NAME]' in source
+    assert "secret_env_names=[OPENROUTER_SECRET_NAME]" in source
     assert SECRET not in source
 
 

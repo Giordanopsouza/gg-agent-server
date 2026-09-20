@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
 
 from gg.sdk import (
+    AgentCancelledError,
     ConversationAlreadyRunningError,
     ConversationStatus,
     Event,
@@ -13,6 +15,10 @@ from gg.sdk import (
     InvalidConversationStateError,
     LocalConversation,
     LocalWorkspace,
+    MessageDeliveryStatus,
+    MessageIdConflictError,
+    MessageReceipt,
+    MessageReceiptStore,
     load_base_state,
 )
 from gg.sdk.agent_backend import EventEmitter
@@ -34,6 +40,64 @@ class RecordingBackend:
         action = emit(EventKind.ACTION, {"tool": "record", "args": {}})
         assert isinstance(action, Event)
         emit(EventKind.OBSERVATION, {"recorded": True})
+
+
+class ControllableBackend:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.listener = None
+        self.messages: list[str] = []
+        self.cancelled = False
+
+    def set_settling_listener(self, listener):  # noqa: ANN001
+        self.listener = listener
+
+    def run(
+        self,
+        prompt: str,
+        workspace: LocalWorkspace,
+        emit: EventEmitter,
+    ) -> None:
+        self.started.set()
+        assert self.release.wait(timeout=3)
+        if self.listener is not None:
+            self.listener()
+        if self.cancelled:
+            raise AgentCancelledError("cancelled")
+
+    def steer(self, message: str) -> tuple[bool, str | None]:
+        self.messages.append(message)
+        return True, None
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        self.release.set()
+
+
+class BlockingSteerBackend(ControllableBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.steer_started = threading.Event()
+        self.acknowledge = threading.Event()
+
+    def steer(self, message: str) -> tuple[bool, str | None]:
+        self.steer_started.set()
+        assert self.acknowledge.wait(timeout=2)
+        return super().steer(message)
+
+
+class InspectingBackend(ControllableBackend):
+    def __init__(self, conversation_dir: Path) -> None:
+        super().__init__()
+        self.store = MessageReceiptStore(conversation_dir)
+        self.observed_status: MessageDeliveryStatus | None = None
+
+    def steer(self, message: str) -> tuple[bool, str | None]:
+        receipt = self.store.load("client-1")
+        assert receipt is not None
+        self.observed_status = receipt.status
+        return False, "Pi rejected steer"
 
 
 # Sending a message writes one MESSAGE event without starting the agent.
@@ -207,3 +271,112 @@ def test_event_log_survives_restart(tmp_path: Path) -> None:
     assert EventKind.ACTION in kinds
     assert EventKind.OBSERVATION in kinds
     assert EventKind.STATUS in kinds
+
+
+def test_running_message_is_idempotent_and_persists_delivery_receipt(
+    tmp_path: Path,
+) -> None:
+    backend = ControllableBackend()
+    conversation = LocalConversation(
+        conversation_dir=tmp_path / "conv-1",
+        workspace=LocalWorkspace(working_dir=tmp_path / "work"),
+        agent_backend=backend,
+    )
+    conversation.send_message("start")
+    run_thread = threading.Thread(target=conversation.run)
+    run_thread.start()
+    assert backend.started.wait(timeout=1)
+
+    first = conversation.steer("client-1", "change direction")
+    duplicate = conversation.steer("client-1", "change direction")
+    with pytest.raises(MessageIdConflictError):
+        conversation.steer("client-1", "different content")
+
+    assert first.status == MessageDeliveryStatus.DELIVERED
+    assert duplicate == first
+    assert backend.messages == ["change direction"]
+    assert conversation.get_message_receipt("client-1") == first
+
+    backend.release.set()
+    run_thread.join(timeout=2)
+    assert not run_thread.is_alive()
+    with pytest.raises(InvalidConversationStateError):
+        conversation.steer("client-2", "too late")
+
+    reopened = LocalConversation.open(conversation_dir=tmp_path / "conv-1")
+    assert reopened.get_message_receipt("client-1") == first
+
+
+def test_cancel_closes_acceptance_and_settles_cancelled(tmp_path: Path) -> None:
+    backend = ControllableBackend()
+    conversation = LocalConversation(
+        conversation_dir=tmp_path / "conv-1",
+        workspace=LocalWorkspace(working_dir=tmp_path / "work"),
+        agent_backend=backend,
+    )
+    conversation.send_message("start")
+    run_thread = threading.Thread(target=conversation.run)
+    run_thread.start()
+    assert backend.started.wait(timeout=1)
+
+    conversation.cancel()
+    run_thread.join(timeout=2)
+
+    assert conversation.status == ConversationStatus.CANCELLED
+    assert not run_thread.is_alive()
+    with pytest.raises(InvalidConversationStateError):
+        conversation.steer("after-cancel", "too late")
+
+
+def test_acceptance_is_persisted_before_pi_and_explicit_rejection_is_failed(
+    tmp_path: Path,
+) -> None:
+    conversation_dir = tmp_path / "conv-1"
+    backend = InspectingBackend(conversation_dir)
+    conversation = LocalConversation(
+        conversation_dir=conversation_dir,
+        workspace=LocalWorkspace(working_dir=tmp_path / "work"),
+        agent_backend=backend,
+    )
+    conversation.send_message("start")
+    run_thread = threading.Thread(target=conversation.run)
+    run_thread.start()
+    assert backend.started.wait(timeout=1)
+
+    receipt = conversation.steer("client-1", "rejected")
+    backend.release.set()
+    run_thread.join(timeout=2)
+
+    assert backend.observed_status == MessageDeliveryStatus.ACCEPTED
+    assert receipt.status == MessageDeliveryStatus.FAILED
+
+
+def test_message_winning_settlement_race_is_accepted_before_finalization(
+    tmp_path: Path,
+) -> None:
+    backend = BlockingSteerBackend()
+    conversation = LocalConversation(
+        conversation_dir=tmp_path / "conv-1",
+        workspace=LocalWorkspace(working_dir=tmp_path / "work"),
+        agent_backend=backend,
+    )
+    conversation.send_message("start")
+    run_thread = threading.Thread(target=conversation.run)
+    run_thread.start()
+    assert backend.started.wait(timeout=1)
+
+    result: list[MessageReceipt] = []
+    steer_thread = threading.Thread(
+        target=lambda: result.append(conversation.steer("race-1", "accepted"))
+    )
+    steer_thread.start()
+    assert backend.steer_started.wait(timeout=1)
+    backend.release.set()
+    backend.acknowledge.set()
+    steer_thread.join(timeout=2)
+    run_thread.join(timeout=2)
+
+    assert result[0].status == MessageDeliveryStatus.DELIVERED
+    assert conversation.status == ConversationStatus.FINISHED
+    with pytest.raises(InvalidConversationStateError):
+        conversation.steer("race-2", "rejected")

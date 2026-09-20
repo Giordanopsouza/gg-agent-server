@@ -8,7 +8,12 @@ import httpx
 from websockets.sync.client import ClientConnection, connect
 
 from gg.sdk.agent_backend import AgentConfig
-from gg.sdk.domain import ConversationRecord, ConversationStatus, Event
+from gg.sdk.domain import (
+    ConversationRecord,
+    ConversationStatus,
+    Event,
+    MessageReceipt,
+)
 from gg.sdk.remote_workspace import RemoteWorkspace
 
 
@@ -130,6 +135,34 @@ class RemoteConversation:
         """Run the remote agent loop and wait for it to finish."""
         response = self._client.post(
             f"/api/conversations/{self.id}/run",
+            headers=self.workspace.headers,
+        )
+        response.raise_for_status()
+        self._record = ConversationRecord.model_validate(response.json())
+
+    def steer(self, message_id: str, text: str) -> MessageReceipt:
+        """Idempotently steer the active agent and return delivery knowledge."""
+        response = self._client.post(
+            f"/api/conversations/{self.id}/messages",
+            json={"id": message_id, "content": text},
+            headers=self.workspace.headers,
+        )
+        response.raise_for_status()
+        return MessageReceipt.model_validate(response.json())
+
+    def get_message_receipt(self, message_id: str) -> MessageReceipt:
+        """Read a durable running-message receipt without replaying it."""
+        response = self._client.get(
+            f"/api/conversations/{self.id}/messages/{message_id}",
+            headers=self.workspace.headers,
+        )
+        response.raise_for_status()
+        return MessageReceipt.model_validate(response.json())
+
+    def cancel(self) -> None:
+        """Cancel the active run and wait for confirmed process termination."""
+        response = self._client.post(
+            f"/api/conversations/{self.id}/cancel",
             headers=self.workspace.headers,
         )
         response.raise_for_status()
