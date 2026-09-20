@@ -164,7 +164,7 @@ def test_remote_conversation_forwards_pi_agent_configuration() -> None:
 def test_subscription_uses_websocket_url_and_authenticates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    event = _event(1, "message", {"text": "from socket"})
+    event = _event(5, "message", {"text": "from socket"})
 
     class FakeConnection:
         def __init__(self) -> None:
@@ -199,14 +199,13 @@ def test_subscription_uses_websocket_url_and_authenticates(
         _record("socket-conversation")
     )
 
-    with conversation.subscribe() as subscription:
+    with conversation.subscribe(after_seq=4) as subscription:
         received = subscription.receive(timeout=2.0)
 
     assert connected_urls == [
-        "wss://agent.example/base/sockets/events/socket-conversation"
+        "wss://agent.example/base/sockets/events/socket-conversation?after_seq=4"
     ]
-    assert connection.sent == [
-        '{"type": "auth", "session_api_key": "socket-secret"}'
-    ]
+    assert connection.sent == ['{"type": "auth", "session_api_key": "socket-secret"}']
     assert connection.closed
     assert received.payload == {"text": "from socket"}
+    assert subscription.cursor == 5

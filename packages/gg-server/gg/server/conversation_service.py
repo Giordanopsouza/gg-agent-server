@@ -1,4 +1,5 @@
 """Process-wide manager for live and on-disk conversations."""
+
 from __future__ import annotations
 
 import asyncio
@@ -126,32 +127,32 @@ class ConversationService:
         ``ConversationAlreadyRunningError``.
         """
         conversation = self.get(conversation_id)
+        loop = asyncio.get_running_loop()
+        stream = self.event_stream(conversation_id)
+
+        def publish_persisted(event: Event) -> None:
+            loop.call_soon_threadsafe(self._publish_live, stream, event)
+
         async with self._run_lock:
             existing = self._run_tasks.get(conversation_id)
             if existing is not None and not existing.done():
                 raise ConversationAlreadyRunningError()
+            conversation.set_persisted_event_listener(publish_persisted)
             task = asyncio.create_task(asyncio.to_thread(conversation.run))
             self._run_tasks[conversation_id] = task
-        await task
+        try:
+            await task
+        finally:
+            conversation.set_persisted_event_listener(None)
+            # Let callbacks queued by the worker thread fan out before callers
+            # observe completion.
+            await asyncio.sleep(0)
         return load_meta(conversation.conversation_dir)
 
-    async def run_and_publish(self, conversation_id: str) -> ConversationRecord:
-        """Run the selected backend and fan out the events it appended.
-
-        ``LocalConversation`` deliberately owns only persistence. The server
-        compares the persisted log before and after a run so its transport
-        layer can stream the new events without adding a server dependency to
-        the SDK package.
-        """
-        existing_event_ids = {
-            event.id for event in self.list_events(conversation_id)
-        }
-        try:
-            return await self.run(conversation_id)
-        finally:
-            for event in self.list_events(conversation_id):
-                if event.id not in existing_event_ids:
-                    await self.event_stream(conversation_id).publish(event)
+    @staticmethod
+    def _publish_live(stream: PubSub[Event], event: Event) -> None:
+        """Schedule fan-out without ever blocking the agent worker thread."""
+        asyncio.create_task(stream.publish(event))
 
     def _exists(self, conversation_id: str) -> bool:
         if conversation_id in self._live:

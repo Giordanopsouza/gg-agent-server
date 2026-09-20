@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ _ALLOWED_TRANSITIONS: dict[tuple[ConversationStatus, str], ConversationStatus] =
     (ConversationStatus.RUNNING, "error"): ConversationStatus.ERROR,
 }
 
+PersistedEventListener = Callable[[Event], None]
+
 
 class LocalConversation:
     """In-process conversation that persists events around an agent backend."""
@@ -46,12 +49,14 @@ class LocalConversation:
         conversation_id: str | None = None,
         agent: AgentConfig | None = None,
         agent_backend: AgentBackend | None = None,
+        persisted_event_listener: PersistedEventListener | None = None,
     ) -> None:
         self.conversation_dir = Path(conversation_dir)
         self.workspace = workspace
         self._agent = agent or PiAgentConfig()
         self._agent_backend = agent_backend or create_agent_backend(self._agent)
         self._event_log = EventLog(self.conversation_dir)
+        self._persisted_event_listener = persisted_event_listener
         self._status = ConversationStatus.IDLE
         self.id = conversation_id or str(self.conversation_dir.name)
 
@@ -84,6 +89,7 @@ class LocalConversation:
         obj._agent = state.agent
         obj._agent_backend = agent_backend or create_agent_backend(state.agent)
         obj._event_log = EventLog(dir_path)
+        obj._persisted_event_listener = None
         obj._status = state.status
         obj.id = meta.id
         return obj
@@ -104,6 +110,12 @@ class LocalConversation:
     def list_events(self) -> list[Event]:
         """Return persisted events in seq order."""
         return self._event_log.list()
+
+    def set_persisted_event_listener(
+        self, listener: PersistedEventListener | None
+    ) -> None:
+        """Observe events after their durable append, without transport coupling."""
+        self._persisted_event_listener = listener
 
     # Run the selected backend once, persisting every event it emits.
     def run(self) -> None:
@@ -171,6 +183,13 @@ class LocalConversation:
     def _append_event(self, kind: EventKind, payload: dict[str, Any]) -> Event:
         event = Event(seq=self._next_seq(), kind=kind, payload=payload)
         self._event_log.append(event)
+        if self._persisted_event_listener is not None:
+            try:
+                self._persisted_event_listener(event)
+            except Exception:
+                # Live delivery is best-effort; callers can recover every
+                # notification from the durable log using its sequence.
+                pass
         return event
 
     # Find the most recent message event text for the selected backend to use.

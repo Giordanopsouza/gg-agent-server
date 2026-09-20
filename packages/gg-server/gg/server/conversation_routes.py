@@ -1,4 +1,5 @@
 """REST routes for conversation create, get, list, and run."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -26,9 +27,7 @@ async def start_conversation(
 ) -> ConversationRecord:
     """Create a conversation, or reattach when the same id is posted again."""
     record, is_new = service.start(request)
-    response.status_code = (
-        status.HTTP_201_CREATED if is_new else status.HTTP_200_OK
-    )
+    response.status_code = status.HTTP_201_CREATED if is_new else status.HTTP_200_OK
     return record
 
 
@@ -59,7 +58,7 @@ async def run_conversation(
 ) -> ConversationRecord:
     """Run the selected agent and return when the loop has finished."""
     try:
-        return await service.run_and_publish(conversation_id)
+        return await service.run(conversation_id)
     except ConversationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ConversationAlreadyRunningError as exc:

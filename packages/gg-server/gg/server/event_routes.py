@@ -1,4 +1,5 @@
 """REST routes for sending messages and listing conversation events."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,7 +32,7 @@ async def send_message(
     try:
         event = await service.send_message_and_publish(conversation_id, request.content)
         if request.run:
-            await service.run_and_publish(conversation_id)
+            await service.run(conversation_id)
         return event
     except ConversationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

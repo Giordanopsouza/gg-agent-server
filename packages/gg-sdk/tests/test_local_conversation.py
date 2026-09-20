@@ -88,6 +88,22 @@ def test_run_finishes_and_persists_events(tmp_path: Path) -> None:
     assert state.status == ConversationStatus.FINISHED
 
 
+def test_persisted_listener_observes_each_event_after_append(tmp_path: Path) -> None:
+    observed: list[Event] = []
+    conv_dir = tmp_path / "conv-1"
+    conversation = LocalConversation(
+        conversation_dir=conv_dir,
+        workspace=LocalWorkspace(working_dir=tmp_path / "work"),
+        agent_backend=RecordingBackend(),
+        persisted_event_listener=lambda event: observed.append(event),
+    )
+
+    conversation.send_message("persist before notify")
+    conversation.run()
+
+    assert observed == EventLog(conv_dir).list()
+
+
 def test_run_delegates_prompt_workspace_and_event_emission(tmp_path: Path) -> None:
     workspace = LocalWorkspace(working_dir=tmp_path / "work")
     backend = RecordingBackend()
