@@ -10,7 +10,7 @@ from typing import Literal, Protocol
 from uuid import uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
@@ -199,6 +199,15 @@ def _check_api_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 
+def _check_socket_api_key(websocket: WebSocket) -> None:
+    """Authenticate a task event socket from handshake headers, not Request."""
+
+    settings: RuntimeSettings = websocket.app.state.settings
+    provided = websocket.headers.get("x-api-key") or ""
+    if not secrets.compare_digest(provided, settings.api_key):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+
 # Pull the shared RuntimeService off the FastAPI app for route handlers.
 def _get_service(request: Request) -> RuntimeService:
     return request.app.state.runtime_service
@@ -283,7 +292,9 @@ def create_app(
     app.state.task_scheduler = scheduler
     app.state.task_supervision = supervision
     app.include_router(task_router, dependencies=[Depends(_check_api_key)])
-    app.include_router(event_socket_router, dependencies=[Depends(_check_api_key)])
+    app.include_router(
+        event_socket_router, dependencies=[Depends(_check_socket_api_key)]
+    )
 
     @app.post(
         "/start",

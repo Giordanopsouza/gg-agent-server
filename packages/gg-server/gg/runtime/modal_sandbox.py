@@ -23,6 +23,7 @@ from gg.runtime.ledger import (
     SandboxProviderState,
     TaskLedger,
 )
+from gg.sdk.remote_workspace import SESSION_API_KEY_HEADER
 
 
 AGENT_SERVER_PORT = 8000
@@ -223,7 +224,7 @@ class SandboxConnection:
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._connect_token}",
-            "X-API-Key": self._session_api_key,
+            SESSION_API_KEY_HEADER: self._session_api_key,
         }
 
 

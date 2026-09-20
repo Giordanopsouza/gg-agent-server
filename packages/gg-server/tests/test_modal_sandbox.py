@@ -198,14 +198,14 @@ async def test_connection_is_https_authenticated_and_secrets_are_redacted() -> N
 
     assert websocket_url == "wss://sandbox.example/sockets/events/id"
     assert headers["Authorization"] == "Bearer modal-connect-secret"
-    assert headers["X-API-Key"]
+    assert headers["X-Session-API-Key"]
     assert connection.websocket_auth_frame() == {
         "type": "auth",
-        "session_api_key": headers["X-API-Key"],
+        "session_api_key": headers["X-Session-API-Key"],
     }
     rendered = repr(connection)
     assert "modal-connect-secret" not in rendered
-    assert headers["X-API-Key"] not in rendered
+    assert headers["X-Session-API-Key"] not in rendered
     with pytest.raises(ModalLifecycleError, match="encrypted HTTPS"):
         SandboxConnection("http://unsafe.example", "token", "key")
     ledger.close()
