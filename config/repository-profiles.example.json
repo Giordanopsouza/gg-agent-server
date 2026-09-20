@@ -1,0 +1,8 @@
+[
+  {
+    "repository": "Giordanopsouza/personal-website",
+    "bootstrap_command": "npm ci",
+    "check_command": "npm run build",
+    "default_base_ref": "main"
+  }
+]

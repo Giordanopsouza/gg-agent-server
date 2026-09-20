@@ -54,6 +54,13 @@ from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscripti
 from gg.sdk.remote_workspace import RemoteWorkspace
 from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
 from gg.sdk.runtime_workspace import RuntimeWorkspace
+from gg.sdk.task_client import (
+    SubmitResponse,
+    TaskClient,
+    TaskClientError,
+    TaskEventSubscription,
+    TaskNotFoundError,
+)
 from gg.sdk.task_execution import (
     AgentOutcome,
     CheckOutcome,
@@ -63,6 +70,7 @@ from gg.sdk.task_execution import (
     TaskExecutionRecord,
     TaskResultManifest,
 )
+from gg.sdk.task_settings import TaskClientSettings, load_task_client_settings
 from gg.sdk.task_supervision import (
     RetryTaskRequest,
     TaskEventCopy,
@@ -133,16 +141,23 @@ __all__ = [
     "CreateTaskRequest",
     "RepositoryProfile",
     "StartTaskExecutionRequest",
+    "SubmitResponse",
+    "TaskClient",
+    "TaskClientError",
+    "TaskClientSettings",
     "TaskExecutionPhase",
     "TaskExecutionRecord",
     "TaskEventCopy",
+    "TaskEventSubscription",
     "TaskMessageRequest",
+    "TaskNotFoundError",
     "TaskRecord",
     "TaskResultManifest",
     "TaskResultRecord",
     "TaskState",
     "RetryTaskRequest",
     "load_repository_profiles",
+    "load_task_client_settings",
     "Observation",
     "Tool",
     "ToolNotFoundError",

@@ -4,10 +4,14 @@ version = "0.1.0"
 description = "gg-agent-server SDK — agent loop, workspace, and client types"
 requires-python = ">=3.12"
 dependencies = [
+    "click>=8.0",
     "httpx>=0.28.1",
     "pydantic>=2.0",
     "websockets>=17.0.1",
 ]
+
+[project.scripts]
+gg-task = "gg.sdk.cli.main:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
