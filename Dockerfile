@@ -4,7 +4,7 @@
 # Run:    docker run --rm -p 8000:8000 gg-agent-server:dev
 # Health: curl http://127.0.0.1:8000/health
 
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.12.11
 
 FROM node:22.23.1-bookworm-slim AS pi-runtime
 
@@ -13,7 +13,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
 
 FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /bin/
 
 WORKDIR /app
 
