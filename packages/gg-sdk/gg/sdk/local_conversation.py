@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -7,20 +10,32 @@ from gg.sdk.agent_backend import (
     AgentBackend,
     AgentConfig,
     PiAgentConfig,
+    RunningAgentBackend,
     create_agent_backend,
 )
-from gg.sdk.domain import ConversationRecord, ConversationStatus, Event, EventKind
+from gg.sdk.domain import (
+    ConversationRecord,
+    ConversationStatus,
+    Event,
+    EventKind,
+    MessageDeliveryStatus,
+    MessageReceipt,
+)
 from gg.sdk.event_log import (
     EventLog,
+    MessageReceiptStore,
     load_base_state,
     load_meta,
     save_base_state,
     save_meta,
 )
 from gg.sdk.exceptions import (
+    AgentCancelledError,
+    AgentControlError,
     AgentError,
     ConversationAlreadyRunningError,
     InvalidConversationStateError,
+    MessageIdConflictError,
 )
 from gg.sdk.local_workspace import LocalWorkspace
 
@@ -31,7 +46,10 @@ _ALLOWED_TRANSITIONS: dict[tuple[ConversationStatus, str], ConversationStatus] =
     (ConversationStatus.IDLE, "run"): ConversationStatus.RUNNING,
     (ConversationStatus.RUNNING, "finish"): ConversationStatus.FINISHED,
     (ConversationStatus.RUNNING, "error"): ConversationStatus.ERROR,
+    (ConversationStatus.RUNNING, "cancel"): ConversationStatus.CANCELLED,
 }
+
+PersistedEventListener = Callable[[Event], None]
 
 
 class LocalConversation:
@@ -46,13 +64,20 @@ class LocalConversation:
         conversation_id: str | None = None,
         agent: AgentConfig | None = None,
         agent_backend: AgentBackend | None = None,
+        persisted_event_listener: PersistedEventListener | None = None,
     ) -> None:
         self.conversation_dir = Path(conversation_dir)
         self.workspace = workspace
         self._agent = agent or PiAgentConfig()
         self._agent_backend = agent_backend or create_agent_backend(self._agent)
         self._event_log = EventLog(self.conversation_dir)
+        self._message_receipts = MessageReceiptStore(self.conversation_dir)
+        self._persisted_event_listener = persisted_event_listener
         self._status = ConversationStatus.IDLE
+        self._control_lock = threading.RLock()
+        self._event_lock = threading.Lock()
+        self._accepting_messages = False
+        self._cancelling = False
         self.id = conversation_id or str(self.conversation_dir.name)
 
         save_meta(
@@ -84,7 +109,13 @@ class LocalConversation:
         obj._agent = state.agent
         obj._agent_backend = agent_backend or create_agent_backend(state.agent)
         obj._event_log = EventLog(dir_path)
+        obj._message_receipts = MessageReceiptStore(dir_path)
+        obj._persisted_event_listener = None
         obj._status = state.status
+        obj._control_lock = threading.RLock()
+        obj._event_lock = threading.Lock()
+        obj._accepting_messages = False
+        obj._cancelling = False
         obj.id = meta.id
         return obj
 
@@ -95,22 +126,104 @@ class LocalConversation:
 
     # Record a user message in the event log; status stays idle until run().
     def send_message(self, text: str) -> Event:
-        self._transition("send_message")
-        return self._append_event(
-            EventKind.MESSAGE,
-            {"role": "user", "text": text},
-        )
+        with self._control_lock:
+            self._transition("send_message")
+            return self._append_event(
+                EventKind.MESSAGE,
+                {"role": "user", "text": text},
+            )
+
+    def steer(self, message_id: str, text: str) -> MessageReceipt:
+        """Durably accept and deliver one idempotent running-agent message."""
+        with self._control_lock:
+            existing = self._message_receipts.load(message_id)
+            if existing is not None:
+                if existing.content != text:
+                    raise MessageIdConflictError(message_id)
+                return existing
+            if (
+                self._status != ConversationStatus.RUNNING
+                or not self._accepting_messages
+            ):
+                raise InvalidConversationStateError(
+                    status=self._status,
+                    operation="send a running-agent message",
+                )
+            if not isinstance(self._agent_backend, RunningAgentBackend):
+                raise AgentControlError("agent backend does not support steering")
+
+            receipt = MessageReceipt(
+                id=message_id,
+                content=text,
+                status=MessageDeliveryStatus.ACCEPTED,
+            )
+            # Persist acceptance before forwarding. A crash after this point is
+            # deliberately reported as uncertain, never healed by replay.
+            self._message_receipts.save(receipt)
+            self._append_event(
+                EventKind.MESSAGE,
+                {"role": "user", "text": text, "client_message_id": message_id},
+            )
+            try:
+                delivered, detail = self._agent_backend.steer(text)
+            except (AgentError, AgentControlError) as exc:
+                return self._update_receipt(
+                    receipt,
+                    MessageDeliveryStatus.UNKNOWN,
+                    str(exc),
+                )
+            return self._update_receipt(
+                receipt,
+                (
+                    MessageDeliveryStatus.DELIVERED
+                    if delivered
+                    else MessageDeliveryStatus.FAILED
+                ),
+                detail,
+            )
+
+    def get_message_receipt(self, message_id: str) -> MessageReceipt | None:
+        with self._control_lock:
+            return self._message_receipts.load(message_id)
+
+    def cancel(self) -> None:
+        """Stop acceptance, cooperatively abort, then stop the process tree."""
+        with self._control_lock:
+            if self._status == ConversationStatus.CANCELLED or self._cancelling:
+                return
+            if self._status != ConversationStatus.RUNNING:
+                raise InvalidConversationStateError(
+                    status=self._status,
+                    operation="cancel",
+                )
+            if not isinstance(self._agent_backend, RunningAgentBackend):
+                raise AgentControlError("agent backend does not support cancellation")
+            self._accepting_messages = False
+            self._cancelling = True
+        self._agent_backend.cancel()
 
     def list_events(self) -> list[Event]:
         """Return persisted events in seq order."""
         return self._event_log.list()
 
+    def set_persisted_event_listener(
+        self, listener: PersistedEventListener | None
+    ) -> None:
+        """Observe events after their durable append, without transport coupling."""
+        self._persisted_event_listener = listener
+
     # Run the selected backend once, persisting every event it emits.
     def run(self) -> None:
-        if self._status == ConversationStatus.RUNNING:
-            raise ConversationAlreadyRunningError()
-        self._transition("run")
-        self._apply_status(ConversationStatus.RUNNING)
+        with self._control_lock:
+            if self._status == ConversationStatus.RUNNING:
+                raise ConversationAlreadyRunningError()
+            self._transition("run")
+            self._apply_status(ConversationStatus.RUNNING)
+            self._accepting_messages = isinstance(
+                self._agent_backend, RunningAgentBackend
+            )
+            if isinstance(self._agent_backend, RunningAgentBackend):
+                self._agent_backend.set_settling_listener(self._begin_settling)
 
         user_message = self._latest_user_message()
         try:
@@ -119,14 +232,25 @@ class LocalConversation:
                 self.workspace,
                 self._append_event,
             )
+        except AgentCancelledError:
+            with self._control_lock:
+                self._transition("cancel")
+                self._apply_status(ConversationStatus.CANCELLED)
+            return
         except AgentError as exc:
             self._append_event(EventKind.ERROR, exc.to_event_payload())
-            self._transition("error")
-            self._apply_status(ConversationStatus.ERROR)
+            with self._control_lock:
+                self._transition("error")
+                self._apply_status(ConversationStatus.ERROR)
             raise
+        finally:
+            self._begin_settling()
+            if isinstance(self._agent_backend, RunningAgentBackend):
+                self._agent_backend.set_settling_listener(None)
 
-        self._transition("finish")
-        self._apply_status(ConversationStatus.FINISHED)
+        with self._control_lock:
+            self._transition("finish")
+            self._apply_status(ConversationStatus.FINISHED)
 
     # Reject operations that are not allowed from the current status.
     def _transition(self, operation: str) -> None:
@@ -169,9 +293,38 @@ class LocalConversation:
 
     # Build an event with the next seq and append it to the event log.
     def _append_event(self, kind: EventKind, payload: dict[str, Any]) -> Event:
-        event = Event(seq=self._next_seq(), kind=kind, payload=payload)
-        self._event_log.append(event)
+        with self._event_lock:
+            event = Event(seq=self._next_seq(), kind=kind, payload=payload)
+            self._event_log.append(event)
+        if self._persisted_event_listener is not None:
+            try:
+                self._persisted_event_listener(event)
+            except Exception:
+                # Live delivery is best-effort; callers can recover every
+                # notification from the durable log using its sequence.
+                pass
         return event
+
+    def _begin_settling(self) -> None:
+        """Close message acceptance at the backend's settlement boundary."""
+        with self._control_lock:
+            self._accepting_messages = False
+
+    def _update_receipt(
+        self,
+        receipt: MessageReceipt,
+        status: MessageDeliveryStatus,
+        detail: str | None,
+    ) -> MessageReceipt:
+        updated = receipt.model_copy(
+            update={
+                "status": status,
+                "detail": detail,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self._message_receipts.save(updated)
+        return updated
 
     # Find the most recent message event text for the selected backend to use.
     def _latest_user_message(self) -> str:

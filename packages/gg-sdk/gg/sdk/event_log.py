@@ -5,12 +5,18 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from gg.sdk.agent_backend import AgentConfig, PiAgentConfig
-from gg.sdk.domain import ConversationRecord, ConversationStatus, Event
+from gg.sdk.domain import (
+    ConversationRecord,
+    ConversationStatus,
+    Event,
+    MessageReceipt,
+)
 
 
 EVENTS_DIR = "events"
 META_FILE = "meta.json"
 BASE_STATE_FILE = "base_state.json"
+MESSAGE_RECEIPTS_DIR = "message-receipts"
 
 
 class BaseState(BaseModel):
@@ -86,8 +92,36 @@ class EventLog:
     def list(self) -> list[Event]:
         events: list[Event] = []
         for path in sorted(self.events_dir.glob("event-*.json")):
-            events.append(
-                Event.model_validate_json(path.read_text(encoding="utf-8"))
-            )
+            events.append(Event.model_validate_json(path.read_text(encoding="utf-8")))
         events.sort(key=lambda event: event.seq)
         return events
+
+
+class MessageReceiptStore:
+    """Atomic per-message receipt persistence with path-safe filenames."""
+
+    def __init__(self, conversation_dir: Path | str) -> None:
+        import hashlib
+
+        self._hash = hashlib.sha256
+        self.receipts_dir = Path(conversation_dir) / MESSAGE_RECEIPTS_DIR
+        self.receipts_dir.mkdir(parents=True, exist_ok=True)
+
+    def load(self, message_id: str) -> MessageReceipt | None:
+        path = self._path(message_id)
+        if not path.is_file():
+            return None
+        receipt = MessageReceipt.model_validate_json(path.read_text(encoding="utf-8"))
+        if receipt.id != message_id:
+            raise RuntimeError("message receipt hash collision")
+        return receipt
+
+    def save(self, receipt: MessageReceipt) -> None:
+        path = self._path(receipt.id)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(receipt.model_dump_json(), encoding="utf-8")
+        temporary.replace(path)
+
+    def _path(self, message_id: str) -> Path:
+        digest = self._hash(message_id.encode("utf-8")).hexdigest()
+        return self.receipts_dir / f"{digest}.json"

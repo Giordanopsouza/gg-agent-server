@@ -8,21 +8,37 @@ import httpx
 from websockets.sync.client import ClientConnection, connect
 
 from gg.sdk.agent_backend import AgentConfig
-from gg.sdk.domain import ConversationRecord, ConversationStatus, Event
+from gg.sdk.domain import (
+    ConversationRecord,
+    ConversationStatus,
+    Event,
+    MessageReceipt,
+)
 from gg.sdk.remote_workspace import RemoteWorkspace
 
 
 class RemoteEventSubscription:
     """A blocking iterator over one conversation's WebSocket events."""
 
-    def __init__(self, workspace: RemoteWorkspace, conversation_id: str) -> None:
+    def __init__(
+        self,
+        workspace: RemoteWorkspace,
+        conversation_id: str,
+        *,
+        after_seq: int = 0,
+    ) -> None:
         self._workspace = workspace
         self._conversation_id = conversation_id
         self._connection: ClientConnection | None = None
+        self._cursor = after_seq
 
     def __enter__(self) -> RemoteEventSubscription:
         self._connection = connect(
-            _websocket_url(self._workspace.host, self._conversation_id),
+            _websocket_url(
+                self._workspace.host,
+                self._conversation_id,
+                after_seq=self._cursor,
+            ),
             open_timeout=self._workspace.timeout,
             close_timeout=5,
         )
@@ -50,6 +66,11 @@ class RemoteEventSubscription:
     def __iter__(self) -> RemoteEventSubscription:
         return self
 
+    @property
+    def cursor(self) -> int:
+        """Sequence cursor safe to pass when reconnecting."""
+        return self._cursor
+
     def __next__(self) -> Event:
         return self.receive()
 
@@ -60,7 +81,9 @@ class RemoteEventSubscription:
         raw = self._connection.recv(timeout=timeout)
         if isinstance(raw, bytes):
             raw = raw.decode()
-        return Event.model_validate_json(raw)
+        event = Event.model_validate_json(raw)
+        self._cursor = max(self._cursor, event.seq)
+        return event
 
 
 class RemoteConversation:
@@ -117,6 +140,34 @@ class RemoteConversation:
         response.raise_for_status()
         self._record = ConversationRecord.model_validate(response.json())
 
+    def steer(self, message_id: str, text: str) -> MessageReceipt:
+        """Idempotently steer the active agent and return delivery knowledge."""
+        response = self._client.post(
+            f"/api/conversations/{self.id}/messages",
+            json={"id": message_id, "content": text},
+            headers=self.workspace.headers,
+        )
+        response.raise_for_status()
+        return MessageReceipt.model_validate(response.json())
+
+    def get_message_receipt(self, message_id: str) -> MessageReceipt:
+        """Read a durable running-message receipt without replaying it."""
+        response = self._client.get(
+            f"/api/conversations/{self.id}/messages/{message_id}",
+            headers=self.workspace.headers,
+        )
+        response.raise_for_status()
+        return MessageReceipt.model_validate(response.json())
+
+    def cancel(self) -> None:
+        """Cancel the active run and wait for confirmed process termination."""
+        response = self._client.post(
+            f"/api/conversations/{self.id}/cancel",
+            headers=self.workspace.headers,
+        )
+        response.raise_for_status()
+        self._record = ConversationRecord.model_validate(response.json())
+
     def list_events(self) -> list[Event]:
         """Fetch the persisted event history in sequence order."""
         response = self._client.get(
@@ -126,13 +177,18 @@ class RemoteConversation:
         response.raise_for_status()
         return [Event.model_validate(item) for item in response.json()]
 
-    def subscribe(self) -> RemoteEventSubscription:
+    def subscribe(self, *, after_seq: int = 0) -> RemoteEventSubscription:
         """Return a context-managed blocking WebSocket event iterator."""
-        return RemoteEventSubscription(self.workspace, self.id)
+        return RemoteEventSubscription(
+            self.workspace,
+            self.id,
+            after_seq=after_seq,
+        )
 
 
-def _websocket_url(host: str, conversation_id: str) -> str:
+def _websocket_url(host: str, conversation_id: str, *, after_seq: int = 0) -> str:
     parsed = urlsplit(host)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     path = f"{parsed.path.rstrip('/')}/sockets/events/{conversation_id}"
-    return urlunsplit((scheme, parsed.netloc, path, "", ""))
+    query = f"after_seq={after_seq}" if after_seq else ""
+    return urlunsplit((scheme, parsed.netloc, path, query, ""))

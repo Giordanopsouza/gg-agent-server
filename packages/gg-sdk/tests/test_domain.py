@@ -84,6 +84,8 @@ def test_start_conversation_request_parses_pi_agent_configuration() -> None:
         {"kind": "pi", "provider": "unsupported"},
         {"kind": "pi", "model": ""},
         {"kind": "pi", "timeout_seconds": 0},
+        {"kind": "pi", "command_ack_timeout_seconds": 0},
+        {"kind": "pi", "cancel_grace_seconds": 0},
         {"kind": "pi", "api_key": "must-not-cross-the-boundary"},
     ],
 )

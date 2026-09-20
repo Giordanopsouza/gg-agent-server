@@ -29,6 +29,20 @@ class ConversationNotFoundError(ConversationError):
         super().__init__(f"conversation not found: {conversation_id}")
 
 
+class MessageIdConflictError(ConversationError):
+    """A client message id was reused with different content."""
+
+    def __init__(self, message_id: str) -> None:
+        self.message_id = message_id
+        super().__init__(
+            f"message id already used with different content: {message_id}"
+        )
+
+
+class AgentControlError(ConversationError):
+    """A running backend cannot accept the requested control operation."""
+
+
 class AgentError(Exception):
     """A sanitized failure raised by an agent backend."""
 
@@ -66,3 +80,9 @@ class AgentTimeoutError(AgentError):
     """The backend did not settle within its configured deadline."""
 
     code = "agent_timeout_error"
+
+
+class AgentCancelledError(AgentError):
+    """The active agent run was cooperatively cancelled."""
+
+    code = "agent_cancelled"

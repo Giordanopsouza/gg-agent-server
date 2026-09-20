@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -19,12 +21,13 @@ from gg.sdk import (
     EventKind,
     LocalConversation,
     LocalWorkspace,
+    MessageDeliveryStatus,
     PiAgentSettings,
     PiRpcAgent,
 )
 
 
-_FAKE_PI = r'''#!/usr/bin/env python3
+_FAKE_PI = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -77,6 +80,85 @@ elif mode == "timeout":
     abort = json.loads(sys.stdin.buffer.readline())
     state["abort"] = abort
     record(state)
+elif mode in ("steer", "steer_lost_ack"):
+    send({
+        "id": prompt["id"],
+        "type": "response",
+        "command": "prompt",
+        "success": True,
+    })
+    Path = __import__("pathlib").Path
+    Path(record_path + ".ready").write_text("ready", encoding="utf-8")
+    steer = json.loads(sys.stdin.buffer.readline())
+    state["steer"] = steer
+    if mode == "steer":
+        send({
+            "id": steer["id"],
+            "type": "response",
+            "command": "steer",
+            "success": True,
+        })
+    abort = json.loads(sys.stdin.buffer.readline())
+    state["abort"] = abort
+    send({
+        "id": abort["id"],
+        "type": "response",
+        "command": "abort",
+        "success": True,
+    })
+    record(state)
+    sys.stdin.buffer.read()
+elif mode == "process_tree":
+    send({
+        "id": prompt["id"],
+        "type": "response",
+        "command": "prompt",
+        "success": True,
+    })
+    subprocess = __import__("subprocess")
+    child_code = '''
+import signal
+import sys
+import time
+from pathlib import Path
+
+heartbeat = Path(sys.argv[1])
+stopped = Path(sys.argv[2])
+ready = Path(sys.argv[3])
+
+def stop(*_):
+    stopped.write_text("stopped", encoding="utf-8")
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+ready.write_text("ready", encoding="utf-8")
+while True:
+    heartbeat.write_text(str(time.time()), encoding="utf-8")
+    time.sleep(0.01)
+'''
+    child = subprocess.Popen([
+        sys.executable,
+        "-c",
+        child_code,
+        record_path + ".heartbeat",
+        record_path + ".stopped",
+        record_path + ".child-ready",
+    ])
+    Path = __import__("pathlib").Path
+    time = __import__("time")
+    while not Path(record_path + ".child-ready").exists():
+        time.sleep(0.01)
+    Path(record_path + ".ready").write_text(str(child.pid), encoding="utf-8")
+    abort = json.loads(sys.stdin.buffer.readline())
+    state["abort"] = abort
+    send({
+        "id": abort["id"],
+        "type": "response",
+        "command": "abort",
+        "success": True,
+    })
+    record(state)
+    sys.stdin.buffer.read()
 else:
     if mode == "noisy":
         sys.stderr.write("x" * (1024 * 1024))
@@ -116,7 +198,7 @@ else:
         sys.stdin.buffer.read()
         Path = __import__("pathlib").Path
         Path(record_path + ".cleaned").write_text("clean", encoding="utf-8")
-'''
+"""
 
 
 @pytest.fixture
@@ -164,6 +246,8 @@ def test_pi_settings_fix_provider_and_supply_defaults() -> None:
     assert settings.provider == "openrouter"
     assert settings.model == "google/gemini-3.7-flash"
     assert settings.timeout_seconds == 600
+    assert settings.command_ack_timeout_seconds == 5
+    assert settings.cancel_grace_seconds == 5
     with pytest.raises(ValidationError):
         PiAgentSettings(provider="another-provider")  # type: ignore[arg-type]
 
@@ -364,19 +448,131 @@ def test_successful_process_is_closed_after_settlement(
     assert Path(f"{record_path}.cleaned").read_text(encoding="utf-8") == "clean"
 
 
-def test_shutdown_terminates_then_kills_a_stubborn_child() -> None:
-    process = _StubbornProcess()
+@pytest.mark.parametrize(
+    ("mode", "expected_status"),
+    [
+        ("steer", MessageDeliveryStatus.DELIVERED),
+        ("steer_lost_ack", MessageDeliveryStatus.UNKNOWN),
+    ],
+)
+def test_steer_acknowledgement_and_lost_ack_are_distinguished(
+    fake_pi: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    expected_status: MessageDeliveryStatus,
+) -> None:
+    record_path = tmp_path / "record.json"
+    monkeypatch.setenv("FAKE_PI_MODE", mode)
+    monkeypatch.setenv("FAKE_PI_RECORD", str(record_path))
+    conversation = LocalConversation(
+        conversation_dir=tmp_path / "conversation",
+        workspace=LocalWorkspace(working_dir=tmp_path / "workspace"),
+        agent_backend=PiRpcAgent(
+            PiAgentSettings(
+                timeout_seconds=3,
+                command_ack_timeout_seconds=0.05,
+                cancel_grace_seconds=0.1,
+            )
+        ),
+    )
+    conversation.send_message("start")
+    run_thread = threading.Thread(target=conversation.run)
+    run_thread.start()
+    ready = Path(f"{record_path}.ready")
+    deadline = time.monotonic() + 2
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ready.exists()
 
-    PiRpcAgent._stop_process(process, abort=True)  # type: ignore[arg-type]
+    receipt = conversation.steer("message-1", "new direction")
+    conversation.cancel()
+    run_thread.join(timeout=2)
+
+    assert receipt.status == expected_status
+    assert conversation.status == ConversationStatus.CANCELLED
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["steer"]["type"] == "steer"
+    assert record["steer"]["message"] == "new direction"
+    assert record["abort"]["type"] == "abort"
+
+
+def test_cancel_terminates_descendant_processes_before_confirmation(
+    fake_pi: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record_path = tmp_path / "tree-record.json"
+    monkeypatch.setenv("FAKE_PI_MODE", "process_tree")
+    monkeypatch.setenv("FAKE_PI_RECORD", str(record_path))
+    conversation = LocalConversation(
+        conversation_dir=tmp_path / "conversation",
+        workspace=LocalWorkspace(working_dir=tmp_path / "workspace"),
+        agent_backend=PiRpcAgent(
+            PiAgentSettings(
+                timeout_seconds=3,
+                command_ack_timeout_seconds=0.2,
+                cancel_grace_seconds=0.2,
+            )
+        ),
+    )
+    conversation.send_message("start")
+    run_thread = threading.Thread(target=conversation.run)
+    run_thread.start()
+    ready = Path(f"{record_path}.ready")
+    deadline = time.monotonic() + 2
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ready.exists()
+
+    conversation.cancel()
+    run_thread.join(timeout=2)
+
+    assert conversation.status == ConversationStatus.CANCELLED
+    assert Path(f"{record_path}.stopped").read_text(encoding="utf-8") == "stopped"
+    heartbeat = Path(f"{record_path}.heartbeat")
+    last_write = heartbeat.stat().st_mtime_ns
+    time.sleep(0.05)
+    assert heartbeat.stat().st_mtime_ns == last_write
+
+
+def test_shutdown_terminates_then_kills_a_stubborn_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _StubbornProcess()
+    signals: list[int] = []
+
+    def signal_group(_: object, sig: int) -> None:
+        signals.append(sig)
+        if sig == pi_agent.signal.SIGTERM:
+            process.terminated = True
+        if sig == pi_agent.signal.SIGKILL:
+            process.killed = True
+
+    monkeypatch.setattr(
+        PiRpcAgent,
+        "_signal_process_group",
+        staticmethod(signal_group),
+    )
+    monkeypatch.setattr(
+        PiRpcAgent,
+        "_process_group_exists",
+        staticmethod(lambda _: not process.killed),
+    )
+
+    agent = PiRpcAgent(PiAgentSettings(cancel_grace_seconds=0.001))
+    agent._stop_process(process, abort=True)  # type: ignore[arg-type]
 
     command = json.loads(process.stdin.getvalue().decode())
     assert command["type"] == "abort"
     assert process.terminated is True
     assert process.killed is True
+    assert signals == [pi_agent.signal.SIGTERM, pi_agent.signal.SIGKILL]
 
 
 class _StubbornProcess:
     def __init__(self) -> None:
+        self.pid = 123
         self.stdin = _NonClosingBytesIO()
         self.terminated = False
         self.killed = False

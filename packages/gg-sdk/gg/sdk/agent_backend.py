@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat
 
@@ -25,6 +26,17 @@ class AgentBackend(Protocol):
     ) -> None: ...
 
 
+@runtime_checkable
+class RunningAgentBackend(Protocol):
+    """Optional control surface implemented by a live agent backend."""
+
+    def set_settling_listener(self, listener: Callable[[], None] | None) -> None: ...
+
+    def steer(self, message: str) -> tuple[bool, str | None]: ...
+
+    def cancel(self) -> None: ...
+
+
 class PiAgentConfig(BaseModel):
     """Credential-free persisted selection for the Pi RPC backend."""
 
@@ -34,6 +46,8 @@ class PiAgentConfig(BaseModel):
     provider: Literal["openrouter"] = "openrouter"
     model: str = Field(default="google/gemini-3.7-flash", min_length=1)
     timeout_seconds: PositiveFloat = 600
+    command_ack_timeout_seconds: PositiveFloat = 5
+    cancel_grace_seconds: PositiveFloat = 5
 
 
 AgentConfig = Annotated[PiAgentConfig, Field(discriminator="kind")]
@@ -48,5 +62,7 @@ def create_agent_backend(config: AgentConfig) -> AgentBackend:
             provider=config.provider,
             model=config.model,
             timeout_seconds=config.timeout_seconds,
+            command_ack_timeout_seconds=config.command_ack_timeout_seconds,
+            cancel_grace_seconds=config.cancel_grace_seconds,
         )
     )
