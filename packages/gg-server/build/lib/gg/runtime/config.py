@@ -23,7 +23,9 @@ DEFAULT_MODAL_MEMORY_REQUEST_MIB = 4096
 DEFAULT_MODAL_MEMORY_LIMIT_MIB = 4096
 DEFAULT_MODAL_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_MODAL_PROVIDER_TIMEOUT_SECONDS = 70 * 60
-SUPPORTED_TASK_SCHEMA_VERSION = 2
+DEFAULT_TASK_CAPACITY = 10
+DEFAULT_DISPATCH_POLL_SECONDS = 1.0
+SUPPORTED_TASK_SCHEMA_VERSION = 3
 
 
 class RuntimeSettings(BaseModel):
@@ -57,6 +59,10 @@ class RuntimeSettings(BaseModel):
     modal_provider_timeout_seconds: int = Field(
         default=DEFAULT_MODAL_PROVIDER_TIMEOUT_SECONDS, ge=1, le=24 * 60 * 60
     )
+    task_capacity: int = Field(default=DEFAULT_TASK_CAPACITY, ge=1, le=10)
+    dispatch_poll_seconds: float = Field(default=DEFAULT_DISPATCH_POLL_SECONDS, gt=0)
+    task_dispatch_enabled: bool = False
+    dispatch_lock_path: str | None = None
 
     @field_validator("api_key")
     @classmethod
@@ -121,6 +127,23 @@ class RuntimeSettings(BaseModel):
             )
         return value
 
+    @field_validator("task_dispatch_enabled")
+    @classmethod
+    def reject_incomplete_production_dispatch(cls, value: bool) -> bool:
+        if value:
+            raise ValueError(
+                "production dispatch is unavailable until task 057 connects "
+                "supervision, finalization, evidence archival, and cleanup"
+            )
+        return value
+
+    @field_validator("dispatch_lock_path")
+    @classmethod
+    def validate_dispatch_lock_path(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("dispatch_lock_path must be non-empty when provided")
+        return value
+
 
 # Turn GG_RUNTIME_PORT into an int, or use 8001 if unset.
 def _parse_port(raw: str | None) -> int:
@@ -149,6 +172,26 @@ def _parse_int(raw: str | None, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ValueError(f"expected an integer, got {raw!r}") from exc
+
+
+def _parse_float(raw: str | None, default: float) -> float:
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"expected a number, got {raw!r}") from exc
+
+
+def _parse_bool(raw: str | None, default: bool = False) -> bool:
+    if raw is None or raw == "":
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"expected a boolean, got {raw!r}")
 
 
 # Read all runtime settings from environment variables at startup.
@@ -205,4 +248,10 @@ def load_settings() -> RuntimeSettings:
             os.getenv("GG_MODAL_PROVIDER_TIMEOUT_SECONDS"),
             DEFAULT_MODAL_PROVIDER_TIMEOUT_SECONDS,
         ),
+        task_capacity=_parse_int(os.getenv("GG_TASK_CAPACITY"), DEFAULT_TASK_CAPACITY),
+        dispatch_poll_seconds=_parse_float(
+            os.getenv("GG_DISPATCH_POLL_SECONDS"), DEFAULT_DISPATCH_POLL_SECONDS
+        ),
+        task_dispatch_enabled=_parse_bool(os.getenv("GG_TASK_DISPATCH_ENABLED")),
+        dispatch_lock_path=os.getenv("GG_DISPATCH_LOCK_PATH"),
     )

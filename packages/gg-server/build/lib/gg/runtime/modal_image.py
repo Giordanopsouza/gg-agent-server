@@ -32,14 +32,30 @@ def version_evidence() -> dict[str, str]:
     }
 
 
+def find_repository_root(start: Path | None = None) -> Path:
+    """Locate the repo root from the working directory, not the installed module."""
+
+    current = (start or Path.cwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "Dockerfile").is_file() and (
+            candidate / "packages" / "gg-server"
+        ).is_dir():
+            return candidate
+    raise FileNotFoundError(
+        "Repository Dockerfile not found. Run this command from the "
+        "gg-agent-server repository root."
+    )
+
+
 def build_and_publish(
     *,
     app_name: str = DEFAULT_MODAL_APP_NAME,
     image_name: str = DEFAULT_MODAL_IMAGE_NAME,
+    context_dir: Path | None = None,
 ) -> None:
     """Build the repository Dockerfile on Modal and publish its named image."""
 
-    repository_root = Path(__file__).resolve().parents[4]
+    repository_root = find_repository_root(start=context_dir)
     with modal.enable_output():
         app = modal.App.lookup(app_name, create_if_missing=True)
         image = modal.Image.from_dockerfile(

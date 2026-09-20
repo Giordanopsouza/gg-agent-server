@@ -16,6 +16,8 @@ from pydantic import BaseModel
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import TaskLedger
+from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
+from gg.runtime.scheduler import TaskScheduler, default_lock_path
 from gg.runtime.task_routes import router as task_router
 from gg.runtime.task_service import TaskService
 from gg.sdk.docker_workspace import DockerWorkspace
@@ -205,6 +207,8 @@ def create_app(
     *,
     launcher: SandboxLauncher | None = None,
     task_ledger: TaskLedger | None = None,
+    modal_lifecycle: ModalSandboxLifecycle | None = None,
+    task_scheduler: TaskScheduler | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app with an injectable Docker boundary."""
     service = RuntimeService(
@@ -215,14 +219,36 @@ def create_app(
     ledger = task_ledger or TaskLedger(db_path=settings.task_db_path)
     ledger.open()
     task_service = TaskService(ledger=ledger, settings=settings)
+    lifecycle = modal_lifecycle or lifecycle_from_settings(
+        ledger=ledger, settings=settings
+    )
+    scheduler = task_scheduler or TaskScheduler(
+        ledger=ledger,
+        lifecycle=lifecycle,
+        capacity=settings.task_capacity,
+        lock_path=settings.dispatch_lock_path
+        or default_lock_path(
+            db_path=settings.task_db_path,
+            deployment=settings.modal_deployment,
+        ),
+        # RuntimeSettings deliberately rejects True until task 057 removes
+        # the gate after the complete supervisor/finalizer is wired.
+        admission_enabled=settings.task_dispatch_enabled,
+        poll_seconds=settings.dispatch_poll_seconds,
+    )
 
-    # Stop all sandboxes and close the ledger when uvicorn exits, even on
-    # crash or Ctrl+C.
+    # The durable scheduler detaches Modal sandboxes on shutdown. The legacy
+    # Docker session service retains its historical stop-everything behavior.
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        scheduler_started = False
         try:
+            await scheduler.start()
+            scheduler_started = True
             yield
         finally:
+            if scheduler_started:
+                await scheduler.stop()
             service.close()
             ledger.close()
 
@@ -231,6 +257,7 @@ def create_app(
     app.state.runtime_service = service
     app.state.task_ledger = ledger
     app.state.task_service = task_service
+    app.state.task_scheduler = scheduler
     # The durable task API is protected by the same control-plane key.
     app.include_router(task_router, dependencies=[Depends(_check_api_key)])
 

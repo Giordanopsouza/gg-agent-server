@@ -52,3 +52,29 @@ GG_RUN_MODAL_TESTS=1 uv run --no-editable pytest \
 
 The smoke creates one sandbox, authenticates to `/health`, reconnects from a
 fresh lifecycle client, terminates it, and confirms provider termination.
+
+## FIFO recovery and lifecycle demo
+
+The runtime takes an exclusive local deployment lock, reconciles every durable
+reservation before considering queued work, and counts unresolved creation or
+termination states against the configured capacity. `GG_TASK_CAPACITY` defaults
+to 10 and may only be lowered. `GET /tasks/dispatch/status` reports pending work
+and provider conditions to authenticated operators.
+
+Production admission is deliberately unavailable until task 057 connects the
+task supervisor, final result archival, and automatic cleanup. Setting
+`GG_TASK_DISPATCH_ENABLED=true` therefore fails configuration instead of
+provisioning incomplete production work.
+
+To exercise only reservation, provisioning, detach/reconnect, and confirmed
+termination against Modal, use the standalone demo after publishing the image:
+
+```console
+GG_RUNTIME_API_KEY=demo-only \
+  uv run --no-editable python -m gg.runtime.modal_lifecycle_demo
+```
+
+The demo uses a private temporary ledger by default, accepts no HTTP coding
+requests, and fails if its final reconciliation cannot confirm cleanup of every
+demo-owned sandbox. Set `GG_LIFECYCLE_DEMO_DB_PATH` to retain its ledger for
+diagnosis.

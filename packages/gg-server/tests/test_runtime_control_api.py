@@ -7,6 +7,8 @@ import pytest
 from httpx import ASGITransport
 
 from gg.runtime import RuntimeSettings, create_app
+from gg.runtime.ledger import SandboxProviderState, TaskLedger
+from gg.runtime.modal_sandbox import SandboxSnapshot
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -42,6 +44,21 @@ class FakeLauncher:
 class FailingLauncher:
     def start(self, session_api_key: str) -> FakeSandbox:
         raise RuntimeError("Docker is unavailable")
+
+
+class FakeModalLifecycle:
+    def __init__(self) -> None:
+        self.detached: list[str] = []
+
+    async def reconnect(self, task_id: str) -> SandboxSnapshot:
+        return SandboxSnapshot(task_id, "modal-provider", SandboxProviderState.RUNNING)
+
+    async def detach(self, task_id: str) -> SandboxSnapshot:
+        self.detached.append(task_id)
+        return SandboxSnapshot(task_id, "modal-provider", SandboxProviderState.RUNNING)
+
+    async def terminate(self, task_id: str) -> SandboxSnapshot:
+        raise AssertionError(f"shutdown must not terminate Modal task {task_id}")
 
 
 def _app(launcher: FakeLauncher):
@@ -171,3 +188,54 @@ async def test_start_reports_launcher_failure_as_service_unavailable() -> None:
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Docker is unavailable"}
+
+
+@pytest.mark.anyio
+async def test_shutdown_stops_legacy_docker_but_detaches_durable_modal(
+    tmp_path,
+) -> None:
+    ledger = TaskLedger(db_path=":memory:")
+    ledger.open()
+    task, _ = ledger.submit(
+        idempotency_key="durable-modal",
+        repository="owner/repo",
+        prompt="work",
+        base_ref=None,
+        retry_of=None,
+    )
+    ledger.reserve_next(capacity=1)
+    ledger.begin_sandbox_creation(
+        task_id=task.id,
+        deployment="production",
+        sandbox_name="durable-modal-sandbox",
+        tags_json="{}",
+        session_api_key="private",
+    )
+    ledger.update_sandbox_creation(
+        task.id,
+        provider_id="modal-provider",
+        provider_state=SandboxProviderState.RUNNING,
+    )
+    launcher = FakeLauncher()
+    modal_lifecycle = FakeModalLifecycle()
+    app = create_app(
+        RuntimeSettings(
+            api_key="control-secret",
+            task_db_path=":memory:",
+            dispatch_lock_path=str(tmp_path / "dispatch.lock"),
+        ),
+        launcher=launcher,
+        task_ledger=ledger,
+        modal_lifecycle=modal_lifecycle,  # type: ignore[arg-type]
+    )
+    transport = ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            response = await client.post("/start", headers=_AUTH)
+            assert response.status_code == 201
+
+    assert launcher.sandboxes[0].stop_calls == 1
+    assert modal_lifecycle.detached == [task.id]

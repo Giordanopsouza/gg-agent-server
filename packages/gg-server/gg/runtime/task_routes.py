@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
+from gg.runtime.scheduler import DispatchStatus, TaskScheduler
 from gg.runtime.task_service import TaskConflictError, TaskService, TaskValidationError
 from gg.sdk.tasks import CreateTaskRequest, TaskRecord
 
@@ -22,10 +23,15 @@ def _get_service(request: Request) -> TaskService:
     return request.app.state.task_service
 
 
+def _get_scheduler(request: Request) -> TaskScheduler:
+    return request.app.state.task_scheduler
+
+
 # POST /tasks — durably admit one background task.
 @router.post("", response_model=TaskRecord)
 def submit_task(
     body: CreateTaskRequest,
+    request: Request,
     service: TaskService = Depends(_get_service),
 ) -> TaskRecord | JSONResponse:
     try:
@@ -42,6 +48,7 @@ def submit_task(
         ) from exc
     # Idempotent replay of identical input returns the original task with 200.
     if created:
+        request.app.state.task_scheduler.wake()
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
             content=record.model_dump(mode="json"),
@@ -55,6 +62,14 @@ def list_tasks(
     service: TaskService = Depends(_get_service),
 ) -> list[TaskRecord]:
     return service.list()
+
+
+# GET /tasks/dispatch/status — expose disabled admission and recovery blocks.
+@router.get("/dispatch/status", response_model=DispatchStatus)
+def get_dispatch_status(
+    scheduler: TaskScheduler = Depends(_get_scheduler),
+) -> DispatchStatus:
+    return scheduler.status()
 
 
 # GET /tasks/{id} — fetch one task by id.

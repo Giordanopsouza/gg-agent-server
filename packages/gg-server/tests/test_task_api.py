@@ -71,6 +71,25 @@ async def test_submit_returns_created_with_queued_state() -> None:
 
 
 @pytest.mark.anyio
+async def test_dispatch_status_keeps_queued_work_visibly_pending() -> None:
+    app = _app(_settings())
+    transport = ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            await client.post("/tasks", headers=_AUTH, json=_payload(key="k1"))
+            response = await client.get("/tasks/dispatch/status", headers=_AUTH)
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert response.json()["reconciled"] is True
+    assert response.json()["pending"] == 1
+    assert "task 057" in response.json()["disabled_reason"]
+
+
+@pytest.mark.anyio
 async def test_idempotent_replay_returns_original_with_200() -> None:
     app = _app(_settings())
     transport = ASGITransport(app=app)

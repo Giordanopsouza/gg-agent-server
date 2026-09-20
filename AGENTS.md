@@ -9,9 +9,8 @@
 
 # Key Components
 
-- **SDK** — [`packages/gg-sdk/`](packages/gg-sdk/): client library, conversation loop, workspace implementations, Pi backend, and demos. Python library; frozen Pydantic domain models, async I/O, and no imports from `gg.server`. Read [`packages/gg-sdk/AGENTS.md`](packages/gg-sdk/AGENTS.md); deeper conventions: squid `python-backend`, `uv-python`, `pyproject`, and `ruff-python` specs.
-- **Server** — [`packages/gg-server/`](packages/gg-server/): FastAPI agent-server plus the Docker runtime control API. Python service; app factories, lifespan-managed state, typed configuration, and thin HTTP/WebSocket routes. Read [`packages/gg-server/AGENTS.md`](packages/gg-server/AGENTS.md); deeper conventions: squid `python-backend` and `fastapi-service` specs.
-
+- **SDK** — [`packages/gg-sdk/`](packages/gg-sdk/): client library, conversation loop, workspace implementations, Pi backend, and demos. Python library; frozen Pydantic domain models, async I/O, and no imports from `gg.server`. Read [`packages/gg-sdk/AGENTS.md`](packages/gg-sdk/AGENTS.md); deeper conventions: `python-backend`, `uv-python`, `pyproject`, and `ruff-python` specs.
+- **Server** — [`packages/gg-server/`](packages/gg-server/): FastAPI agent-server plus the Docker runtime control API. Python service; app factories, lifespan-managed state, typed configuration, and thin HTTP/WebSocket routes. Read [`packages/gg-server/AGENTS.md`](packages/gg-server/AGENTS.md)
 ## Component dependencies
 
 - `gg-server` depends on `gg-sdk`; `gg-sdk` remains independently importable and never imports server source.
@@ -32,16 +31,8 @@ Use `uv sync --no-editable`: editable workspace installs are unreliable here on 
 ## Infrastructure & external services
 
 - **Git/GitHub** — use `git` locally and `gh` for pull requests, issues, Actions, and demo verification.
-- **Docker** — build the sandbox image with `make docker-build`; runtime tests are opt-in through the pytest markers declared in `pyproject.toml`.
 - **Persistence** — conversation state is stored as JSON files; this project has no database.
-
-# Developing New Features & Bug Fixes
-
-This project uses the squid agent team and a file tracker at [`docs/tasks/`](docs/tasks/). `TRACKER_MODE: file`: state lives in each task's `status:` frontmatter; completed work moves to `docs/tasks/done/`, and every role appends to the task log.
-
-One task → one branch → one PR → merge to `main` → delete the branch. Start the next task from fresh `main`. 
 
 # Testing E2E
 
 - **Local server:** run `make run`, then `curl http://127.0.0.1:8000/health`; success is HTTP 200 reporting status `ok`. `GG_SESSION_API_KEYS` is optional on loopback and required before exposing a non-loopback bind.
-- **Docker/GitHub demo:** export `OPENROUTER_API_KEY` and a fine-grained `GH_TOKEN`, run `make docker-build`, then `make demo-docker-pr`; success is three isolated sandboxes opening their pull requests and all containers being removed.

@@ -27,7 +27,7 @@ from gg.sdk.tasks import TaskRecord, TaskState
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSION = 3
 
 
 class SandboxProviderState(StrEnum):
@@ -37,6 +37,27 @@ class SandboxProviderState(StrEnum):
     RUNNING = "running"
     STOPPED = "stopped"
     UNKNOWN = "unknown"
+
+
+class ReservationPhase(StrEnum):
+    """Capacity-owning phases for one background task."""
+
+    STARTING = "starting"
+    RUNNING = "running"
+    FINALIZING = "finalizing"
+    TERMINATION_PENDING = "termination_pending"
+    UNRESOLVED_CREATION = "unresolved_creation"
+
+
+@dataclass(frozen=True)
+class ReservationRecord:
+    """One durable capacity reservation."""
+
+    task_id: str
+    phase: ReservationPhase
+    condition: str | None
+    reserved_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True)
@@ -66,6 +87,16 @@ def _row_to_sandbox_record(row: sqlite3.Row) -> SandboxCreationRecord:
         provider_state=SandboxProviderState(row["provider_state"]),
         detail=row["detail"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_reservation(row: sqlite3.Row) -> ReservationRecord:
+    return ReservationRecord(
+        task_id=row["task_id"],
+        phase=ReservationPhase(row["phase"]),
+        condition=row["condition"],
+        reserved_at=datetime.fromisoformat(row["reserved_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
 
@@ -216,8 +247,28 @@ class TaskLedger:
                     self._conn.execute("ROLLBACK")
                     raise
 
+            actual = int(
+                self._conn.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()["value"]
+            )
+            if actual < 3 <= self._expected_schema_version:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._create_reservation_schema()
+                    self._conn.execute(
+                        "UPDATE schema_meta SET value = '3' "
+                        "WHERE key = 'schema_version'"
+                    )
+                    self._conn.execute("COMMIT")
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+
             if self._expected_schema_version >= 2:
                 self._create_sandbox_schema()
+            if self._expected_schema_version >= 3:
+                self._create_reservation_schema()
 
     def _create_sandbox_schema(self) -> None:
         assert self._conn is not None
@@ -241,6 +292,70 @@ class TaskLedger:
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_sandbox_name "
             "ON sandbox_creations(deployment, sandbox_name)"
+        )
+
+    def _create_reservation_schema(self) -> None:
+        assert self._conn is not None
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_reservations (
+                task_id TEXT PRIMARY KEY,
+                phase TEXT NOT NULL,
+                condition TEXT,
+                reserved_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+            """
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reservations_reserved_at "
+            "ON task_reservations(reserved_at)"
+        )
+        # A v2 ledger could contain lifecycle intents created before durable
+        # reservations existed. Recover all non-stopped ownership so migration
+        # cannot accidentally make that provider capacity available twice.
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO task_reservations (
+                task_id, phase, condition, reserved_at, updated_at
+            )
+            SELECT
+                task_id,
+                CASE provider_state
+                    WHEN 'running' THEN ?
+                    WHEN 'unknown' THEN ?
+                    ELSE ?
+                END,
+                CASE WHEN provider_state = 'unknown' THEN detail ELSE NULL END,
+                created_at,
+                updated_at
+            FROM sandbox_creations
+            WHERE provider_state != 'stopped'
+            """,
+            (
+                ReservationPhase.RUNNING.value,
+                ReservationPhase.UNRESOLVED_CREATION.value,
+                ReservationPhase.STARTING.value,
+            ),
+        )
+        self._conn.execute(
+            """
+            UPDATE tasks
+            SET state = CASE
+                WHEN (SELECT phase FROM task_reservations
+                      WHERE task_id = tasks.id) = ? THEN ?
+                ELSE ?
+            END
+            WHERE state = ?
+              AND id IN (SELECT task_id FROM task_reservations)
+            """,
+            (
+                ReservationPhase.RUNNING.value,
+                TaskState.RUNNING.value,
+                TaskState.STARTING.value,
+                TaskState.QUEUED.value,
+            ),
         )
 
     # Atomically insert a new queued task or return an existing one by
@@ -329,6 +444,173 @@ class TaskLedger:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM tasks ORDER BY seq ASC").fetchall()
         return [_row_to_record(row) for row in rows]
+
+    def reserve_next(self, *, capacity: int) -> TaskRecord | None:
+        """Atomically reserve the oldest queued task if capacity is available."""
+
+        if not 1 <= capacity <= 10:
+            raise ValueError("reservation capacity must be between 1 and 10")
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                active = int(
+                    self._conn.execute(
+                        "SELECT COUNT(*) AS count FROM task_reservations"
+                    ).fetchone()["count"]
+                )
+                if active >= capacity:
+                    self._conn.execute("COMMIT")
+                    return None
+                row = self._conn.execute(
+                    """
+                    SELECT tasks.* FROM tasks
+                    LEFT JOIN task_reservations
+                        ON task_reservations.task_id = tasks.id
+                    WHERE tasks.state = ? AND task_reservations.task_id IS NULL
+                    ORDER BY tasks.seq ASC
+                    LIMIT 1
+                    """,
+                    (TaskState.QUEUED.value,),
+                ).fetchone()
+                if row is None:
+                    self._conn.execute("COMMIT")
+                    return None
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    INSERT INTO task_reservations (
+                        task_id, phase, condition, reserved_at, updated_at
+                    ) VALUES (?, ?, NULL, ?, ?)
+                    """,
+                    (row["id"], ReservationPhase.STARTING.value, now, now),
+                )
+                self._conn.execute(
+                    "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                    (TaskState.STARTING.value, now, row["id"]),
+                )
+                claimed = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (row["id"],)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert claimed is not None
+        return _row_to_record(claimed)
+
+    def list_reservations(self) -> list[ReservationRecord]:
+        assert self._conn is not None
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM task_reservations ORDER BY reserved_at, task_id"
+            ).fetchall()
+        return [_row_to_reservation(row) for row in rows]
+
+    def get_reservation(self, task_id: str) -> ReservationRecord | None:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM task_reservations WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return _row_to_reservation(row) if row is not None else None
+
+    def update_reservation(
+        self,
+        task_id: str,
+        *,
+        phase: ReservationPhase,
+        condition: str | None = None,
+        task_state: TaskState | None = None,
+    ) -> ReservationRecord:
+        """Update reservation and public task state in one transaction."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    UPDATE task_reservations
+                    SET phase = ?, condition = ?, updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (phase.value, condition, now, task_id),
+                )
+                if self._conn.execute("SELECT changes()").fetchone()[0] != 1:
+                    raise KeyError(f"no reservation for task {task_id}")
+                if task_state is not None:
+                    self._conn.execute(
+                        "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                        (task_state.value, now, task_id),
+                    )
+                row = self._conn.execute(
+                    "SELECT * FROM task_reservations WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return _row_to_reservation(row)
+
+    def release_reservation(
+        self, task_id: str, *, cleanup_status: str = "confirmed_absent"
+    ) -> None:
+        """Release capacity only after provider absence has been confirmed."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                self._conn.execute(
+                    "DELETE FROM task_reservations WHERE task_id = ?", (task_id,)
+                )
+                self._conn.execute(
+                    """
+                    UPDATE tasks
+                    SET sandbox_cleanup_status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (cleanup_status, now, task_id),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def mark_sandbox_lost(self, task_id: str, *, detail: str) -> None:
+        """Fail execution without erasing previously captured task evidence."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    UPDATE tasks
+                    SET state = ?, outcome_detail = COALESCE(outcome_detail, ?),
+                        sandbox_cleanup_status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        TaskState.FAILED.value,
+                        detail,
+                        "confirmed_absent",
+                        now,
+                        task_id,
+                    ),
+                )
+                self._conn.execute(
+                    "DELETE FROM task_reservations WHERE task_id = ?", (task_id,)
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def begin_sandbox_creation(
         self,
@@ -430,6 +712,8 @@ class TaskLedger:
 
 __all__ = [
     "SUPPORTED_SCHEMA_VERSION",
+    "ReservationPhase",
+    "ReservationRecord",
     "SandboxCreationRecord",
     "SandboxProviderState",
     "TaskLedger",

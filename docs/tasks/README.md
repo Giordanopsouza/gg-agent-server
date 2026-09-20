@@ -6,22 +6,6 @@ atomic task**, committed to the repo. Root task files are the active plan.
 Plan overview: [overview.md](overview.md). Architecture:
 [About the OpenHands agent-server](../architecture.md).
 
-## Current plan
-
-Slices 1 to 4. Slice 1a is the in-process loop. Slice 1b is that loop
-behind HTTP. Slice 4a proved Pi locally; slice 4b wires Pi through HTTP and
-Docker. Do not skip 1a.
-
-| Slice | Feature slug | Tasks | Stop when |
-|---|---|---|---|
-| 1a | `scaffold`, `loop` | [001](done/001-repo-scaffolding.md) … [007](done/007-in-process-demo.md) | `NOTES.md` from a Python module, no server |
-| 1b | `server` | [008](done/008-server-config.md) … [016](done/016-local-server-demo.md) | Reconnect to a local server and still see events |
-| 2 | `docker` | [017](done/017-server-dockerfile.md) … [020](done/020-docker-sandbox-demo.md) | `NOTES.md` inside a container |
-| 3 | `runtime` | [021](done/021-runtime-control-api.md) … [023](done/023-runtime-api-demo.md) | Same demo through `POST /start` |
-| 4a | `loop`, `pi` | [026](done/026-agent-backend-boundary.md) … [028](done/028-pi-local-demo.md) | `PI_NOTES.md` from a real local Pi process |
-| 4b | `pi`, `docker` | [029](done/029-pi-conversation-api.md) … [032](032-docker-pi-demo.md) | Same demo through remote server in Docker |
-| later | `loop` | [backlog/024](backlog/024-real-llm-loop.md) | Real LLM, after 016 |
-
 ## Folders
 
 - `tasks/*.md` — current plan only (plus this README and `overview.md`).
@@ -110,5 +94,3 @@ One atomic, independently-shippable unit of work (1–2 sentences).
 - After the **Tester** PASSES and the task is committed → `status: done`.
 
 Every agent **appends** (never rewrites) a timestamped entry to `## Log`: `### [ROLE] YYYY-MM-DD HH:MM — subject`. Roles: `PA`, `SWE`, `Tester`, `PR Reviewer`, `On-Call`.
-
-Tasks are created and driven by the squid pipelines (`/plan`, `/implement-task`, `/implement-night`).

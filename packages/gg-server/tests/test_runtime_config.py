@@ -20,6 +20,10 @@ _RUNTIME_ENV = (
     "GG_MODAL_MEMORY_LIMIT_MIB",
     "GG_MODAL_STARTUP_TIMEOUT_SECONDS",
     "GG_MODAL_PROVIDER_TIMEOUT_SECONDS",
+    "GG_TASK_CAPACITY",
+    "GG_DISPATCH_POLL_SECONDS",
+    "GG_TASK_DISPATCH_ENABLED",
+    "GG_DISPATCH_LOCK_PATH",
 )
 
 
@@ -70,6 +74,8 @@ def test_runtime_settings_default_allowlist_is_empty() -> None:
     ) == (4096, 4096)
     assert settings.modal_startup_timeout_seconds == 300
     assert settings.modal_provider_timeout_seconds == 4200
+    assert settings.task_capacity == 10
+    assert settings.task_dispatch_enabled is False
 
 
 def test_runtime_settings_normalizes_allowlist() -> None:
@@ -95,6 +101,9 @@ def test_load_settings_reads_task_env_vars(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("GG_MODAL_CPU_LIMIT", "2.5")
     monkeypatch.setenv("GG_MODAL_MEMORY_REQUEST_MIB", "2048")
     monkeypatch.setenv("GG_MODAL_MEMORY_LIMIT_MIB", "6144")
+    monkeypatch.setenv("GG_TASK_CAPACITY", "4")
+    monkeypatch.setenv("GG_DISPATCH_POLL_SECONDS", "2.5")
+    monkeypatch.setenv("GG_DISPATCH_LOCK_PATH", "/tmp/gg-test.lock")
 
     settings = load_settings()
 
@@ -106,6 +115,9 @@ def test_load_settings_reads_task_env_vars(monkeypatch: pytest.MonkeyPatch) -> N
         settings.modal_memory_request_mib,
         settings.modal_memory_limit_mib,
     ) == (2048, 6144)
+    assert settings.task_capacity == 4
+    assert settings.dispatch_poll_seconds == 2.5
+    assert settings.dispatch_lock_path == "/tmp/gg-test.lock"
 
 
 def test_modal_hard_limits_cannot_be_below_requests() -> None:
@@ -119,3 +131,24 @@ def test_modal_hard_limits_cannot_be_below_requests() -> None:
             modal_memory_request_mib=4096,
             modal_memory_limit_mib=2048,
         )
+
+
+def test_capacity_cannot_exceed_release_limit() -> None:
+    with pytest.raises(ValidationError, match="less than or equal to 10"):
+        RuntimeSettings(api_key="control-secret", task_capacity=11)
+
+
+def test_production_dispatch_refuses_activation_until_task_057() -> None:
+    with pytest.raises(ValidationError, match="task 057"):
+        RuntimeSettings(api_key="control-secret", task_dispatch_enabled=True)
+
+
+def test_load_settings_rejects_dispatch_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("GG_RUNTIME_API_KEY", "control-secret")
+    monkeypatch.setenv("GG_TASK_DISPATCH_ENABLED", "true")
+
+    with pytest.raises(ValidationError, match="task 057"):
+        load_settings()
