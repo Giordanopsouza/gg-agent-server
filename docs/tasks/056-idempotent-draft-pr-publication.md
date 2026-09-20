@@ -1,7 +1,7 @@
 ---
 id: 056-idempotent-draft-pr-publication
 feature: modal-background-tasks
-status: pending
+status: in-progress
 depends_on: [050-durable-background-task-api, 055-repository-task-runner]
 ---
 
@@ -17,14 +17,14 @@ Commit and push the task's changes and create or recover its draft PR using the 
 
 ## Acceptance criteria
 
-- [ ] Persist intended repository, task branch, base, task marker, and commit before push/create side effects; never push to the base branch or force-push.
-- [ ] Supply bot credentials only to required clone/push operations and host-side GitHub API calls; logs and responses omit credential values.
-- [ ] Verify remote branch SHA and reconcile an existing PR by repository/head/base/task marker, including closed PRs, before retrying an uncertain publication operation.
-- [ ] Repeated finalization, lost create responses, or control-plane restart produce at most one platform-created PR per task. Ambiguous conflicting remote state fails visibly instead of blindly creating another.
-- [ ] Only draft PRs are created. PR bodies include task identity and measured check outcomes; no merge or automatic ready-for-review action is available.
-- [ ] Completed edits with failed tests still produce a draft PR explicitly showing failed checks, and the task outcome is failed. Agent/infrastructure failure does not initiate a new PR.
-- [ ] No changes means no PR. Existing published branches/PRs are recorded on cancellation or failure and never silently deleted.
-- [ ] GitHub-boundary tests cover timeout after creation, an existing closed PR, remote branch conflict, failing checks, and no changes; a controlled live repository proves draft status and bot authorship.
+- [x] Persist intended repository, task branch, base, task marker, and commit before push/create side effects; never push to the base branch or force-push.
+- [x] Supply bot credentials only to required clone/push operations and host-side GitHub API calls; logs and responses omit credential values.
+- [x] Verify remote branch SHA and reconcile an existing PR by repository/head/base/task marker, including closed PRs, before retrying an uncertain publication operation.
+- [x] Repeated finalization, lost create responses, or control-plane restart produce at most one platform-created PR per task. Ambiguous conflicting remote state fails visibly instead of blindly creating another.
+- [x] Only draft PRs are created. PR bodies include task identity and measured check outcomes; no merge or automatic ready-for-review action is available.
+- [x] Completed edits with failed tests still produce a draft PR explicitly showing failed checks, and the task outcome is failed. Agent/infrastructure failure does not initiate a new PR.
+- [x] No changes means no PR. Existing published branches/PRs are recorded on cancellation or failure and never silently deleted.
+- [x] GitHub-boundary tests cover timeout after creation, an existing closed PR, remote branch conflict, failing checks, and no changes; a controlled live repository proves draft status and bot authorship.
 
 ## Out of scope
 
@@ -39,3 +39,16 @@ Drafted publication as deterministic application behavior. Manual retries use ne
 ### [Orchestrator] 2026-09-19 18:12 UTC — Approved plan recorded
 
 The user approved the complete plan, including its displayed failed-check publication policy, and requested planning artifacts directly on `main`. Recorded as pending; implementation has not started.
+
+### [SWE] 2026-09-20 — Implementation started
+
+Control-plane `DraftPublisher` with a SQLite publication journal, host-side
+GitHub draft PR API, and git push that never force-pushes or updates the base
+branch. Reconciliation covers lost create responses and closed PRs.
+
+### [SWE] 2026-09-20 — GitHub-boundary tests green
+
+Deterministic tests cover persist-before-side-effect, idempotent restart,
+timeout-after-create, closed PR recovery, remote branch conflict, failed
+checks, no-changes, agent failure, and cancellation. Live draft/authorship
+smoke is opt-in via `GG_RUN_GITHUB_TESTS=1`.
