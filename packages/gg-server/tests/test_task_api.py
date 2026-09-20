@@ -5,6 +5,7 @@ import sqlite3
 import httpx
 import pytest
 from httpx import ASGITransport
+from starlette.testclient import TestClient, WebSocketDenialResponse
 
 from gg.runtime import RuntimeSettings, TaskLedger, create_app
 
@@ -230,6 +231,32 @@ async def test_tasks_require_control_plane_key() -> None:
 
     assert missing.status_code == 401
     assert wrong.status_code == 401
+
+
+def test_task_event_socket_requires_control_plane_key() -> None:
+    app = _app(_settings())
+    with TestClient(app) as client:
+        created = client.post("/tasks", headers=_AUTH, json=_payload(key="k1"))
+        assert created.status_code == 201
+        task_id = created.json()["id"]
+
+        with pytest.raises(WebSocketDenialResponse) as missing:
+            with client.websocket_connect(f"/tasks/sockets/events/{task_id}"):
+                pass
+        with pytest.raises(WebSocketDenialResponse) as wrong:
+            with client.websocket_connect(
+                f"/tasks/sockets/events/{task_id}",
+                headers={"X-API-Key": "wrong"},
+            ):
+                pass
+        with client.websocket_connect(
+            f"/tasks/sockets/events/{task_id}",
+            headers=_AUTH,
+        ):
+            pass
+
+    assert missing.value.status_code == 401
+    assert wrong.value.status_code == 401
 
 
 @pytest.mark.anyio
