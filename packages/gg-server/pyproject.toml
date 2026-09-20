@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.104",
     "gg-sdk",
+    "modal==1.5.5",
     "pydantic>=2.0",
     "uvicorn>=0.31.1",
 ]

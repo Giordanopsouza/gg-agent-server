@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -14,7 +14,16 @@ DEFAULT_TASK_DB_PATH = "gg-tasks.sqlite"
 DEFAULT_MAX_PROMPT_CHARS = 16_000
 DEFAULT_MAX_BASE_REF_CHARS = 200
 DEFAULT_MAX_IDEMPOTENCY_KEY_CHARS = 256
-SUPPORTED_TASK_SCHEMA_VERSION = 1
+DEFAULT_MODAL_APP_NAME = "gg-agent-sandboxes"
+DEFAULT_MODAL_DEPLOYMENT = "gg-production"
+DEFAULT_MODAL_IMAGE_NAME = "gg-agent-server:2026-09-20-v1"
+DEFAULT_MODAL_CPU_REQUEST = 2.0
+DEFAULT_MODAL_CPU_LIMIT = 2.0
+DEFAULT_MODAL_MEMORY_REQUEST_MIB = 4096
+DEFAULT_MODAL_MEMORY_LIMIT_MIB = 4096
+DEFAULT_MODAL_STARTUP_TIMEOUT_SECONDS = 5 * 60
+DEFAULT_MODAL_PROVIDER_TIMEOUT_SECONDS = 70 * 60
+SUPPORTED_TASK_SCHEMA_VERSION = 2
 
 
 class RuntimeSettings(BaseModel):
@@ -32,6 +41,21 @@ class RuntimeSettings(BaseModel):
     max_base_ref_chars: int = Field(default=DEFAULT_MAX_BASE_REF_CHARS, ge=1)
     max_idempotency_key_chars: int = Field(
         default=DEFAULT_MAX_IDEMPOTENCY_KEY_CHARS, ge=1
+    )
+    modal_app_name: str = DEFAULT_MODAL_APP_NAME
+    modal_deployment: str = DEFAULT_MODAL_DEPLOYMENT
+    modal_image_name: str = DEFAULT_MODAL_IMAGE_NAME
+    modal_cpu_request: float = Field(default=DEFAULT_MODAL_CPU_REQUEST, gt=0)
+    modal_cpu_limit: float = Field(default=DEFAULT_MODAL_CPU_LIMIT, gt=0)
+    modal_memory_request_mib: int = Field(
+        default=DEFAULT_MODAL_MEMORY_REQUEST_MIB, ge=1
+    )
+    modal_memory_limit_mib: int = Field(default=DEFAULT_MODAL_MEMORY_LIMIT_MIB, ge=1)
+    modal_startup_timeout_seconds: int = Field(
+        default=DEFAULT_MODAL_STARTUP_TIMEOUT_SECONDS, ge=1
+    )
+    modal_provider_timeout_seconds: int = Field(
+        default=DEFAULT_MODAL_PROVIDER_TIMEOUT_SECONDS, ge=1, le=24 * 60 * 60
     )
 
     @field_validator("api_key")
@@ -70,6 +94,32 @@ class RuntimeSettings(BaseModel):
             if stripped and stripped not in normalized:
                 normalized.append(stripped)
         return tuple(normalized)
+
+    @field_validator("modal_app_name", "modal_deployment", "modal_image_name")
+    @classmethod
+    def validate_modal_names(cls, value: str) -> str:
+        if not value.strip() or value != value.strip():
+            raise ValueError("Modal names must be non-empty without surrounding spaces")
+        return value
+
+    @field_validator("modal_cpu_limit")
+    @classmethod
+    def validate_cpu_limit(cls, value: float, info: ValidationInfo) -> float:
+        # Pydantic validates fields in declaration order, so the request is available.
+        request = info.data.get("modal_cpu_request")
+        if request is not None and value < request:
+            raise ValueError("modal_cpu_limit must be at least modal_cpu_request")
+        return value
+
+    @field_validator("modal_memory_limit_mib")
+    @classmethod
+    def validate_memory_limit(cls, value: int, info: ValidationInfo) -> int:
+        request = info.data.get("modal_memory_request_mib")
+        if request is not None and value < request:
+            raise ValueError(
+                "modal_memory_limit_mib must be at least modal_memory_request_mib"
+            )
+        return value
 
 
 # Turn GG_RUNTIME_PORT into an int, or use 8001 if unset.
@@ -130,5 +180,29 @@ def load_settings() -> RuntimeSettings:
         max_idempotency_key_chars=_parse_int(
             os.getenv("GG_MAX_IDEMPOTENCY_KEY_CHARS"),
             DEFAULT_MAX_IDEMPOTENCY_KEY_CHARS,
+        ),
+        modal_app_name=os.getenv("GG_MODAL_APP_NAME", DEFAULT_MODAL_APP_NAME),
+        modal_deployment=os.getenv("GG_MODAL_DEPLOYMENT", DEFAULT_MODAL_DEPLOYMENT),
+        modal_image_name=os.getenv("GG_MODAL_IMAGE_NAME", DEFAULT_MODAL_IMAGE_NAME),
+        modal_cpu_request=float(
+            os.getenv("GG_MODAL_CPU_REQUEST", str(DEFAULT_MODAL_CPU_REQUEST))
+        ),
+        modal_cpu_limit=float(
+            os.getenv("GG_MODAL_CPU_LIMIT", str(DEFAULT_MODAL_CPU_LIMIT))
+        ),
+        modal_memory_request_mib=_parse_int(
+            os.getenv("GG_MODAL_MEMORY_REQUEST_MIB"),
+            DEFAULT_MODAL_MEMORY_REQUEST_MIB,
+        ),
+        modal_memory_limit_mib=_parse_int(
+            os.getenv("GG_MODAL_MEMORY_LIMIT_MIB"), DEFAULT_MODAL_MEMORY_LIMIT_MIB
+        ),
+        modal_startup_timeout_seconds=_parse_int(
+            os.getenv("GG_MODAL_STARTUP_TIMEOUT_SECONDS"),
+            DEFAULT_MODAL_STARTUP_TIMEOUT_SECONDS,
+        ),
+        modal_provider_timeout_seconds=_parse_int(
+            os.getenv("GG_MODAL_PROVIDER_TIMEOUT_SECONDS"),
+            DEFAULT_MODAL_PROVIDER_TIMEOUT_SECONDS,
         ),
     )

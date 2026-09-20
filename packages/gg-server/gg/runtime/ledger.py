@@ -12,9 +12,12 @@ inside the same transaction that inserts the row.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,7 +27,47 @@ from gg.sdk.tasks import TaskRecord, TaskState
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSION = 2
+
+
+class SandboxProviderState(StrEnum):
+    """Provider state as last established by a provider operation."""
+
+    CREATING = "creating"
+    RUNNING = "running"
+    STOPPED = "stopped"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class SandboxCreationRecord:
+    """Private durable intent and ownership record for one task sandbox."""
+
+    task_id: str
+    deployment: str
+    sandbox_name: str
+    tags_json: str
+    session_api_key: str
+    provider_id: str | None
+    provider_state: SandboxProviderState
+    detail: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+def _row_to_sandbox_record(row: sqlite3.Row) -> SandboxCreationRecord:
+    return SandboxCreationRecord(
+        task_id=row["task_id"],
+        deployment=row["deployment"],
+        sandbox_name=row["sandbox_name"],
+        tags_json=row["tags_json"],
+        session_api_key=row["session_api_key"],
+        provider_id=row["provider_id"],
+        provider_state=SandboxProviderState(row["provider_state"]),
+        detail=row["detail"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
 
 
 def _utcnow_iso() -> str:
@@ -70,6 +113,10 @@ class TaskLedger:
         conn = sqlite3.connect(
             self._db_path, isolation_level=None, check_same_thread=False
         )
+        if self._db_path != ":memory:":
+            # The v2 ledger contains sandbox session credentials; keep the
+            # control-plane database private even under a permissive umask.
+            os.chmod(self._db_path, 0o600)
         conn.row_factory = sqlite3.Row
         # WAL improves crash safety and allows readers during writes.
         try:
@@ -141,11 +188,60 @@ class TaskLedger:
                 )
             else:
                 actual = int(row["value"])
-                if actual != self._expected_schema_version:
+                if actual > self._expected_schema_version:
                     raise RuntimeError(
                         f"unsupported task ledger schema version {actual}; "
                         f"this runtime supports {self._expected_schema_version}"
                     )
+                if actual < 1:
+                    raise RuntimeError(
+                        f"unsupported task ledger schema version {actual}"
+                    )
+
+            actual = int(
+                self._conn.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()["value"]
+            )
+            if actual < 2 <= self._expected_schema_version:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._create_sandbox_schema()
+                    self._conn.execute(
+                        "UPDATE schema_meta SET value = '2' "
+                        "WHERE key = 'schema_version'"
+                    )
+                    self._conn.execute("COMMIT")
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+
+            if self._expected_schema_version >= 2:
+                self._create_sandbox_schema()
+
+    def _create_sandbox_schema(self) -> None:
+        assert self._conn is not None
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sandbox_creations (
+                task_id TEXT PRIMARY KEY,
+                deployment TEXT NOT NULL,
+                sandbox_name TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                session_api_key TEXT NOT NULL,
+                provider_id TEXT,
+                provider_state TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+            """
+        )
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sandbox_name "
+            "ON sandbox_creations(deployment, sandbox_name)"
+        )
 
     # Atomically insert a new queued task or return an existing one by
     # idempotency key. Returns (record, created) where created is False when
@@ -234,5 +330,107 @@ class TaskLedger:
             rows = self._conn.execute("SELECT * FROM tasks ORDER BY seq ASC").fetchall()
         return [_row_to_record(row) for row in rows]
 
+    def begin_sandbox_creation(
+        self,
+        *,
+        task_id: str,
+        deployment: str,
+        sandbox_name: str,
+        tags_json: str,
+        session_api_key: str,
+    ) -> tuple[SandboxCreationRecord, bool]:
+        """Persist creation intent before any provider call."""
 
-__all__ = ["SUPPORTED_SCHEMA_VERSION", "TaskLedger"]
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._conn.execute(
+                    "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                if existing is not None:
+                    self._conn.execute("COMMIT")
+                    return _row_to_sandbox_record(existing), False
+                now = _utcnow_iso()
+                self._conn.execute(
+                    """
+                    INSERT INTO sandbox_creations (
+                        task_id, deployment, sandbox_name, tags_json,
+                        session_api_key, provider_id, provider_state, detail,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        deployment,
+                        sandbox_name,
+                        tags_json,
+                        session_api_key,
+                        SandboxProviderState.CREATING.value,
+                        now,
+                        now,
+                    ),
+                )
+                row = self._conn.execute(
+                    "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return _row_to_sandbox_record(row), True
+
+    def get_sandbox_creation(self, task_id: str) -> SandboxCreationRecord | None:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return _row_to_sandbox_record(row) if row is not None else None
+
+    def update_sandbox_creation(
+        self,
+        task_id: str,
+        *,
+        provider_id: str | None = None,
+        provider_state: SandboxProviderState,
+        detail: str | None = None,
+    ) -> SandboxCreationRecord:
+        """Record provider identity/state without exposing stored credentials."""
+
+        assert self._conn is not None
+        with self._lock:
+            now = _utcnow_iso()
+            if provider_id is None:
+                self._conn.execute(
+                    """
+                    UPDATE sandbox_creations
+                    SET provider_state = ?, detail = ?, updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (provider_state.value, detail, now, task_id),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    UPDATE sandbox_creations
+                    SET provider_id = ?, provider_state = ?, detail = ?, updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (provider_id, provider_state.value, detail, now, task_id),
+                )
+            row = self._conn.execute(
+                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"no sandbox creation intent for task {task_id}")
+        return _row_to_sandbox_record(row)
+
+
+__all__ = [
+    "SUPPORTED_SCHEMA_VERSION",
+    "SandboxCreationRecord",
+    "SandboxProviderState",
+    "TaskLedger",
+]

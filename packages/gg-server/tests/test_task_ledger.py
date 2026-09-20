@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import stat
 
 import pytest
 
@@ -90,6 +91,35 @@ def test_ledger_rejects_unsupported_future_schema(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="unsupported task ledger schema version"):
         TaskLedger(db_path=db_path, schema_version=SUPPORTED_SCHEMA_VERSION).open()
+
+
+def test_ledger_migrates_v1_to_private_sandbox_intents(tmp_path) -> None:
+    db_path = str(tmp_path / "tasks.sqlite")
+    with TaskLedger(db_path=db_path, schema_version=1) as old_ledger:
+        task, _ = _submit(old_ledger, key="k1")
+
+    with TaskLedger(db_path=db_path) as migrated:
+        record, created = migrated.begin_sandbox_creation(
+            task_id=task.id,
+            deployment="production",
+            sandbox_name="gg-production-task",
+            tags_json='{"gg_task_id":"task"}',
+            session_api_key="private-key",
+        )
+
+    assert created is True
+    assert record.provider_state.value == "creating"
+    assert record.provider_id is None
+
+
+def test_ledger_file_is_private_because_it_contains_sandbox_credentials(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "tasks.sqlite"
+    with TaskLedger(db_path=str(db_path)):
+        pass
+
+    assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
 
 
 def test_ledger_get_returns_none_for_unknown_id(tmp_path) -> None:
