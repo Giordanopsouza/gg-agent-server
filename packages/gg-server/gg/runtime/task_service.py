@@ -57,6 +57,12 @@ class TaskService:
             raise TaskValidationError(
                 f"repository {request.repository!r} is not on the allowlist"
             )
+        if self._settings.repository_profiles:
+            known = {profile.repository for profile in self._settings.repository_profiles}
+            if request.repository not in known:
+                raise TaskValidationError(
+                    f"repository {request.repository!r} has no configured profile"
+                )
         if not request.prompt.strip():
             raise TaskValidationError("prompt must be non-empty")
         if len(request.prompt) > self._settings.max_prompt_chars:

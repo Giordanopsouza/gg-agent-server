@@ -15,11 +15,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
+
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_CONVERSATIONS_DIR = Path("workspace/conversations")
 DEFAULT_WORKSPACE_DIR = Path("workspace/project")
+DEFAULT_TASK_SUPERVISOR_DIR = Path("workspace/task-supervisor")
 
 
 class Settings(BaseModel):
@@ -32,6 +35,10 @@ class Settings(BaseModel):
     port: int = DEFAULT_PORT
     conversations_dir: Path = DEFAULT_CONVERSATIONS_DIR
     workspace_dir: Path = DEFAULT_WORKSPACE_DIR
+    task_supervisor_dir: Path = DEFAULT_TASK_SUPERVISOR_DIR
+    repository_profiles: tuple[RepositoryProfile, ...] = Field(default_factory=tuple)
+    github_clone_token: str | None = None
+    process_env: dict[str, str] = Field(default_factory=dict)
     # - # Empty list means an open server (no auth). See task 010 for enforcement.
     session_api_keys: list[str] = Field(default_factory=list)
 
@@ -80,7 +87,31 @@ def _load_settings() -> Settings:
     if (workspace_dir := os.getenv("GG_WORKSPACE_DIR")) :
         data["workspace_dir"] = Path(workspace_dir)
 
+    if (supervisor_dir := os.getenv("GG_TASK_SUPERVISOR_DIR")) :
+        data["task_supervisor_dir"] = Path(supervisor_dir)
+
+    profiles_path = os.getenv("GG_REPOSITORY_PROFILES_PATH")
+    if profiles_path is not None and profiles_path.strip():
+        data["repository_profiles"] = load_repository_profiles(profiles_path)
+    profiles_json = os.getenv("GG_REPOSITORY_PROFILES_JSON")
+    if profiles_json is not None and profiles_json.strip():
+        import json
+
+        payload = json.loads(profiles_json)
+        data["repository_profiles"] = tuple(
+            RepositoryProfile.model_validate(item) for item in payload
+        )
+
+    if (token := os.getenv("GG_GITHUB_CLONE_TOKEN")) :
+        stripped = token.strip()
+        if stripped:
+            data["github_clone_token"] = stripped
+
     data["session_api_keys"] = _parse_session_api_keys(os.getenv("GG_SESSION_API_KEYS"))
+
+    process_env = dict(os.environ)
+    process_env.pop("GH_TOKEN", None)
+    data["process_env"] = process_env
 
     try:
         return Settings.model_validate(data)

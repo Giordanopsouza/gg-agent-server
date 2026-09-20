@@ -67,6 +67,7 @@ class Provider(Protocol):
         name: str,
         tags: dict[str, str],
         session_api_key: str,
+        sandbox_env: dict[str, str],
         cpu: tuple[float, float],
         memory: tuple[int, int],
         startup_timeout: int,
@@ -133,7 +134,7 @@ class ModalProvider:
             image=image,
             name=kwargs["name"],
             tags=kwargs["tags"],
-            env={"GG_SESSION_API_KEYS": kwargs["session_api_key"]},
+            env=kwargs["sandbox_env"],
             cpu=kwargs["cpu"],
             memory=kwargs["memory"],
             timeout=kwargs["provider_timeout"],
@@ -253,10 +254,12 @@ class ModalSandboxLifecycle:
         memory: tuple[int, int] = DEFAULT_MEMORY,
         startup_timeout: int = DEFAULT_STARTUP_TIMEOUT_SECONDS,
         provider_timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        sandbox_env: dict[str, str] | None = None,
     ) -> None:
         self._ledger = ledger
         self._provider = provider
         self._deployment = deployment
+        self._sandbox_env = sandbox_env or {}
         self._cpu = cpu
         self._memory = memory
         self._startup_timeout = startup_timeout
@@ -285,10 +288,13 @@ class ModalSandboxLifecycle:
             # intent has no provider resource, so retrying creation is safe.
 
         try:
+            env = dict(self._sandbox_env)
+            env["GG_SESSION_API_KEYS"] = record.session_api_key
             handle = await self._provider.create(
                 name=record.sandbox_name,
                 tags=json.loads(record.tags_json),
                 session_api_key=record.session_api_key,
+                sandbox_env=env,
                 cpu=self._cpu,
                 memory=self._memory,
                 startup_timeout=self._startup_timeout,
@@ -509,6 +515,21 @@ class ModalSandboxLifecycle:
         )
 
 
+def sandbox_env_from_settings(settings: RuntimeSettings) -> dict[str, str]:
+    """Build non-session environment variables forwarded into each sandbox."""
+
+    env: dict[str, str] = {}
+    if settings.github_clone_token:
+        env["GG_GITHUB_CLONE_TOKEN"] = settings.github_clone_token
+    if settings.openrouter_api_key:
+        env["OPENROUTER_API_KEY"] = settings.openrouter_api_key
+    if settings.repository_profiles:
+        env["GG_REPOSITORY_PROFILES_JSON"] = json.dumps(
+            [profile.model_dump() for profile in settings.repository_profiles]
+        )
+    return env
+
+
 def lifecycle_from_settings(
     *,
     ledger: TaskLedger,
@@ -532,6 +553,7 @@ def lifecycle_from_settings(
         ),
         startup_timeout=settings.modal_startup_timeout_seconds,
         provider_timeout=settings.modal_provider_timeout_seconds,
+        sandbox_env=sandbox_env_from_settings(settings),
     )
 
 
@@ -550,4 +572,5 @@ __all__ = [
     "SandboxNotFoundError",
     "SandboxSnapshot",
     "lifecycle_from_settings",
+    "sandbox_env_from_settings",
 ]

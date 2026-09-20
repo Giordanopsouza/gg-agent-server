@@ -393,6 +393,7 @@ async def test_concrete_modal_provider_uses_standard_sandbox_arguments(
         name="gg-production-task",
         tags={"gg_task_id": "task-1"},
         session_api_key="session-secret",
+        sandbox_env={"GG_SESSION_API_KEYS": "session-secret"},
         cpu=(2.0, 2.0),
         memory=(4096, 4096),
         startup_timeout=300,

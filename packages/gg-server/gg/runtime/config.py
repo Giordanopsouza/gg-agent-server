@@ -6,6 +6,8 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
+from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
+
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8001
@@ -39,6 +41,9 @@ class RuntimeSettings(BaseModel):
     image: str = DEFAULT_IMAGE
     task_db_path: str = DEFAULT_TASK_DB_PATH
     repository_allowlist: tuple[str, ...] = Field(default_factory=tuple)
+    repository_profiles: tuple[RepositoryProfile, ...] = Field(default_factory=tuple)
+    github_clone_token: str | None = None
+    openrouter_api_key: str | None = None
     max_prompt_chars: int = Field(default=DEFAULT_MAX_PROMPT_CHARS, ge=1)
     max_base_ref_chars: int = Field(default=DEFAULT_MAX_BASE_REF_CHARS, ge=1)
     max_idempotency_key_chars: int = Field(
@@ -159,6 +164,19 @@ def _parse_port(raw: str | None) -> int:
 
 
 # Turn a comma-separated env var into a tuple of repository names.
+def _optional_secret(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    return stripped or None
+
+
+def _load_repository_profiles(raw: str | None) -> tuple[RepositoryProfile, ...]:
+    if raw is None or not raw.strip():
+        return ()
+    return load_repository_profiles(raw)
+
+
 def _parse_allowlist(raw: str | None) -> tuple[str, ...]:
     if raw is None or not raw.strip():
         return ()
@@ -214,6 +232,11 @@ def load_settings() -> RuntimeSettings:
         image=image,
         task_db_path=os.getenv("GG_TASK_DB_PATH", DEFAULT_TASK_DB_PATH),
         repository_allowlist=_parse_allowlist(os.getenv("GG_REPOSITORY_ALLOWLIST")),
+        repository_profiles=_load_repository_profiles(
+            os.getenv("GG_REPOSITORY_PROFILES_PATH")
+        ),
+        github_clone_token=_optional_secret(os.getenv("GG_GITHUB_CLONE_TOKEN")),
+        openrouter_api_key=_optional_secret(os.getenv("OPENROUTER_API_KEY")),
         max_prompt_chars=_parse_int(
             os.getenv("GG_MAX_PROMPT_CHARS"), DEFAULT_MAX_PROMPT_CHARS
         ),

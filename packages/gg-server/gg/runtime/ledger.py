@@ -430,6 +430,30 @@ class TaskLedger:
         )
 
     # Return one task by id, or None.
+    def record_base_sha(self, task_id: str, base_sha: str) -> TaskRecord:
+        """Persist the resolved starting revision for one task."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                self._conn.execute(
+                    "UPDATE tasks SET base_sha = ?, updated_at = ? WHERE id = ?",
+                    (base_sha, now, task_id),
+                )
+                if self._conn.execute("SELECT changes()").fetchone()[0] != 1:
+                    raise KeyError(f"no task {task_id}")
+                row = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return _row_to_record(row)
+
     def get(self, task_id: str) -> TaskRecord | None:
         assert self._conn is not None
         with self._lock:

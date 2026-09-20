@@ -5,8 +5,10 @@ from fastapi import APIRouter
 
 from gg.server.conversation_routes import conversation_router
 from gg.server.event_routes import event_router
+from gg.server.task_supervisor.routes import task_supervisor_router
 
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(conversation_router)
 api_router.include_router(event_router)
+api_router.include_router(task_supervisor_router)

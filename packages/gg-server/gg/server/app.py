@@ -13,6 +13,7 @@ from gg.server.api import api_router
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
 from gg.server.dependencies import check_session_api_key
+from gg.server.task_supervisor.service import TaskSupervisorService
 from gg.server.websocket_routes import event_socket_router
 
 
@@ -20,13 +21,22 @@ from gg.server.websocket_routes import event_socket_router
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run startup work, then mark the app ready for traffic."""
     settings: Settings = app.state.settings
-    app.state.conversation_service = ConversationService(settings)
+    conversation_service = ConversationService(settings)
+    task_supervisor = TaskSupervisorService(
+        settings=settings,
+        conversation_service=conversation_service,
+    )
+    app.state.conversation_service = conversation_service
+    app.state.task_supervisor_service = task_supervisor
+    await task_supervisor.startup()
     ready_event: asyncio.Event = app.state.ready_event
     ready_event.set()
     try:
         yield
     finally:
         ready_event.clear()
+        await task_supervisor.shutdown()
+        app.state.task_supervisor_service = None
         app.state.conversation_service = None
 
 

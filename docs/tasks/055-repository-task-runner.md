@@ -1,7 +1,7 @@
 ---
 id: 055-repository-task-runner
 feature: modal-background-tasks
-status: pending
+status: in-progress
 depends_on: [051-modal-sandbox-lifecycle, 054-running-agent-messages-and-cancel]
 ---
 
@@ -9,7 +9,7 @@ depends_on: [051-modal-sandbox-lifecycle, 054-running-agent-messages-and-cancel]
 
 ## Migration preflight
 
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), the existing GitHub Docker demo, and tasks 052/056/057. Reuse Pi and conversation contracts, not the demo's prompt-controlled clone/publish flow. Production repository setup and test-result collection must be application code.
+Inspect [ADR 0001](../adr/0001-modal-background-tasks.md) and tasks 052/056/057
 
 ## Scope
 
@@ -41,3 +41,12 @@ The repository contract requires operator-configured checks rather than treating
 ### [Orchestrator] 2026-09-19 18:12 UTC — Approved plan recorded
 
 The user approved the feature plan and requested planning artifacts directly on `main`. Recorded as pending; implementation has not started.
+
+### [SWE] 2026-09-20 — Sandbox task supervisor and evidence manifest
+
+Added in-sandbox supervisor routes (`POST /api/task-executions/start`, execution
+and manifest reads), operator repository profiles, bounded bootstrap/check
+capture, git prep with resolved base SHA, idempotent execution persistence,
+control-plane `TaskSupervisorClient`, Modal sandbox env forwarding, and an
+opt-in repository-task demo module. Deterministic supervisor tests cover
+idempotent start, restart ownership loss, and explicit `no_changes` outcomes.
