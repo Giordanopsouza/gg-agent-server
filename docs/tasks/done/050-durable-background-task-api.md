@@ -1,7 +1,7 @@
 ---
 id: 050-durable-background-task-api
 feature: modal-background-tasks
-status: in-progress
+status: done
 depends_on: []
 ---
 
@@ -56,3 +56,7 @@ Surface shipped:
 Tests: `test_tasks.py`, `test_task_ledger.py` (FIFO, idempotent replay, restart persistence, sequence continuation, unsupported future schema, concurrent duplicate submissions), `test_task_api.py` (created/queued, idempotent 200, conflict 409, allowlist rejection, base-ref validation, FIFO list, get/404, auth, restart persistence), plus `test_runtime_config.py` additions. Full non-live suite: 226 passed. Boundary tests (`gg.sdk` and `gg.runtime` never import `gg.server`) remain green.
 
 Out of scope per task: dispatch, Modal, retry execution, and capacity reservation land in 051/052.
+
+### [PR Reviewer] 2026-09-20 12:51 UTC — Merged
+
+PR [#20](https://github.com/Giordanopsouza/gg-agent-server/pull/20) merged to `main` (merge commit `25e28f4`). All acceptance criteria checked; 226 non-live tests green; boundary tests green. Task archived to `docs/tasks/done/`.
