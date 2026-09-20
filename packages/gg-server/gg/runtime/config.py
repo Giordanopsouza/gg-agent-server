@@ -132,16 +132,6 @@ class RuntimeSettings(BaseModel):
             )
         return value
 
-    @field_validator("task_dispatch_enabled")
-    @classmethod
-    def reject_incomplete_production_dispatch(cls, value: bool) -> bool:
-        if value:
-            raise ValueError(
-                "production dispatch is unavailable until task 057 connects "
-                "supervision, finalization, evidence archival, and cleanup"
-            )
-        return value
-
     @field_validator("dispatch_lock_path")
     @classmethod
     def validate_dispatch_lock_path(cls, value: str | None) -> str | None:

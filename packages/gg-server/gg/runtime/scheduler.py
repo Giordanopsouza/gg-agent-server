@@ -1,8 +1,9 @@
 """Single-host FIFO reservation, recovery, and demo-only provisioning.
 
-Production admission is intentionally disabled until task 057 connects the
-real supervisor and finalization path. Recovery still runs at process startup
-so existing ownership remains visible and surviving sandboxes are adopted.
+Production admission provisions sandboxes and hands reserved tasks to the
+supervision manager for execution, finalization, archival, and cleanup.
+Recovery still runs at process startup so existing ownership remains visible
+and surviving sandboxes are adopted.
 """
 
 from __future__ import annotations
@@ -26,13 +27,8 @@ from gg.runtime.modal_sandbox import (
     ModalLifecycleError,
     ModalSandboxLifecycle,
 )
+from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.tasks import TaskState
-
-
-DISPATCH_DISABLED_REASON = (
-    "production dispatch is pending task 057 supervisor, finalization, "
-    "evidence archival, and cleanup wiring"
-)
 
 
 class DispatchLockError(RuntimeError):
@@ -111,6 +107,7 @@ class TaskScheduler:
         lock_path: str,
         admission_enabled: bool = False,
         poll_seconds: float = 1.0,
+        supervision: TaskSupervisionManager | None = None,
     ) -> None:
         if not 1 <= capacity <= 10:
             raise ValueError("scheduler capacity must be between 1 and 10")
@@ -119,6 +116,7 @@ class TaskScheduler:
         self._capacity = capacity
         self._admission_enabled = admission_enabled
         self._poll_seconds = poll_seconds
+        self._supervision = supervision
         self._lock = DeploymentLock(lock_path)
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
@@ -194,6 +192,8 @@ class TaskScheduler:
             await self.reconcile()
             if not self._admission_enabled or self._stop.is_set():
                 return
+            if self._supervision is not None:
+                await self._supervision.sync_reserved_tasks()
             # Resume reservations that crashed before a provider identity was
             # established before admitting any additional queued work.
             for reservation in self._ledger.list_reservations():
@@ -358,15 +358,12 @@ class TaskScheduler:
             capacity=self._capacity,
             reserved=len(reservations),
             pending=pending,
-            disabled_reason=None
-            if self._admission_enabled
-            else DISPATCH_DISABLED_REASON,
+            disabled_reason=None if self._admission_enabled else "dispatch disabled",
             conditions=conditions,
         )
 
 
 __all__ = [
-    "DISPATCH_DISABLED_REASON",
     "DeploymentLock",
     "DispatchCondition",
     "DispatchLockError",

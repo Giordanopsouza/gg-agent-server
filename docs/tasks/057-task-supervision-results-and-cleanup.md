@@ -1,7 +1,7 @@
 ---
 id: 057-task-supervision-results-and-cleanup
 feature: modal-background-tasks
-status: pending
+status: in-progress
 depends_on: [052-fifo-dispatch-and-recovery, 056-idempotent-draft-pr-publication]
 ---
 
@@ -43,3 +43,12 @@ This slice joins the independently proven components into the complete API workf
 ### [Orchestrator] 2026-09-19 18:12 UTC — Approved plan recorded
 
 The user approved the feature plan and requested planning artifacts directly on `main`. Recorded as pending; implementation has not started.
+
+### [SWE] 2026-09-20 — Control-plane supervision wired
+
+Added ledger schema v5 (supervision identity, event copies, message receipts,
+archived results), `TaskSupervisionManager` (start/resume execution, event sync,
+message settlement, finalization, optional publication, cleanup), authenticated
+task routes (`events`, `messages`, `cancel`, `result`, `retry`, live WebSocket),
+production dispatch enablement, and integration tests for no-change completion
+and idempotent queued cancel.

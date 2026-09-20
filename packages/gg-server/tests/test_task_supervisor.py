@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import subprocess
 import time
@@ -52,7 +51,14 @@ raise SystemExit(0)
 for raw in sys.stdin.buffer:
     command = json.loads(raw)
     if command["type"] == "abort":
-        send({"id": command["id"], "type": "response", "command": "abort", "success": True})
+        send(
+            {
+                "id": command["id"],
+                "type": "response",
+                "command": "abort",
+                "success": True,
+            }
+        )
         record_path.write_text(json.dumps(state), encoding="utf-8")
         break
 """
@@ -90,7 +96,9 @@ def bare_repo(tmp_path: Path) -> Path:
         check=True,
         env=_git_env(),
     )
-    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=work, check=True, env=_git_env())
+    subprocess.run(
+        ["git", "push", "-u", "origin", "main"], cwd=work, check=True, env=_git_env()
+    )
     return repo
 
 
@@ -173,8 +181,12 @@ async def test_start_is_idempotent_and_runs_agent_once(
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         async with app.router.lifespan_context(app):
-            first = await client.post("/api/task-executions/start", json=_start_payload())
-            second = await client.post("/api/task-executions/start", json=_start_payload())
+            first = await client.post(
+                "/api/task-executions/start", json=_start_payload()
+            )
+            second = await client.post(
+                "/api/task-executions/start", json=_start_payload()
+            )
             assert first.status_code == 202
             assert second.status_code == 200
             assert first.json()["execution_id"] == second.json()["execution_id"]
@@ -218,17 +230,23 @@ async def test_restart_marks_lost_execution_failed_without_second_agent(
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         async with app.router.lifespan_context(app):
-            started = await client.post("/api/task-executions/start", json=_start_payload())
+            started = await client.post(
+                "/api/task-executions/start", json=_start_payload()
+            )
             execution_id = started.json()["execution_id"]
             await asyncio.sleep(0.2)
 
     app2 = create_app(settings)
     transport2 = ASGITransport(app=app2)
-    async with httpx.AsyncClient(transport=transport2, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport2, base_url="http://test"
+    ) as client:
         async with app2.router.lifespan_context(app2):
             record = await client.get(f"/api/task-executions/{execution_id}")
             assert record.json()["phase"] == TaskExecutionPhase.FAILED.value
-            replay = await client.post("/api/task-executions/start", json=_start_payload())
+            replay = await client.post(
+                "/api/task-executions/start", json=_start_payload()
+            )
             assert replay.status_code == 200
             assert replay.json()["execution_id"] == execution_id
             assert replay.json()["phase"] == TaskExecutionPhase.FAILED.value
@@ -256,7 +274,9 @@ async def test_no_changes_result(
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         async with app.router.lifespan_context(app):
-            started = await client.post("/api/task-executions/start", json=_start_payload())
+            started = await client.post(
+                "/api/task-executions/start", json=_start_payload()
+            )
             execution_id = started.json()["execution_id"]
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -267,9 +287,7 @@ async def test_no_changes_result(
                 }:
                     break
                 await asyncio.sleep(0.05)
-            manifest = await client.get(
-                f"/api/task-executions/{execution_id}/manifest"
-            )
+            manifest = await client.get(f"/api/task-executions/{execution_id}/manifest")
             body = manifest.json()
             assert body["agent_outcome"] == AgentOutcome.NO_CHANGES.value
             assert body["check_outcome"] == CheckOutcome.NOT_RUN.value
