@@ -1235,7 +1235,7 @@ class TaskLedger:
                 ).fetchone()
                 if existing is not None:
                     self._conn.execute("COMMIT")
-                    return int(existing["cursor_seq"])
+                    return None
                 next_row = self._conn.execute(
                     """
                     SELECT COALESCE(MAX(cursor_seq), 0) + 1 AS next_cursor
