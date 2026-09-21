@@ -1,0 +1,24 @@
+[Unit]
+Description=gg Modal background-task control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gg
+Group=gg
+EnvironmentFile=/etc/gg/runtime.env
+WorkingDirectory=/var/lib/gg
+ExecStart=/usr/local/bin/uv run --no-editable python -m gg.runtime --host 127.0.0.1 --port 8001
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+KillSignal=SIGTERM
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gg /var/lib/gg/evidence
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

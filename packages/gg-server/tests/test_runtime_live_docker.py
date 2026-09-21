@@ -28,9 +28,7 @@ async def test_runtime_controls_live_agent_server_container() -> None:
             assert started.status_code == 201
             session_id = started.json()["id"]
 
-            running = await client.get(
-                f"/sessions/{session_id}", headers=headers
-            )
+            running = await client.get(f"/sessions/{session_id}", headers=headers)
             assert running.json()["status"] == "running"
 
             stopped = await client.post(

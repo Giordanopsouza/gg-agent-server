@@ -1,4 +1,5 @@
 """FastAPI application factory and health routes."""
+
 from __future__ import annotations
 
 import asyncio

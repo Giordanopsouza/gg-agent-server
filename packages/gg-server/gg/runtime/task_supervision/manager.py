@@ -13,6 +13,7 @@ from typing import Protocol
 
 import httpx
 
+from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import (
     ReservationPhase,
     SandboxProviderState,
@@ -22,6 +23,12 @@ from gg.runtime.ledger import (
 )
 from gg.runtime.modal_sandbox import ModalLifecycleError, ModalSandboxLifecycle
 from gg.runtime.repo_prep import prepare_repo_from_manifest
+from gg.runtime.storage import (
+    StorageLimits,
+    measure_task_evidence,
+    truncate_event_json,
+    truncate_manifest,
+)
 from gg.runtime.task_supervisor_client import TaskSupervisorClient
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.publication import PublicationRequest
@@ -62,13 +69,18 @@ class TaskSupervisionManager:
         *,
         ledger: TaskLedger,
         lifecycle: ModalSandboxLifecycle,
-        settings: object,
+        settings: RuntimeSettings | object,
         publisher: PublicationPort | None = None,
         callbacks: SupervisionCallbacks | None = None,
     ) -> None:
         self._ledger = ledger
         self._lifecycle = lifecycle
         self._settings = settings
+        self._storage_limits = (
+            StorageLimits.from_settings(settings)
+            if isinstance(settings, RuntimeSettings)
+            else None
+        )
         self._publisher = publisher
         self._callbacks = callbacks or SupervisionCallbacks()
         self._loops: dict[str, asyncio.Task[None]] = {}
@@ -358,11 +370,20 @@ class TaskSupervisionManager:
         response.raise_for_status()
         for payload in response.json():
             event = Event.model_validate(payload)
+            event_json = event.model_dump_json()
+            if self._storage_limits is not None:
+                evidence = measure_task_evidence(self._ledger, task_id)
+                event_json, _ = truncate_event_json(
+                    event,
+                    max_task_log_bytes=self._storage_limits.max_log_evidence_bytes,
+                    current_log_bytes=evidence.log_bytes,
+                )
             cursor = self._ledger.copy_task_event(
                 task_id=task_id,
                 source_id=conversation_id,
                 source_seq=event.seq,
                 event=event,
+                event_json=event_json,
             )
             if cursor is None:
                 continue
@@ -444,6 +465,11 @@ class TaskSupervisionManager:
         manifest = await _fetch_manifest_with_retries(
             client, supervision.execution_id, budget=DEFAULT_CLEANUP_BUDGET
         )
+        if manifest is not None and self._storage_limits is not None:
+            manifest, _ = truncate_manifest(
+                manifest,
+                max_bytes=self._storage_limits.max_artifact_bytes,
+            )
         evidence_complete = manifest is not None
         evidence_detail = None if evidence_complete else "manifest archival incomplete"
         archive = self._ledger.archive_task_result(

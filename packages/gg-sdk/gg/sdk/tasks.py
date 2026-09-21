@@ -64,6 +64,7 @@ class TaskRecord(BaseModel):
     outcome_detail: str | None = None
     check_status: str | None = None
     sandbox_cleanup_status: str | None = None
+    payload_expired: bool = False
 
 
 __all__ = ["CreateTaskRequest", "TaskRecord", "TaskState"]

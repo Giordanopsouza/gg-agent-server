@@ -149,9 +149,7 @@ async def test_pi_run_persists_and_lists_translated_events(
 
             stream.subscribe(capture)
             ran = await client.post(f"/api/conversations/{conversation_id}/run")
-            listed = await client.get(
-                f"/api/conversations/{conversation_id}/events"
-            )
+            listed = await client.get(f"/api/conversations/{conversation_id}/events")
 
     assert ran.status_code == 200
     assert ran.json()["status"] == ConversationStatus.FINISHED
@@ -216,9 +214,7 @@ async def test_pi_failure_returns_502_persists_error_and_publishes_events(
             stream.subscribe(capture)
             ran = await client.post(f"/api/conversations/{conversation_id}/run")
             record = await client.get(f"/api/conversations/{conversation_id}")
-            listed = await client.get(
-                f"/api/conversations/{conversation_id}/events"
-            )
+            listed = await client.get(f"/api/conversations/{conversation_id}/events")
 
     assert ran.status_code == 502
     assert record.json()["status"] == ConversationStatus.ERROR

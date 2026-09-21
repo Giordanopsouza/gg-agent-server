@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from gg.runtime.scheduler import DispatchStatus, TaskScheduler
 from gg.runtime.task_service import (
+    StoragePressureError,
     TaskConflictError,
     TaskControlError,
     TaskService,
@@ -69,6 +70,11 @@ def submit_task(
     except TaskValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except StoragePressureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
     if created:

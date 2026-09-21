@@ -10,7 +10,15 @@ from typing import Literal, Protocol
 from uuid import uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    status,
+)
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
@@ -19,7 +27,9 @@ from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
 from gg.runtime.publication import BotIdentity, DraftPublisher
+from gg.runtime.readiness import readiness_from_scheduler
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
+from gg.runtime.storage import StorageLimits
 from gg.runtime.task_routes import event_socket_router, router as task_router
 from gg.runtime.task_service import TaskService
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
@@ -253,6 +263,7 @@ def create_app(
         settings=settings,
         publisher=publisher,
     )
+    storage_limits = StorageLimits.from_settings(settings)
     scheduler = task_scheduler or TaskScheduler(
         ledger=ledger,
         lifecycle=lifecycle,
@@ -265,6 +276,8 @@ def create_app(
         admission_enabled=settings.task_dispatch_enabled,
         poll_seconds=settings.dispatch_poll_seconds,
         supervision=supervision,
+        storage_limits=storage_limits,
+        task_db_path=settings.task_db_path,
     )
 
     # The durable scheduler detaches Modal sandboxes on shutdown. The legacy
@@ -291,6 +304,30 @@ def create_app(
     app.state.task_service = task_service
     app.state.task_scheduler = scheduler
     app.state.task_supervision = supervision
+    app.state.storage_limits = storage_limits
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get(
+        "/ready",
+        dependencies=[Depends(_check_api_key)],
+    )
+    def ready(
+        response: Response,
+        request: Request,
+    ) -> dict[str, object]:
+        scheduler: TaskScheduler = request.app.state.task_scheduler
+        ledger: TaskLedger = request.app.state.task_ledger
+        report = readiness_from_scheduler(
+            scheduler,
+            database_available=ledger.ping_database(),
+        )
+        if report.status != "ready":
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return report.model_dump(mode="json")
+
     app.include_router(task_router, dependencies=[Depends(_check_api_key)])
     app.include_router(
         event_socket_router, dependencies=[Depends(_check_socket_api_key)]

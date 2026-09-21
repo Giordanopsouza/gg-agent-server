@@ -32,9 +32,7 @@ def test_launcher_uses_image_and_session_key_then_owns_cleanup(
     FakeDockerWorkspace.instances.clear()
     monkeypatch.setattr(runtime_app, "DockerWorkspace", FakeDockerWorkspace)
 
-    sandbox = DockerSandboxLauncher(image="gg-agent-server:dev").start(
-        "sandbox-secret"
-    )
+    sandbox = DockerSandboxLauncher(image="gg-agent-server:dev").start("sandbox-secret")
     workspace = FakeDockerWorkspace.instances[0]
 
     assert workspace.kwargs == {

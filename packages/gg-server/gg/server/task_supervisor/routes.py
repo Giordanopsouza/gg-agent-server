@@ -32,10 +32,10 @@ async def start_task_execution(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    response.status_code = (
-        status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK
-    )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
+    response.status_code = status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK
     return record
 
 

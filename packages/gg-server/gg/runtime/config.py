@@ -27,6 +27,12 @@ DEFAULT_MODAL_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_MODAL_PROVIDER_TIMEOUT_SECONDS = 70 * 60
 DEFAULT_TASK_CAPACITY = 10
 DEFAULT_DISPATCH_POLL_SECONDS = 1.0
+DEFAULT_TERMINAL_RETENTION_DAYS = 7
+DEFAULT_TOMBSTONE_RETENTION_DAYS = 90
+DEFAULT_MAX_LOG_EVIDENCE_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_TOTAL_EVIDENCE_BYTES = 5 * 1024 * 1024 * 1024
+DEFAULT_MIN_FREE_DISK_BYTES = 1024 * 1024 * 1024
 SUPPORTED_TASK_SCHEMA_VERSION = 3
 
 
@@ -68,6 +74,17 @@ class RuntimeSettings(BaseModel):
     dispatch_poll_seconds: float = Field(default=DEFAULT_DISPATCH_POLL_SECONDS, gt=0)
     task_dispatch_enabled: bool = False
     dispatch_lock_path: str | None = None
+    task_evidence_dir: str | None = None
+    terminal_retention_days: int = Field(default=DEFAULT_TERMINAL_RETENTION_DAYS, ge=1)
+    tombstone_retention_days: int = Field(
+        default=DEFAULT_TOMBSTONE_RETENTION_DAYS, ge=1
+    )
+    max_log_evidence_bytes: int = Field(default=DEFAULT_MAX_LOG_EVIDENCE_BYTES, ge=1024)
+    max_artifact_bytes: int = Field(default=DEFAULT_MAX_ARTIFACT_BYTES, ge=1024)
+    max_total_evidence_bytes: int = Field(
+        default=DEFAULT_MAX_TOTAL_EVIDENCE_BYTES, ge=1024
+    )
+    min_free_disk_bytes: int = Field(default=DEFAULT_MIN_FREE_DISK_BYTES, ge=0)
 
     @field_validator("api_key")
     @classmethod
@@ -137,6 +154,23 @@ class RuntimeSettings(BaseModel):
     def validate_dispatch_lock_path(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
             raise ValueError("dispatch_lock_path must be non-empty when provided")
+        return value
+
+    @field_validator("task_evidence_dir")
+    @classmethod
+    def validate_task_evidence_dir(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("task_evidence_dir must be non-empty when provided")
+        return value
+
+    @field_validator("tombstone_retention_days")
+    @classmethod
+    def validate_tombstone_retention(cls, value: int, info: ValidationInfo) -> int:
+        terminal = info.data.get("terminal_retention_days")
+        if terminal is not None and value < terminal:
+            raise ValueError(
+                "tombstone_retention_days must be at least terminal_retention_days"
+            )
         return value
 
 
@@ -267,4 +301,24 @@ def load_settings() -> RuntimeSettings:
         ),
         task_dispatch_enabled=_parse_bool(os.getenv("GG_TASK_DISPATCH_ENABLED")),
         dispatch_lock_path=os.getenv("GG_DISPATCH_LOCK_PATH"),
+        task_evidence_dir=os.getenv("GG_TASK_EVIDENCE_DIR"),
+        terminal_retention_days=_parse_int(
+            os.getenv("GG_TERMINAL_RETENTION_DAYS"), DEFAULT_TERMINAL_RETENTION_DAYS
+        ),
+        tombstone_retention_days=_parse_int(
+            os.getenv("GG_TOMBSTONE_RETENTION_DAYS"), DEFAULT_TOMBSTONE_RETENTION_DAYS
+        ),
+        max_log_evidence_bytes=_parse_int(
+            os.getenv("GG_MAX_LOG_EVIDENCE_BYTES"), DEFAULT_MAX_LOG_EVIDENCE_BYTES
+        ),
+        max_artifact_bytes=_parse_int(
+            os.getenv("GG_MAX_ARTIFACT_BYTES"), DEFAULT_MAX_ARTIFACT_BYTES
+        ),
+        max_total_evidence_bytes=_parse_int(
+            os.getenv("GG_MAX_TOTAL_EVIDENCE_BYTES"),
+            DEFAULT_MAX_TOTAL_EVIDENCE_BYTES,
+        ),
+        min_free_disk_bytes=_parse_int(
+            os.getenv("GG_MIN_FREE_DISK_BYTES"), DEFAULT_MIN_FREE_DISK_BYTES
+        ),
     )

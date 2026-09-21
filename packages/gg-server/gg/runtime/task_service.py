@@ -13,6 +13,7 @@ import re
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import TaskLedger
+from gg.runtime.storage import StorageLimits, admission_pressure
 from gg.sdk.task_supervision import RetryTaskRequest, TaskResultRecord
 from gg.sdk.tasks import CreateTaskRequest, TaskRecord, TaskState
 
@@ -40,6 +41,10 @@ class TaskValidationError(ValueError):
 
 class TaskControlError(RuntimeError):
     """Raised when cancel, retry, or messaging preconditions fail."""
+
+
+class StoragePressureError(RuntimeError):
+    """Raised when storage limits block new admissions."""
 
 
 class TaskService:
@@ -102,6 +107,14 @@ class TaskService:
     # Validate, then durably submit. Returns (record, created).
     def submit(self, request: CreateTaskRequest) -> tuple[TaskRecord, bool]:
         self.validate(request)
+        limits = StorageLimits.from_settings(self._settings)
+        pressure = admission_pressure(
+            self._ledger,
+            limits,
+            db_path=self._settings.task_db_path,
+        )
+        if pressure.blocked:
+            raise StoragePressureError(pressure.reason or "storage pressure")
         record, created = self._ledger.submit(
             idempotency_key=request.idempotency_key,
             repository=request.repository,
@@ -204,6 +217,7 @@ class TaskService:
 
 
 __all__ = [
+    "StoragePressureError",
     "TaskConflictError",
     "TaskControlError",
     "TaskService",

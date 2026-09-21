@@ -27,6 +27,7 @@ from gg.runtime.modal_sandbox import (
     ModalLifecycleError,
     ModalSandboxLifecycle,
 )
+from gg.runtime.storage import StorageLimits, admission_pressure, run_retention_pass
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.tasks import TaskState
 
@@ -108,6 +109,8 @@ class TaskScheduler:
         admission_enabled: bool = False,
         poll_seconds: float = 1.0,
         supervision: TaskSupervisionManager | None = None,
+        storage_limits: StorageLimits | None = None,
+        task_db_path: str = "gg-tasks.sqlite",
     ) -> None:
         if not 1 <= capacity <= 10:
             raise ValueError("scheduler capacity must be between 1 and 10")
@@ -117,6 +120,8 @@ class TaskScheduler:
         self._admission_enabled = admission_enabled
         self._poll_seconds = poll_seconds
         self._supervision = supervision
+        self._storage_limits = storage_limits
+        self._task_db_path = task_db_path
         self._lock = DeploymentLock(lock_path)
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
@@ -176,6 +181,9 @@ class TaskScheduler:
     def wake(self) -> None:
         self._wake.set()
 
+    def owns_dispatch_lock(self) -> bool:
+        return self._lock._fd is not None
+
     async def _run(self) -> None:
         while not self._stop.is_set():
             await self.dispatch_once()
@@ -190,8 +198,18 @@ class TaskScheduler:
 
         async with self._cycle_lock:
             await self.reconcile()
+            if self._storage_limits is not None:
+                run_retention_pass(self._ledger, self._storage_limits)
             if not self._admission_enabled or self._stop.is_set():
                 return
+            if self._storage_limits is not None:
+                pressure = admission_pressure(
+                    self._ledger,
+                    self._storage_limits,
+                    db_path=self._task_db_path,
+                )
+                if pressure.blocked:
+                    return
             if self._supervision is not None:
                 await self._supervision.sync_reserved_tasks()
             # Resume reservations that crashed before a provider identity was
