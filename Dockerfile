@@ -46,7 +46,7 @@ RUN apt-get update \
       arm64) gh_sha256=ea4e7a581a32ccad6cc7923cb1576ac5859ba4b9a16ab22eb8f8a96e78e2e961 ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
- && curl -fsSL -o /tmp/gh.tar.gz \
+ && curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/gh.tar.gz \
     "https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_${TARGETARCH}.tar.gz" \
  && echo "${gh_sha256}  /tmp/gh.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/gh.tar.gz -C /tmp \
@@ -60,6 +60,7 @@ RUN apt-get update \
  && gh --version | grep -F "gh version 2.100.0"
 
 COPY --from=builder /app/.venv /app/.venv
+COPY config /app/config
 COPY --from=pi-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=pi-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
@@ -79,4 +80,4 @@ WORKDIR /workspace/project
 
 EXPOSE 8000
 
-CMD ["python", "-m", "gg.server", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "if [ \"${GG_RUNTIME_MODE:-}\" = control-plane ]; then exec python -m gg.runtime --host 0.0.0.0 --port \"${PORT:-8001}\"; fi; exec python -m gg.server --host 0.0.0.0 --port 8000"]
