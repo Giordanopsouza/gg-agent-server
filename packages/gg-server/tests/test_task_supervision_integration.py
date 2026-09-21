@@ -38,6 +38,8 @@ class FakeAgentState:
     events: dict[str, list[Event]] = field(default_factory=dict)
     receipts: dict[tuple[str, str], MessageReceipt] = field(default_factory=dict)
     phase: TaskExecutionPhase = TaskExecutionPhase.COMPLETED
+    conversation_on_start: bool = True
+    distinct_execution_id: bool = False
 
 
 def _build_fake_agent(state: FakeAgentState) -> FastAPI:
@@ -55,21 +57,31 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
         )
         if existing is not None:
             return existing
+        conversation_id = (
+            f"conv-{body.task_id}" if state.conversation_on_start else None
+        )
         record = TaskExecutionRecord(
-            execution_id=body.task_id,
+            execution_id=(
+                f"exec-{body.task_id}" if state.distinct_execution_id else body.task_id
+            ),
             task_id=body.task_id,
             repository=body.repository,
             start_key=body.start_key,
-            phase=state.phase,
+            phase=(
+                TaskExecutionPhase.PREPARING
+                if not state.conversation_on_start
+                else state.phase
+            ),
             task_branch=body.task_branch,
             base_ref=body.base_ref,
             deadline_at=body.deadline_at,
-            conversation_id=f"conv-{body.task_id}",
+            conversation_id=conversation_id,
         )
         state.executions[record.execution_id] = record
-        state.events[record.conversation_id] = [
-            Event(seq=1, kind=EventKind.STATUS, payload={"status": "running"})
-        ]
+        if conversation_id is not None:
+            state.events[conversation_id] = [
+                Event(seq=1, kind=EventKind.STATUS, payload={"status": "running"})
+            ]
         manifest = TaskResultManifest(
             task_id=body.task_id,
             execution_id=record.execution_id,
@@ -79,7 +91,7 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
             base_sha="abc123",
             agent_outcome=AgentOutcome.NO_CHANGES,
             check_outcome=CheckOutcome.NOT_RUN,
-            conversation_id=record.conversation_id,
+            conversation_id=conversation_id or f"conv-{body.task_id}",
             completed_at=datetime.now(UTC),
         )
         state.manifests[record.execution_id] = manifest
@@ -87,7 +99,21 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
 
     @app.get("/api/task-executions/{execution_id}")
     async def get_execution(execution_id: str) -> TaskExecutionRecord:
-        return state.executions[execution_id]
+        record = state.executions[execution_id]
+        if record.conversation_id is None:
+            conversation_id = f"conv-{record.task_id}"
+            record = record.model_copy(
+                update={
+                    "conversation_id": conversation_id,
+                    "phase": state.phase,
+                }
+            )
+            state.executions[execution_id] = record
+            state.events.setdefault(
+                conversation_id,
+                [Event(seq=1, kind=EventKind.STATUS, payload={"status": "running"})],
+            )
+        return record
 
     @app.get("/api/task-executions/{execution_id}/manifest")
     async def get_manifest(execution_id: str) -> TaskResultManifest:
@@ -246,6 +272,70 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
     assert result.json()["state"] == "completed"
     assert result.json()["evidence_complete"] is True
     assert lifecycle.terminate_calls == [task_id]
+
+
+@pytest.mark.anyio
+async def test_supervision_copies_events_when_conversation_appears_after_start(
+    tmp_path,
+) -> None:
+    state = FakeAgentState(conversation_on_start=False, distinct_execution_id=True)
+    agent_app = _build_fake_agent(state)
+    ledger = TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
+    ledger.open()
+    lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent_app)
+    settings = RuntimeSettings(
+        api_key="control-secret",
+        task_db_path=str(tmp_path / "tasks.sqlite"),
+        task_dispatch_enabled=True,
+        dispatch_lock_path=str(tmp_path / "dispatch.lock"),
+    )
+    supervision = TaskSupervisionManager(
+        ledger=ledger,
+        lifecycle=lifecycle,  # type: ignore[arg-type]
+        settings=settings,
+        publisher=None,
+    )
+    app = create_app(
+        settings,
+        task_ledger=ledger,
+        modal_lifecycle=lifecycle,  # type: ignore[arg-type]
+        task_supervision=supervision,
+    )
+    transport = ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            created = await client.post(
+                "/tasks",
+                headers=_AUTH,
+                json={
+                    "repository": "owner/repo",
+                    "prompt": "do work",
+                    "idempotency_key": "k-deferred-events",
+                },
+            )
+            task_id = created.json()["id"]
+            live = supervision.subscribe_events(task_id)
+            for _ in range(50):
+                await app.state.task_scheduler.dispatch_once()
+                record = ledger.get(task_id)
+                assert record is not None
+                if record.state is TaskState.COMPLETED:
+                    break
+                await asyncio.sleep(0.05)
+            events = await client.get(f"/tasks/{task_id}/events", headers=_AUTH)
+            result = await client.get(f"/tasks/{task_id}/result", headers=_AUTH)
+
+    assert created.status_code == 201
+    assert events.status_code == 200
+    assert len(events.json()) == 1
+    assert events.json()[0]["event"]["payload"] == {"status": "running"}
+    copied = live.get_nowait()
+    assert copied.event.payload == {"status": "running"}
+    assert live.empty()
+    assert result.json()["state"] == "completed"
 
 
 @pytest.mark.anyio

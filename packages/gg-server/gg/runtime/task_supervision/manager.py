@@ -33,7 +33,7 @@ from gg.sdk.task_execution import (
     TaskResultManifest,
 )
 from gg.sdk.task_supervision import TaskEventCopy
-from gg.sdk.tasks import TaskState
+from gg.sdk.tasks import TaskRecord, TaskState
 
 
 DEFAULT_TASK_DEADLINE = timedelta(hours=1)
@@ -252,7 +252,12 @@ class TaskSupervisionManager:
         if supervision is None:
             return
         if supervision.conversation_id:
-            await self._sync_events(task_id, connection, supervision.conversation_id)
+            try:
+                await self._sync_events(
+                    task_id, connection, supervision.conversation_id
+                )
+            except httpx.HTTPError:
+                pass
         execution = await client.get_execution(supervision.execution_id)
         if supervision.cancel_requested:
             await self._cancel_execution(task_id, connection, supervision, client)
@@ -274,8 +279,15 @@ class TaskSupervisionManager:
         if task is None:
             return None
         supervision = self._ledger.get_supervision(task_id)
-        if supervision is not None and supervision.execution_id != task_id:
-            return supervision
+        if supervision is None or supervision.execution_id == task_id:
+            supervision = await self._start_execution(task_id, task, client)
+        if supervision is None:
+            return None
+        return await self._refresh_supervision(task_id, client, supervision)
+
+    async def _start_execution(
+        self, task_id: str, task: TaskRecord, client: TaskSupervisorClient
+    ) -> SupervisionRecord | None:
         reservation = self._ledger.get_reservation(task_id)
         deadline_at = (
             reservation.reserved_at + DEFAULT_TASK_DEADLINE
@@ -318,11 +330,31 @@ class TaskSupervisionManager:
                 self._ledger.record_base_sha(task_id, manifest.base_sha)
         return self._ledger.get_supervision(task_id)
 
+    async def _refresh_supervision(
+        self,
+        task_id: str,
+        client: TaskSupervisorClient,
+        supervision: SupervisionRecord,
+    ) -> SupervisionRecord:
+        if supervision.conversation_id:
+            return supervision
+        try:
+            execution = await client.get_execution(supervision.execution_id)
+        except httpx.HTTPError:
+            return supervision
+        if not execution.conversation_id:
+            return supervision
+        return self._ledger.update_supervision(
+            task_id, conversation_id=execution.conversation_id
+        )
+
     async def _sync_events(
         self, task_id: str, connection: object, conversation_id: str
     ) -> None:
         async with connection.http_client(timeout=30) as client:  # type: ignore[attr-defined]
             response = await client.get(f"/api/conversations/{conversation_id}/events")
+        if response.status_code == 404:
+            return
         response.raise_for_status()
         for payload in response.json():
             event = Event.model_validate(payload)
@@ -400,6 +432,14 @@ class TaskSupervisionManager:
             )
             return
         client = TaskSupervisorClient(connection)
+        supervision = await self._refresh_supervision(task_id, client, supervision)
+        if supervision.conversation_id:
+            try:
+                await self._sync_events(
+                    task_id, connection, supervision.conversation_id
+                )
+            except httpx.HTTPError:
+                self._ledger.update_supervision(task_id, tail_gap_possible=True)
         await self._settle_messages(task_id, connection, supervision)
         manifest = await _fetch_manifest_with_retries(
             client, supervision.execution_id, budget=DEFAULT_CLEANUP_BUDGET
