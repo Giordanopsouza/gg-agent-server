@@ -1,4 +1,5 @@
 """Small, in-process async fan-out for server events."""
+
 from __future__ import annotations
 
 import asyncio

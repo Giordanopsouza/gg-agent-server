@@ -1,4 +1,5 @@
 """Mounted /api router. Auth from task 010 applies to every route here."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter

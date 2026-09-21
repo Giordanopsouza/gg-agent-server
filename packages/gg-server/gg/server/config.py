@@ -7,6 +7,7 @@ Parsing happens once at the boundary; the rest of the server never
 touches env vars. That keeps configuration a single source of truth
 and makes the invalid-port error message name the offending variable.
 """
+
 from __future__ import annotations
 
 import os
@@ -76,18 +77,18 @@ def _load_settings() -> Settings:
     """
     data: dict[str, Any] = {}
 
-    if (host := os.getenv("GG_HOST")) :
+    if host := os.getenv("GG_HOST"):
         data["host"] = host
 
     data["port"] = _parse_port(os.getenv("GG_PORT"))
 
-    if (conversations_dir := os.getenv("GG_CONVERSATIONS_DIR")) :
+    if conversations_dir := os.getenv("GG_CONVERSATIONS_DIR"):
         data["conversations_dir"] = Path(conversations_dir)
 
-    if (workspace_dir := os.getenv("GG_WORKSPACE_DIR")) :
+    if workspace_dir := os.getenv("GG_WORKSPACE_DIR"):
         data["workspace_dir"] = Path(workspace_dir)
 
-    if (supervisor_dir := os.getenv("GG_TASK_SUPERVISOR_DIR")) :
+    if supervisor_dir := os.getenv("GG_TASK_SUPERVISOR_DIR"):
         data["task_supervisor_dir"] = Path(supervisor_dir)
 
     profiles_path = os.getenv("GG_REPOSITORY_PROFILES_PATH")
@@ -102,7 +103,7 @@ def _load_settings() -> Settings:
             RepositoryProfile.model_validate(item) for item in payload
         )
 
-    if (token := os.getenv("GG_GITHUB_CLONE_TOKEN")) :
+    if token := os.getenv("GG_GITHUB_CLONE_TOKEN"):
         stripped = token.strip()
         if stripped:
             data["github_clone_token"] = stripped

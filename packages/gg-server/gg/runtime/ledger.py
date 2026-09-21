@@ -12,11 +12,12 @@ inside the same transaction that inserts the row.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
@@ -30,7 +31,7 @@ from gg.sdk.tasks import TaskRecord, TaskState
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 5
+SUPPORTED_SCHEMA_VERSION = 6
 
 
 class SandboxProviderState(StrEnum):
@@ -174,6 +175,9 @@ def _row_to_record(row: sqlite3.Row) -> TaskRecord:
         outcome_detail=row["outcome_detail"],
         check_status=row["check_status"],
         sandbox_cleanup_status=row["sandbox_cleanup_status"],
+        payload_expired=bool(row["payload_expired"])
+        if "payload_expired" in row.keys()
+        else False,
     )
 
 
@@ -354,6 +358,24 @@ class TaskLedger:
                     self._conn.execute("ROLLBACK")
                     raise
 
+            actual = int(
+                self._conn.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()["value"]
+            )
+            if actual < 6 <= self._expected_schema_version:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._create_retention_schema()
+                    self._conn.execute(
+                        "UPDATE schema_meta SET value = '6' "
+                        "WHERE key = 'schema_version'"
+                    )
+                    self._conn.execute("COMMIT")
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+
             if self._expected_schema_version >= 2:
                 self._create_sandbox_schema()
             if self._expected_schema_version >= 3:
@@ -362,6 +384,8 @@ class TaskLedger:
                 self._create_publication_schema()
             if self._expected_schema_version >= 5:
                 self._create_supervision_schema()
+            if self._expected_schema_version >= 6:
+                self._create_retention_schema()
 
     def _create_sandbox_schema(self) -> None:
         assert self._conn is not None
@@ -519,6 +543,39 @@ class TaskLedger:
             """
         )
 
+    def _create_retention_schema(self) -> None:
+        assert self._conn is not None
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        if "payload_expired" not in columns:
+            self._conn.execute(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN payload_expired INTEGER NOT NULL DEFAULT 0
+                """
+            )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retention_tombstones (
+                idempotency_key TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                repository TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                base_ref TEXT,
+                retry_of TEXT,
+                terminal_state TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                remote_effect_json TEXT,
+                payload_expired_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+
     def _create_publication_schema(self) -> None:
         assert self._conn is not None
         self._conn.execute(
@@ -569,6 +626,14 @@ class TaskLedger:
                 if existing is not None:
                     self._conn.execute("COMMIT")
                     return _row_to_record(existing), False
+                if self._schema_version() >= 6:
+                    tombstone = self._conn.execute(
+                        "SELECT * FROM retention_tombstones WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    ).fetchone()
+                    if tombstone is not None:
+                        self._conn.execute("COMMIT")
+                        return self._record_from_tombstone(tombstone), False
 
                 seq_row = self._conn.execute(
                     "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM tasks"
@@ -1219,10 +1284,12 @@ class TaskLedger:
         source_id: str,
         source_seq: int,
         event: Event,
+        event_json: str | None = None,
     ) -> int | None:
         """Insert one copied event; return cursor or None when deduplicated."""
 
         assert self._conn is not None
+        payload = event_json if event_json is not None else event.model_dump_json()
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
@@ -1257,7 +1324,7 @@ class TaskLedger:
                         cursor,
                         source_id,
                         source_seq,
-                        event.model_dump_json(),
+                        payload,
                         now,
                     ),
                 )
@@ -1500,6 +1567,244 @@ class TaskLedger:
         if row is None:
             raise KeyError(f"no task {task_id}")
         return _row_to_record(row)
+
+    def _schema_version(self) -> int:
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()
+        return int(row["value"]) if row is not None else 0
+
+    def ping_database(self) -> bool:
+        assert self._conn is not None
+        try:
+            with self._lock:
+                self._conn.execute("SELECT 1").fetchone()
+        except sqlite3.Error:
+            return False
+        return True
+
+    def online_backup(self, destination: Path | str) -> None:
+        """Copy the open database using SQLite's online backup API."""
+
+        assert self._conn is not None
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            with sqlite3.connect(destination) as dest:
+                self._conn.backup(dest)
+        os.chmod(destination, 0o600)
+
+    def count_task_log_bytes(self, task_id: str) -> int:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT
+                    COALESCE((
+                        SELECT SUM(LENGTH(event_json))
+                        FROM task_event_copies WHERE task_id = ?
+                    ), 0)
+                    + COALESCE((
+                        SELECT SUM(LENGTH(content) + LENGTH(COALESCE(detail, '')))
+                        FROM task_message_receipts WHERE task_id = ?
+                    ), 0) AS total
+                """,
+                (task_id, task_id),
+            ).fetchone()
+        return int(row["total"])
+
+    def count_task_artifact_bytes(self, task_id: str) -> int:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT COALESCE(LENGTH(manifest_json), 0) AS total
+                FROM task_results WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        return int(row["total"]) if row is not None else 0
+
+    def count_total_evidence_bytes(self) -> int:
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT
+                    COALESCE((SELECT SUM(LENGTH(event_json)) FROM task_event_copies), 0)
+                    + COALESCE((
+                        SELECT SUM(LENGTH(content) + LENGTH(COALESCE(detail, '')))
+                        FROM task_message_receipts
+                    ), 0)
+                    + COALESCE((
+                        SELECT SUM(LENGTH(manifest_json)) FROM task_results
+                    ), 0) AS total
+                """
+            ).fetchone()
+        return int(row["total"])
+
+    def protected_task_ids(self) -> set[str]:
+        return {item.task_id for item in self.list_reservations()}
+
+    def expire_terminal_payloads(
+        self,
+        *,
+        before: datetime,
+        tombstone_retention: timedelta,
+    ) -> int:
+        """Drop bulky evidence for terminal tasks while keeping dedupe metadata."""
+
+        assert self._conn is not None
+        terminal = (
+            TaskState.COMPLETED.value,
+            TaskState.FAILED.value,
+            TaskState.CANCELLED.value,
+        )
+        protected = self.protected_task_ids()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE state IN (?, ?, ?)
+                  AND payload_expired = 0
+                  AND updated_at < ?
+                ORDER BY updated_at ASC
+                """,
+                (*terminal, before.isoformat()),
+            ).fetchall()
+        expired = 0
+        for row in rows:
+            task_id = row["id"]
+            if task_id in protected:
+                continue
+            self._expire_task_payload(
+                task_id,
+                record=row,
+                tombstone_retention=tombstone_retention,
+            )
+            expired += 1
+        return expired
+
+    def purge_expired_tombstones(self, *, before: datetime) -> int:
+        assert self._conn is not None
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT idempotency_key FROM retention_tombstones
+                WHERE expires_at < ?
+                """,
+                (before.isoformat(),),
+            ).fetchall()
+            for row in rows:
+                self._conn.execute(
+                    "DELETE FROM retention_tombstones WHERE idempotency_key = ?",
+                    (row["idempotency_key"],),
+                )
+        return len(rows)
+
+    def _expire_task_payload(
+        self,
+        task_id: str,
+        *,
+        record: sqlite3.Row,
+        tombstone_retention: timedelta,
+    ) -> None:
+        assert self._conn is not None
+        now = _utcnow_iso()
+        with self._lock:
+            publication_row = self._conn.execute(
+                "SELECT * FROM publication_intents WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        remote_effect = None
+        if publication_row is not None:
+            publication = _row_to_publication(publication_row)
+            remote_effect = json.dumps(
+                {
+                    "pr_number": publication.pr_number,
+                    "pr_url": publication.pr_url,
+                    "pr_state": publication.pr_state,
+                    "state": publication.state.value,
+                },
+                separators=(",", ":"),
+            )
+        expires_at = (datetime.fromisoformat(now) + tombstone_retention).isoformat()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO retention_tombstones (
+                        idempotency_key, task_id, repository, prompt, base_ref,
+                        retry_of, terminal_state, seq, created_at, updated_at,
+                        remote_effect_json, payload_expired_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(idempotency_key) DO UPDATE SET
+                        remote_effect_json = excluded.remote_effect_json,
+                        payload_expired_at = excluded.payload_expired_at,
+                        expires_at = excluded.expires_at
+                    """,
+                    (
+                        record["idempotency_key"],
+                        task_id,
+                        record["repository"],
+                        record["prompt"],
+                        record["base_ref"],
+                        record["retry_of"],
+                        record["state"],
+                        record["seq"],
+                        record["created_at"],
+                        record["updated_at"],
+                        remote_effect,
+                        now,
+                        expires_at,
+                    ),
+                )
+                self._conn.execute(
+                    "DELETE FROM task_event_copies WHERE task_id = ?", (task_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM task_message_receipts WHERE task_id = ?",
+                    (task_id,),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE task_results
+                    SET manifest_json = NULL,
+                        evidence_complete = 0,
+                        evidence_detail = 'payload expired by retention policy'
+                    WHERE task_id = ?
+                    """,
+                    (task_id,),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE tasks SET payload_expired = 1, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, task_id),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    @staticmethod
+    def _record_from_tombstone(row: sqlite3.Row) -> TaskRecord:
+        return TaskRecord(
+            id=row["task_id"],
+            seq=row["seq"],
+            state=TaskState(row["terminal_state"]),
+            idempotency_key=row["idempotency_key"],
+            repository=row["repository"],
+            prompt=row["prompt"],
+            base_ref=row["base_ref"],
+            retry_of=row["retry_of"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            payload_expired=True,
+        )
 
 
 def _row_to_supervision(row: sqlite3.Row) -> SupervisionRecord:

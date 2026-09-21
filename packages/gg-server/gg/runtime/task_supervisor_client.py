@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import httpx
-
 from gg.runtime.modal_sandbox import SandboxConnection
 from gg.sdk.task_execution import (
     StartTaskExecutionRequest,
@@ -40,9 +38,7 @@ class TaskSupervisorClient:
 
     async def get_manifest(self, execution_id: str) -> TaskResultManifest:
         async with self._connection.http_client(timeout=30) as client:
-            response = await client.get(
-                f"/api/task-executions/{execution_id}/manifest"
-            )
+            response = await client.get(f"/api/task-executions/{execution_id}/manifest")
             response.raise_for_status()
             return TaskResultManifest.model_validate(response.json())
 

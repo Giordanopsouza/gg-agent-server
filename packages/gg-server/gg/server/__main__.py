@@ -1,4 +1,5 @@
 """CLI entry: ``python -m gg.server``."""
+
 from __future__ import annotations
 
 import argparse

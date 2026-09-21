@@ -31,8 +31,16 @@ Use `uv sync --no-editable`: editable workspace installs are unreliable here on 
 ## Infrastructure & external services
 
 - **Git/GitHub** — use `git` locally and `gh` for pull requests, issues, Actions, and demo verification.
-- **Persistence** — conversation state is stored as JSON files; this project has no database.
+- **Persistence** — sandbox conversation state is stored as JSON files inside each execution environment. The Modal background-task control plane (`gg.runtime`) stores durable queueing, reservations, evidence copies, and publication records in local SQLite on the host (`GG_TASK_DB_PATH`). Do not treat the learning-server JSON layout as the production task store.
 
 # Testing E2E
 
 - **Local server:** run `make run`, then `curl http://127.0.0.1:8000/health`; success is HTTP 200 reporting status `ok`. `GG_SESSION_API_KEYS` is optional on loopback and required before exposing a non-loopback bind.
+
+## Production control plane
+
+Single-host deployment, storage retention defaults, backup/restore, and operator
+smoke checks are documented in
+[`docs/single-host-production.md`](docs/single-host-production.md) (task 059).
+Run `make -C packages/gg-server production-smoke-tests` after operational
+changes.

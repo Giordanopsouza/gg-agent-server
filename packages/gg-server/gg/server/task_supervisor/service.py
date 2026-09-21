@@ -19,7 +19,6 @@ from gg.sdk.task_execution import (
     TaskExecutionRecord,
     TaskResultManifest,
 )
-
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
 from gg.server.task_supervisor.commands import run_bounded_command
@@ -32,6 +31,7 @@ from gg.server.task_supervisor.git_prep import (
     run_bootstrap,
 )
 from gg.server.task_supervisor.store import ExecutionStore, StartKeyConflictError
+
 
 MAX_PATCH_BYTES = 512_000
 DEFAULT_AGENT_TIMEOUT_SECONDS = 60 * 55
@@ -108,9 +108,7 @@ class TaskSupervisorService:
             name=f"task-exec-{record.execution_id}",
         )
         self._active[record.execution_id] = task
-        task.add_done_callback(
-            lambda _: self._active.pop(record.execution_id, None)
-        )
+        task.add_done_callback(lambda _: self._active.pop(record.execution_id, None))
         return record, True
 
     def get_execution(self, execution_id: str) -> TaskExecutionRecord:
@@ -153,7 +151,9 @@ class TaskSupervisorService:
                 run_bootstrap,
                 repo_dir=repo_dir,
                 command=profile.bootstrap_command,
-                timeout_seconds=self._remaining_seconds(request.deadline_at, minimum=30),
+                timeout_seconds=self._remaining_seconds(
+                    request.deadline_at, minimum=30
+                ),
                 max_output_bytes=profile.max_bootstrap_output_bytes,
                 process_env=self._process_env,
             )

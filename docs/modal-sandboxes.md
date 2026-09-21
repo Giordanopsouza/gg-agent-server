@@ -97,4 +97,6 @@ GG_RUNTIME_API_KEY=demo-only \
 
 The demo provisions one sandbox, starts a nonblocking repository execution,
 polls for completion, and prints the local result manifest (check output and
-agent outcome). Production dispatch remains disabled until task 057.
+agent outcome). Enable production dispatch with `GG_TASK_DISPATCH_ENABLED=true`
+once repository profiles, credentials, and single-host operations from task 059
+are in place.

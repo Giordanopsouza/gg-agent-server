@@ -1,4 +1,5 @@
 """FastAPI dependencies shared across API routers."""
+
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Request, status

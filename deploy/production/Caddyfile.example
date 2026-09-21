@@ -1,0 +1,7 @@
+# Terminate TLS and forward to the loopback runtime control plane.
+# Replace example.com and paths before use.
+
+example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8001
+}

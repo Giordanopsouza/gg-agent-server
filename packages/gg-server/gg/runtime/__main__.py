@@ -1,4 +1,5 @@
 """CLI entry: ``python -m gg.runtime``."""
+
 from __future__ import annotations
 
 import argparse

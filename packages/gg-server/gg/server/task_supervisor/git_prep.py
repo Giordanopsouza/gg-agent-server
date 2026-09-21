@@ -6,7 +6,6 @@ import subprocess
 from pathlib import Path
 
 from gg.sdk.task_execution import CommandCapture
-
 from gg.server.task_supervisor.commands import run_bounded_command
 
 
@@ -51,9 +50,7 @@ def clone_repository(
         check=False,
     )
     if completed.returncode != 0:
-        raise GitPrepError(
-            f"clone failed for {repository}: {completed.stderr.strip()}"
-        )
+        raise GitPrepError(f"clone failed for {repository}: {completed.stderr.strip()}")
     _scrub_origin_credentials(destination)
 
 

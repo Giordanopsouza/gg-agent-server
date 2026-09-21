@@ -6,8 +6,8 @@ PACKAGE := gg-server
 TESTS := packages/gg-server/tests tests
 SOURCES := packages/gg-server/gg packages/gg-server/tests tests
 
-.PHONY: help install test unit-tests integration-tests lint-check lint-fix \
-	format-check format-fix pre-commit build run docker-build
+.PHONY: help install test unit-tests integration-tests production-smoke-tests \
+	lint-check lint-fix format-check format-fix pre-commit build run docker-build
 
 help:
 	@printf '%s\n' \
@@ -31,6 +31,9 @@ test:
 
 unit-tests:
 	$(UV_RUN) pytest $(TESTS) -m "not docker and not pi"
+
+production-smoke-tests:
+	$(UV_RUN) pytest packages/gg-server/tests/test_production_operations.py
 
 integration-tests:
 	$(UV_RUN) pytest $(TESTS) -m "docker or pi"
