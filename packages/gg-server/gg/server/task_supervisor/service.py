@@ -9,7 +9,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from gg.sdk import AgentError, ConversationStatus, PiAgentConfig
-from gg.sdk.repository_profiles import RepositoryProfile, profiles_by_repository
 from gg.sdk.task_execution import (
     AgentOutcome,
     CheckOutcome,
@@ -21,14 +20,12 @@ from gg.sdk.task_execution import (
 )
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
-from gg.server.task_supervisor.commands import run_bounded_command
 from gg.server.task_supervisor.git_prep import (
     GitPrepError,
     checkout_task_branch,
     clone_repository,
     collect_git_evidence,
     resolve_base_sha,
-    run_bootstrap,
 )
 from gg.server.task_supervisor.store import ExecutionStore, StartKeyConflictError
 
@@ -50,7 +47,6 @@ class TaskSupervisorService:
         self._settings = settings
         self._conversation_service = conversation_service
         self._store = store or ExecutionStore(settings.task_supervisor_dir)
-        self._profiles = profiles_by_repository(settings.repository_profiles)
         self._github_token = settings.github_clone_token
         self._process_env = settings.process_env
         self._active: dict[str, asyncio.Task[None]] = {}
@@ -85,8 +81,9 @@ class TaskSupervisorService:
     async def start(
         self, request: StartTaskExecutionRequest
     ) -> tuple[TaskExecutionRecord, bool]:
-        profile = self._require_profile(request.repository)
-        if self._github_token is None:
+        if request.repository and (not request.base_ref or not request.task_branch):
+            raise ValueError("repository tasks require base_ref and task_branch")
+        if request.repository and self._github_token is None:
             raise RuntimeError("github clone token is not configured")
         try:
             record, created = self._store.admit_or_get(
@@ -104,7 +101,7 @@ class TaskSupervisorService:
         if record.execution_id in self._active:
             return record, False
         task = asyncio.create_task(
-            self._run_pipeline(request, profile, record),
+            self._run_pipeline(request, record),
             name=f"task-exec-{record.execution_id}",
         )
         self._active[record.execution_id] = task
@@ -117,52 +114,34 @@ class TaskSupervisorService:
     def get_manifest(self, execution_id: str) -> TaskResultManifest:
         return self._store.load_manifest(execution_id)
 
-    def _require_profile(self, repository: str) -> RepositoryProfile:
-        profile = self._profiles.get(repository)
-        if profile is None:
-            raise ValueError(f"no repository profile configured for {repository!r}")
-        return profile
-
     async def _run_pipeline(
         self,
         request: StartTaskExecutionRequest,
-        profile: RepositoryProfile,
         record: TaskExecutionRecord,
     ) -> None:
-        repo_dir = self._settings.workspace_dir / "repos" / request.task_id
-        base_ref = request.base_ref or profile.default_base_ref
-        base_sha = ""
+        repo_dir = self._settings.workspace_dir / "tasks" / request.task_id
+        base_ref = request.base_ref
+        base_sha: str | None = None
         bootstrap_capture: CommandCapture | None = None
         check_capture: CommandCapture | None = None
         conversation_id: str | None = None
         try:
             await self._update_phase(record, TaskExecutionPhase.PREPARING)
-            clone_repository(
-                repository=request.repository,
-                destination=repo_dir,
-                github_token=self._github_token,
-                process_env=self._process_env,
-            )
-            base_sha = resolve_base_sha(repo_dir=repo_dir, base_ref=base_ref)
-            checkout_task_branch(
-                repo_dir=repo_dir, branch=request.task_branch, base_sha=base_sha
-            )
-            bootstrap_capture = await asyncio.to_thread(
-                run_bootstrap,
-                repo_dir=repo_dir,
-                command=profile.bootstrap_command,
-                timeout_seconds=self._remaining_seconds(
-                    request.deadline_at, minimum=30
-                ),
-                max_output_bytes=profile.max_bootstrap_output_bytes,
-                process_env=self._process_env,
-            )
-            if bootstrap_capture.exit_code not in (0, None):
-                raise GitPrepError(
-                    f"bootstrap failed with exit code {bootstrap_capture.exit_code}"
+            if request.repository:
+                assert base_ref is not None and request.task_branch is not None
+                assert self._github_token is not None
+                clone_repository(
+                    repository=request.repository,
+                    destination=repo_dir,
+                    github_token=self._github_token,
+                    process_env=self._process_env,
                 )
-            if bootstrap_capture.timed_out:
-                raise TimeoutError("bootstrap timed out")
+                base_sha = resolve_base_sha(repo_dir=repo_dir, base_ref=base_ref)
+                checkout_task_branch(
+                    repo_dir=repo_dir, branch=request.task_branch, base_sha=base_sha
+                )
+            else:
+                repo_dir.mkdir(parents=True, exist_ok=True)
 
             await self._update_phase(record, TaskExecutionPhase.RUNNING_AGENT)
             conversation_id = str(uuid4())
@@ -173,27 +152,24 @@ class TaskSupervisorService:
                 repo_dir=repo_dir,
                 conversation_id=conversation_id,
             )
-            head_sha, changed, patch, patch_truncated = collect_git_evidence(
-                repo_dir=repo_dir,
-                base_sha=base_sha,
-                max_patch_bytes=MAX_PATCH_BYTES,
-            )
-            check_outcome = CheckOutcome.NOT_RUN
-            if agent_outcome is AgentOutcome.SUCCEEDED and not changed:
-                agent_outcome = AgentOutcome.NO_CHANGES
-            elif agent_outcome is AgentOutcome.SUCCEEDED:
-                await self._update_phase(record, TaskExecutionPhase.RUNNING_CHECKS)
-                check_capture = await asyncio.to_thread(
-                    run_bounded_command,
-                    command=profile.check_command,
-                    cwd=str(repo_dir),
-                    timeout_seconds=self._remaining_seconds(
-                        request.deadline_at, minimum=30
-                    ),
-                    max_output_bytes=profile.max_check_output_bytes,
-                    process_env=self._process_env,
+            head_sha = None
+            changed: tuple[str, ...] = ()
+            patch = None
+            patch_truncated = False
+            if request.repository:
+                assert base_sha is not None
+                head_sha, changed, patch, patch_truncated = collect_git_evidence(
+                    repo_dir=repo_dir,
+                    base_sha=base_sha,
+                    max_patch_bytes=MAX_PATCH_BYTES,
                 )
-                check_outcome = self._check_outcome(check_capture)
+            check_outcome = CheckOutcome.NOT_RUN
+            if (
+                request.repository
+                and agent_outcome is AgentOutcome.SUCCEEDED
+                and not changed
+            ):
+                agent_outcome = AgentOutcome.NO_CHANGES
 
             manifest = TaskResultManifest(
                 task_id=request.task_id,
@@ -216,11 +192,7 @@ class TaskSupervisorService:
             path = self._store.save_manifest(manifest)
             terminal = (
                 TaskExecutionPhase.COMPLETED
-                if agent_outcome is AgentOutcome.NO_CHANGES
-                or (
-                    agent_outcome is AgentOutcome.SUCCEEDED
-                    and check_outcome is CheckOutcome.PASSED
-                )
+                if agent_outcome in {AgentOutcome.NO_CHANGES, AgentOutcome.SUCCEEDED}
                 else TaskExecutionPhase.FAILED
             )
             detail = None
@@ -243,7 +215,7 @@ class TaskSupervisorService:
                 agent_outcome=AgentOutcome.TIMEOUT,
                 check_outcome=CheckOutcome.NOT_RUN,
                 base_ref=base_ref,
-                base_sha=base_sha or None,
+                base_sha=base_sha,
                 bootstrap=bootstrap_capture,
                 check=check_capture,
                 conversation_id=conversation_id,
@@ -257,7 +229,7 @@ class TaskSupervisorService:
                 agent_outcome=AgentOutcome.FAILED,
                 check_outcome=CheckOutcome.NOT_RUN,
                 base_ref=base_ref,
-                base_sha=base_sha or None,
+                base_sha=base_sha,
                 bootstrap=bootstrap_capture,
                 check=check_capture,
                 conversation_id=conversation_id,
@@ -321,8 +293,8 @@ class TaskSupervisorService:
             execution_id=record.execution_id,
             repository=repository or record.repository,
             task_branch=task_branch or record.task_branch,
-            base_ref=base_ref or record.base_ref or "unknown",
-            base_sha=base_sha or "unknown",
+            base_ref=base_ref or record.base_ref,
+            base_sha=base_sha,
             bootstrap=bootstrap,
             check=check,
             check_outcome=check_outcome,

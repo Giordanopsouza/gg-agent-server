@@ -33,8 +33,8 @@ class ExecutionStore:
         *,
         start_key: str,
         task_id: str,
-        repository: str,
-        task_branch: str,
+        repository: str | None,
+        task_branch: str | None,
         base_ref: str | None,
         deadline_at: datetime,
     ) -> tuple[TaskExecutionRecord, bool]:

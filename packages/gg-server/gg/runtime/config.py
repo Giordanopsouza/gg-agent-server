@@ -6,7 +6,7 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
+from gg.sdk.repository_profiles import RepositoryProfile
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -195,12 +195,6 @@ def _optional_secret(raw: str | None) -> str | None:
     return stripped or None
 
 
-def _load_repository_profiles(raw: str | None) -> tuple[RepositoryProfile, ...]:
-    if raw is None or not raw.strip():
-        return ()
-    return load_repository_profiles(raw)
-
-
 def _parse_allowlist(raw: str | None) -> tuple[str, ...]:
     if raw is None or not raw.strip():
         return ()
@@ -256,9 +250,6 @@ def load_settings() -> RuntimeSettings:
         image=image,
         task_db_path=os.getenv("GG_TASK_DB_PATH", DEFAULT_TASK_DB_PATH),
         repository_allowlist=_parse_allowlist(os.getenv("GG_REPOSITORY_ALLOWLIST")),
-        repository_profiles=_load_repository_profiles(
-            os.getenv("GG_REPOSITORY_PROFILES_PATH")
-        ),
         github_clone_token=_optional_secret(os.getenv("GG_GITHUB_CLONE_TOKEN")),
         openrouter_api_key=_optional_secret(os.getenv("OPENROUTER_API_KEY")),
         max_prompt_chars=_parse_int(

@@ -56,25 +56,16 @@ class TaskService:
 
     # Validate one submission request against the configured limits.
     def validate(self, request: CreateTaskRequest) -> None:
-        if not request.repository or not _REPOSITORY_RE.match(request.repository):
+        if request.repository is not None and not _REPOSITORY_RE.match(
+            request.repository
+        ):
             raise TaskValidationError(
                 f"repository must be 'owner/name', got {request.repository!r}"
             )
-        if (
-            self._settings.repository_allowlist
-            and request.repository not in self._settings.repository_allowlist
-        ):
-            raise TaskValidationError(
-                f"repository {request.repository!r} is not on the allowlist"
-            )
-        if self._settings.repository_profiles:
-            known = {
-                profile.repository for profile in self._settings.repository_profiles
-            }
-            if request.repository not in known:
-                raise TaskValidationError(
-                    f"repository {request.repository!r} has no configured profile"
-                )
+        if request.repository is not None and request.base_ref is None:
+            raise TaskValidationError("base_ref is required with repository")
+        if request.repository is None and request.base_ref is not None:
+            raise TaskValidationError("base_ref requires repository")
         if not request.prompt.strip():
             raise TaskValidationError("prompt must be non-empty")
         if len(request.prompt) > self._settings.max_prompt_chars:
@@ -166,7 +157,7 @@ class TaskService:
                 "retry requires confirmed sandbox cleanup of the predecessor"
             )
         base_ref = request.base_ref or predecessor.base_ref
-        if base_ref is None and predecessor.base_sha is None:
+        if predecessor.repository is not None and base_ref is None:
             raise TaskControlError(
                 "retry requires a recorded base ref or explicit base_ref"
             )

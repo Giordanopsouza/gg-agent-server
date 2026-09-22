@@ -85,6 +85,7 @@ def test_storage_pressure_blocks_submission(tmp_path: Path) -> None:
             service.submit(
                 CreateTaskRequest(
                     repository="owner/allowed",
+                    base_ref="main",
                     prompt="another",
                     idempotency_key="k2",
                 )

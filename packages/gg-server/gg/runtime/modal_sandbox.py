@@ -524,10 +524,6 @@ def sandbox_env_from_settings(settings: RuntimeSettings) -> dict[str, str]:
         env["GG_GITHUB_CLONE_TOKEN"] = settings.github_clone_token
     if settings.openrouter_api_key:
         env["OPENROUTER_API_KEY"] = settings.openrouter_api_key
-    if settings.repository_profiles:
-        env["GG_REPOSITORY_PROFILES_JSON"] = json.dumps(
-            [profile.model_dump() for profile in settings.repository_profiles]
-        )
     return env
 
 

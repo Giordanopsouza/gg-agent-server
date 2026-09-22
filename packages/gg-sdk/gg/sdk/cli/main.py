@@ -29,13 +29,15 @@ def _open_client() -> TaskClient:
 )
 @click.pass_context
 def main(ctx: click.Context, as_json: bool) -> None:
-    """Submit and supervise repository background tasks."""
+    """Submit and supervise background tasks."""
     ctx.ensure_object(dict)
     ctx.obj["as_json"] = as_json
 
 
 @main.command("submit")
-@click.option("--repository", required=True, help="Allowlisted GitHub repository.")
+@click.option(
+    "--repository", default=None, help="Optional GitHub owner/name repository."
+)
 @click.option("--prompt", default=None, help="Task prompt text.")
 @click.option(
     "--prompt-file",
@@ -43,7 +45,7 @@ def main(ctx: click.Context, as_json: bool) -> None:
     default=None,
     help="Read the prompt from a file.",
 )
-@click.option("--base-ref", default=None, help="Optional git base ref.")
+@click.option("--base-ref", default=None, help="Required with --repository.")
 @click.option(
     "--idempotency-key",
     default=None,
@@ -60,7 +62,7 @@ def main(ctx: click.Context, as_json: bool) -> None:
 @click.pass_context
 def submit_cmd(
     ctx: click.Context,
-    repository: str,
+    repository: str | None,
     prompt: str | None,
     prompt_file: Path | None,
     base_ref: str | None,

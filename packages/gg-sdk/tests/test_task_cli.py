@@ -87,6 +87,8 @@ def test_submit_emits_idempotency_key_on_stderr(
             "submit",
             "--repository",
             "owner/repo",
+            "--base-ref",
+            "main",
             "--prompt",
             "fix",
             "--idempotency-key",
@@ -109,7 +111,16 @@ def test_submit_json_output(
 
     result = runner.invoke(
         main,
-        ["--json", "submit", "--repository", "owner/repo", "--prompt", "fix"],
+        [
+            "--json",
+            "submit",
+            "--repository",
+            "owner/repo",
+            "--base-ref",
+            "main",
+            "--prompt",
+            "fix",
+        ],
     )
 
     assert result.exit_code == out.EXIT_OK
@@ -117,6 +128,22 @@ def test_submit_json_output(
     assert payload["ok"] is True
     assert payload["created"] is True
     assert "idempotency_key" in payload
+
+
+def test_submit_general_task_omits_repository_fields(
+    runner: CliRunner, env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["repository"] is None
+        assert body["base_ref"] is None
+        return httpx.Response(201, json={**_task_payload(), "repository": None})
+
+    _patch_open_client(monkeypatch, handle)
+    result = runner.invoke(
+        main, ["submit", "--prompt", "summarize", "--idempotency-key", "g1"]
+    )
+    assert result.exit_code == out.EXIT_OK
 
 
 def test_result_exit_code_distinguishes_failed_task(

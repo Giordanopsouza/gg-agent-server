@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
+from gg.sdk.repository_profiles import RepositoryProfile
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -90,18 +90,6 @@ def _load_settings() -> Settings:
 
     if supervisor_dir := os.getenv("GG_TASK_SUPERVISOR_DIR"):
         data["task_supervisor_dir"] = Path(supervisor_dir)
-
-    profiles_path = os.getenv("GG_REPOSITORY_PROFILES_PATH")
-    if profiles_path is not None and profiles_path.strip():
-        data["repository_profiles"] = load_repository_profiles(profiles_path)
-    profiles_json = os.getenv("GG_REPOSITORY_PROFILES_JSON")
-    if profiles_json is not None and profiles_json.strip():
-        import json
-
-        payload = json.loads(profiles_json)
-        data["repository_profiles"] = tuple(
-            RepositoryProfile.model_validate(item) for item in payload
-        )
 
     if token := os.getenv("GG_GITHUB_CLONE_TOKEN"):
         stripped = token.strip()

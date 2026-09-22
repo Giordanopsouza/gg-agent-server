@@ -35,6 +35,7 @@ def test_client_workflow_submit_list_show_cancel(tmp_path) -> None:
             submitted = client.submit(
                 CreateTaskRequest(
                     repository="owner/repo",
+                    base_ref="main",
                     prompt="first",
                     idempotency_key="k1",
                 )
@@ -42,6 +43,7 @@ def test_client_workflow_submit_list_show_cancel(tmp_path) -> None:
             replay = client.submit(
                 CreateTaskRequest(
                     repository="owner/repo",
+                    base_ref="main",
                     prompt="first",
                     idempotency_key="k1",
                 )
@@ -71,6 +73,7 @@ def test_follow_up_submit_uses_prior_branch_without_mutating_original(
             original = client.submit(
                 CreateTaskRequest(
                     repository="owner/repo",
+                    base_ref="main",
                     prompt="original work",
                     idempotency_key="k-original",
                 )

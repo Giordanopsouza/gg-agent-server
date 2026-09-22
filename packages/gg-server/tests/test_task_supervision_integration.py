@@ -87,9 +87,11 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
             execution_id=record.execution_id,
             repository=body.repository,
             task_branch=body.task_branch,
-            base_ref=body.base_ref or "main",
-            base_sha="abc123",
-            agent_outcome=AgentOutcome.NO_CHANGES,
+            base_ref=body.base_ref,
+            base_sha="abc123" if body.repository else None,
+            agent_outcome=(
+                AgentOutcome.NO_CHANGES if body.repository else AgentOutcome.SUCCEEDED
+            ),
             check_outcome=CheckOutcome.NOT_RUN,
             conversation_id=conversation_id or f"conv-{body.task_id}",
             completed_at=datetime.now(UTC),
@@ -250,7 +252,6 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
                 "/tasks",
                 headers=_AUTH,
                 json={
-                    "repository": "owner/repo",
                     "prompt": "do work",
                     "idempotency_key": "k1",
                 },
@@ -270,6 +271,8 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
     assert events.status_code == 200
     assert len(events.json()) == 1
     assert result.json()["state"] == "completed"
+    assert result.json()["manifest"]["repository"] is None
+    assert result.json()["publication"] is None
     assert result.json()["evidence_complete"] is True
     assert lifecycle.terminate_calls == [task_id]
 
@@ -312,6 +315,7 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
                 headers=_AUTH,
                 json={
                     "repository": "owner/repo",
+                    "base_ref": "main",
                     "prompt": "do work",
                     "idempotency_key": "k-deferred-events",
                 },
@@ -359,7 +363,6 @@ async def test_cancel_queued_task_is_idempotent(tmp_path) -> None:
                     "/tasks",
                     headers=_AUTH,
                     json={
-                        "repository": "owner/repo",
                         "prompt": "do work",
                         "idempotency_key": "k-cancel",
                     },
