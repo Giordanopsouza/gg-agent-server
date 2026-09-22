@@ -1,14 +1,14 @@
 # Glossary
 
-**Background task** — One request to change a repository, including its prompt, progress, checks, outcome, and any resulting draft pull request.
+**Background task** — One long-running prompt with progress, evidence, and an outcome. It may optionally target a repository and produce a draft pull request.
 
 **Sandbox** — The isolated execution environment assigned to one background task. Its lifetime ends after completion, failure, or cancellation.
 
 **Capacity reservation** — A place in the ten-sandbox limit held while an environment is starting, active, being removed, or not yet confirmed absent.
 
-**Finalization** — The phase after agent editing when the platform records checks, publishes any draft pull request, preserves results, and releases the environment. New agent messages are no longer accepted.
+**Finalization** — The phase after agent work when the platform preserves results, optionally publishes repository changes as a draft pull request, and releases the environment. New agent messages are no longer accepted.
 
-**Retry** — A new background task linked to a failed or cancelled predecessor. It has its own environment and branch; existing remote changes are not undone.
+**Retry** — A new background task linked to a terminal predecessor. It has its own environment and, for repository work, its own branch; existing remote changes are not undone.
 
 **Task evidence** — Recorded events, check outcomes, revisions, artifacts, and pull-request references available for inspecting a task's result.
 
