@@ -18,7 +18,6 @@ def _settings(**overrides) -> RuntimeSettings:
         "api_key": "control-secret",
         "image": "test-image:dev",
         "task_db_path": ":memory:",
-        "repository_allowlist": ("owner/allowed", "org/repo"),
     }
     base.update(overrides)
     return RuntimeSettings(**base)
@@ -33,7 +32,7 @@ def _payload(
     key: str,
     repo: str = "owner/allowed",
     prompt: str = "fix the bug",
-    base_ref: str | None = None,
+    base_ref: str | None = "main",
     retry_of: str | None = None,
 ) -> dict:
     body = {
@@ -129,7 +128,7 @@ async def test_reuse_with_different_input_returns_conflict() -> None:
 
 
 @pytest.mark.anyio
-async def test_allowlist_rejects_unknown_repository() -> None:
+async def test_repository_admits_without_allowlist_or_profile_match() -> None:
     app = _app(_settings())
     transport = ASGITransport(app=app)
 
@@ -141,8 +140,43 @@ async def test_allowlist_rejects_unknown_repository() -> None:
                 "/tasks", headers=_AUTH, json=_payload(key="k1", repo="owner/denied")
             )
 
+    assert response.status_code == 201
+    assert response.json()["repository"] == "owner/denied"
+
+
+@pytest.mark.anyio
+async def test_general_task_admits_without_repository_or_github_config() -> None:
+    app = _app(_settings())
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            response = await client.post(
+                "/tasks",
+                headers=_AUTH,
+                json={"prompt": "summarize the task", "idempotency_key": "general-1"},
+            )
+    assert response.status_code == 201
+    assert response.json()["repository"] is None
+    assert response.json()["base_ref"] is None
+
+
+@pytest.mark.anyio
+async def test_repository_requires_base_ref() -> None:
+    app = _app(_settings())
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            response = await client.post(
+                "/tasks",
+                headers=_AUTH,
+                json=_payload(key="missing-ref", base_ref=None),
+            )
     assert response.status_code == 422
-    assert "not on the allowlist" in response.json()["detail"]
+    assert "base_ref is required" in response.json()["detail"]
 
 
 @pytest.mark.anyio

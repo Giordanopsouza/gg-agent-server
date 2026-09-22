@@ -36,7 +36,7 @@ class CreateTaskRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    repository: str
+    repository: str | None = None
     prompt: str
     idempotency_key: str = Field(min_length=1, max_length=256)
     base_ref: str | None = None
@@ -52,7 +52,7 @@ class TaskRecord(BaseModel):
     seq: int
     state: TaskState = TaskState.QUEUED
     idempotency_key: str
-    repository: str
+    repository: str | None = None
     prompt: str
     base_ref: str | None = None
     base_sha: str | None = None

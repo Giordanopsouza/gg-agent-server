@@ -36,8 +36,9 @@ control-plane key via the `X-API-Key` header (`GG_RUNTIME_API_KEY`). Sandbox
 session keys are generated per task and stored only in the private ledger; they
 are not returned in task records or URLs.
 
-Keep `GG_RUNTIME_API_KEY`, `GG_GITHUB_CLONE_TOKEN`, and `OPENROUTER_API_KEY` in
+Keep `GG_RUNTIME_API_KEY` and `OPENROUTER_API_KEY` in
 environment files or a secret manager—never in images, logs, or task payloads.
+Set `GG_GITHUB_CLONE_TOKEN` only when running repository tasks.
 Rotate keys by updating the env file, restarting the service, and revoking old
 keys in GitHub/Modal as needed.
 
@@ -80,10 +81,13 @@ then re-enable dispatch.
 
 ## GitHub bot, Modal, and threat model
 
-Configure a dedicated bot account with fine-grained access limited to an
-allowlist (`GG_REPOSITORY_ALLOWLIST`) and repository profiles
-(`GG_REPOSITORY_PROFILES_PATH`). Bootstrap and check commands in profiles define
-costly verification—tighten them when quota or spend matters.
+Clients submit general work with `prompt` and `idempotency_key`, omitting
+`repository` and `base_ref`. To run a repository task, also send `repository`
+as `owner/name` and an explicit `base_ref`, and configure
+`GG_GITHUB_CLONE_TOKEN` for cloning and draft PR publication. The runtime does
+not read repository allowlist or profile settings, and does not run bootstrap or
+check commands.
+Grant the token access only to the repositories this service should work on.
 
 Modal requires a deployed app (`GG_MODAL_APP_NAME`), published image
 (`GG_MODAL_IMAGE_NAME`), and quota for concurrent sandboxes. Defaults request

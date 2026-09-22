@@ -11,7 +11,6 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from gg.sdk.repository_profiles import RepositoryProfile
 from gg.sdk.task_execution import (
     AgentOutcome,
     CheckOutcome,
@@ -116,16 +115,10 @@ def active_pi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _settings(tmp_path: Path, bare_repo: Path) -> Settings:
-    profile = RepositoryProfile(
-        repository="owner/test",
-        bootstrap_command="true",
-        check_command="grep -q changed README.md",
-    )
     return Settings(
         conversations_dir=tmp_path / "conversations",
         workspace_dir=tmp_path / "workspace",
         task_supervisor_dir=tmp_path / "supervisor",
-        repository_profiles=(profile,),
         github_clone_token="test-token",
         process_env={"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "test-key"},
     )
@@ -161,6 +154,51 @@ def _start_payload(task_id: str = "task-1") -> dict:
 
 
 @pytest.mark.anyio
+async def test_general_execution_finishes_in_blank_workspace(
+    tmp_path: Path,
+    active_pi: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "workspace",
+        task_supervisor_dir=tmp_path / "supervisor",
+        process_env={"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "test-key"},
+    )
+    monkeypatch.setenv("FAKE_PI_MODE", "edit")
+    app = create_app(settings)
+    payload = {
+        "task_id": "general-1",
+        "prompt": "write a note",
+        "start_key": "general-1",
+        "deadline_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    }
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with app.router.lifespan_context(app):
+            response = await client.post("/api/task-executions/start", json=payload)
+            assert response.status_code == 202
+            execution_id = response.json()["execution_id"]
+            manifest = None
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                result = await client.get(
+                    f"/api/task-executions/{execution_id}/manifest"
+                )
+                if result.status_code == 200:
+                    manifest = result.json()
+                    break
+                await asyncio.sleep(0.05)
+    assert manifest is not None
+    assert manifest["repository"] is None
+    assert manifest["base_ref"] is None
+    assert manifest["base_sha"] is None
+    assert manifest["agent_outcome"] == AgentOutcome.SUCCEEDED.value
+    assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
+    assert (settings.workspace_dir / "tasks" / "general-1" / "README.md").exists()
+
+
+@pytest.mark.anyio
 async def test_start_is_idempotent_and_runs_agent_once(
     tmp_path: Path,
     bare_repo: Path,
@@ -170,7 +208,7 @@ async def test_start_is_idempotent_and_runs_agent_once(
     settings = _settings(tmp_path, bare_repo)
     monkeypatch.setenv("TEST_BARE_REPO", str(bare_repo))
     monkeypatch.setenv(
-        "FAKE_PI_WORKDIR", str(settings.workspace_dir / "repos" / "task-1")
+        "FAKE_PI_WORKDIR", str(settings.workspace_dir / "tasks" / "task-1")
     )
     monkeypatch.setattr(
         "gg.server.task_supervisor.service.clone_repository",
@@ -203,10 +241,10 @@ async def test_start_is_idempotent_and_runs_agent_once(
                 await asyncio.sleep(0.05)
             assert manifest is not None
             assert manifest["agent_outcome"] == AgentOutcome.SUCCEEDED.value
-            assert manifest["check_outcome"] == CheckOutcome.PASSED.value
+            assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
             assert manifest["base_sha"]
             assert manifest["changed_files"]
-            assert manifest["check_outcome"] == CheckOutcome.PASSED.value
+            assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
 
 
 @pytest.mark.anyio
@@ -223,7 +261,7 @@ async def test_restart_marks_lost_execution_failed_without_second_agent(
     )
     settings = _settings(tmp_path, bare_repo)
     monkeypatch.setenv(
-        "FAKE_PI_WORKDIR", str(settings.workspace_dir / "repos" / "task-1")
+        "FAKE_PI_WORKDIR", str(settings.workspace_dir / "tasks" / "task-1")
     )
     app = create_app(settings)
     transport = ASGITransport(app=app)

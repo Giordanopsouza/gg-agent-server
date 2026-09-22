@@ -56,16 +56,16 @@ class CommandCapture(BaseModel):
 
 
 class TaskResultManifest(BaseModel):
-    """Durable local evidence for one repository task run."""
+    """Durable local evidence for one task run."""
 
     model_config = ConfigDict(frozen=True)
 
     task_id: str
     execution_id: str
-    repository: str
-    task_branch: str
-    base_ref: str
-    base_sha: str
+    repository: str | None = None
+    task_branch: str | None = None
+    base_ref: str | None = None
+    base_sha: str | None = None
     head_sha: str | None = None
     changed_files: tuple[str, ...] = ()
     patch: str | None = None
@@ -85,10 +85,10 @@ class StartTaskExecutionRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task_id: str = Field(min_length=1, max_length=128)
-    repository: str
+    repository: str | None = None
     prompt: str = Field(min_length=1)
     base_ref: str | None = None
-    task_branch: str = Field(min_length=1, max_length=256)
+    task_branch: str | None = Field(default=None, min_length=1, max_length=256)
     start_key: str = Field(min_length=1, max_length=256)
     deadline_at: datetime
 
@@ -100,10 +100,10 @@ class TaskExecutionRecord(BaseModel):
 
     execution_id: str = Field(default_factory=lambda: str(uuid4()))
     task_id: str
-    repository: str
+    repository: str | None = None
     start_key: str
     phase: TaskExecutionPhase = TaskExecutionPhase.ACCEPTED
-    task_branch: str
+    task_branch: str | None = None
     base_ref: str | None = None
     deadline_at: datetime
     conversation_id: str | None = None

@@ -24,7 +24,6 @@ def _settings(tmp_path: Path, **overrides) -> RuntimeSettings:
         "api_key": "control-secret",
         "image": "test-image:dev",
         "task_db_path": str(tmp_path / "tasks.sqlite"),
-        "repository_allowlist": ("owner/allowed",),
         "max_total_evidence_bytes": 4096,
         "min_free_disk_bytes": 0,
     }
@@ -85,6 +84,7 @@ def test_storage_pressure_blocks_submission(tmp_path: Path) -> None:
             service.submit(
                 CreateTaskRequest(
                     repository="owner/allowed",
+                    base_ref="main",
                     prompt="another",
                     idempotency_key="k2",
                 )

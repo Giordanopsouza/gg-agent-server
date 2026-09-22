@@ -223,12 +223,16 @@ async def test_intent_is_persisted_before_push_when_origin_is_missing(
 async def test_publish_creates_one_draft_pr_and_is_idempotent(tmp_path: Path) -> None:
     work, origin, base_sha = _prepared_repo(tmp_path)
     ledger, task_id = _ledger_with_task()
-    request = _request(task_id).model_copy(update={"base_sha": base_sha})
+    request = _request(task_id, check_outcome=CheckOutcome.NOT_RUN).model_copy(
+        update={"base_sha": base_sha}
+    )
     _edit(work, request.task_branch)
     github = FakeGitHub(ledger=ledger, task_id=task_id)
     publisher = _publisher(ledger, github)
 
     first = await publisher.publish(request, repo_dir=work)
+    assert first.pr_draft is True
+    assert first.check_outcome is CheckOutcome.NOT_RUN
     restarted = DraftPublisher(
         ledger=ledger,
         github=github,

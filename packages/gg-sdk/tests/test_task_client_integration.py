@@ -17,7 +17,6 @@ def _settings(tmp_path) -> RuntimeSettings:
         api_key="control-secret",
         image="test-image:dev",
         task_db_path=str(tmp_path / "tasks.sqlite"),
-        repository_allowlist=("owner/repo",),
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
 
@@ -35,6 +34,7 @@ def test_client_workflow_submit_list_show_cancel(tmp_path) -> None:
             submitted = client.submit(
                 CreateTaskRequest(
                     repository="owner/repo",
+                    base_ref="main",
                     prompt="first",
                     idempotency_key="k1",
                 )
@@ -42,6 +42,7 @@ def test_client_workflow_submit_list_show_cancel(tmp_path) -> None:
             replay = client.submit(
                 CreateTaskRequest(
                     repository="owner/repo",
+                    base_ref="main",
                     prompt="first",
                     idempotency_key="k1",
                 )
@@ -71,6 +72,7 @@ def test_follow_up_submit_uses_prior_branch_without_mutating_original(
             original = client.submit(
                 CreateTaskRequest(
                     repository="owner/repo",
+                    base_ref="main",
                     prompt="original work",
                     idempotency_key="k-original",
                 )

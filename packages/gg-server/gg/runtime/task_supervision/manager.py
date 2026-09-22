@@ -532,7 +532,15 @@ class TaskSupervisionManager:
         manifest: TaskResultManifest | None,
         archive: TaskResultArchive,
     ) -> None:
-        if manifest is None or self._publisher is None:
+        if (
+            manifest is None
+            or self._publisher is None
+            or manifest.repository is None
+            or manifest.task_branch is None
+            or manifest.base_ref is None
+            or manifest.base_sha is None
+            or not manifest.changed_files
+        ):
             return
         request = PublicationRequest(
             task_id=task_id,

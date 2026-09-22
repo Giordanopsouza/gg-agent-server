@@ -69,8 +69,9 @@ and provider conditions to authenticated operators.
 Production admission provisions sandboxes, starts sandbox task execution,
 archives evidence to SQLite, runs optional draft-PR finalization, and
 terminates sandboxes after confirmed cleanup. Enable it with
-`GG_TASK_DISPATCH_ENABLED=true` once repository profiles and credentials are
-configured.
+`GG_TASK_DISPATCH_ENABLED=true` once Modal and agent credentials are configured.
+General tasks need no GitHub configuration. Repository tasks require
+`GG_GITHUB_CLONE_TOKEN` and an explicit `base_ref` in the create request.
 
 To exercise only reservation, provisioning, detach/reconnect, and confirmed
 termination against Modal, use the standalone demo after publishing the image:
@@ -87,8 +88,9 @@ diagnosis.
 
 ## Repository task demo
 
-After publishing the image and configuring `GG_REPOSITORY_PROFILES_PATH`,
-`GG_GITHUB_CLONE_TOKEN`, and `OPENROUTER_API_KEY`, run:
+After publishing the image, configure `GG_GITHUB_CLONE_TOKEN`,
+`OPENROUTER_API_KEY`, `GG_REPOSITORY_DEMO_REPOSITORY` (owner/name), and
+`GG_REPOSITORY_DEMO_BASE_REF`, then run:
 
 ```console
 GG_RUNTIME_API_KEY=demo-only \

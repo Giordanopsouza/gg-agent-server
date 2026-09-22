@@ -16,8 +16,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
-
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -37,7 +35,6 @@ class Settings(BaseModel):
     conversations_dir: Path = DEFAULT_CONVERSATIONS_DIR
     workspace_dir: Path = DEFAULT_WORKSPACE_DIR
     task_supervisor_dir: Path = DEFAULT_TASK_SUPERVISOR_DIR
-    repository_profiles: tuple[RepositoryProfile, ...] = Field(default_factory=tuple)
     github_clone_token: str | None = None
     process_env: dict[str, str] = Field(default_factory=dict)
     # - # Empty list means an open server (no auth). See task 010 for enforcement.
@@ -90,18 +87,6 @@ def _load_settings() -> Settings:
 
     if supervisor_dir := os.getenv("GG_TASK_SUPERVISOR_DIR"):
         data["task_supervisor_dir"] = Path(supervisor_dir)
-
-    profiles_path = os.getenv("GG_REPOSITORY_PROFILES_PATH")
-    if profiles_path is not None and profiles_path.strip():
-        data["repository_profiles"] = load_repository_profiles(profiles_path)
-    profiles_json = os.getenv("GG_REPOSITORY_PROFILES_JSON")
-    if profiles_json is not None and profiles_json.strip():
-        import json
-
-        payload = json.loads(profiles_json)
-        data["repository_profiles"] = tuple(
-            RepositoryProfile.model_validate(item) for item in payload
-        )
 
     if token := os.getenv("GG_GITHUB_CLONE_TOKEN"):
         stripped = token.strip()

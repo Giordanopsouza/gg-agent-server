@@ -16,20 +16,23 @@ from gg.sdk.task_execution import StartTaskExecutionRequest, TaskExecutionPhase
 
 async def run_demo() -> None:
     settings = load_settings()
-    if not settings.repository_profiles:
-        raise RuntimeError("GG_REPOSITORY_PROFILES_PATH must configure one profile")
-    profile = settings.repository_profiles[0]
+    repository = os.getenv("GG_REPOSITORY_DEMO_REPOSITORY")
+    base_ref = os.getenv("GG_REPOSITORY_DEMO_BASE_REF")
+    if not repository or not base_ref:
+        raise RuntimeError(
+            "GG_REPOSITORY_DEMO_REPOSITORY and GG_REPOSITORY_DEMO_BASE_REF are required"
+        )
     ledger = TaskLedger(db_path=os.getenv("GG_REPOSITORY_DEMO_DB_PATH", ":memory:"))
     ledger.open()
     task_id = str(uuid4())
     task, _ = ledger.submit(
         idempotency_key=f"repository-demo-{task_id}",
-        repository=profile.repository,
+        repository=repository,
         prompt=os.getenv(
             "GG_REPOSITORY_DEMO_PROMPT",
             "Add a clearly labeled demo marker file and nothing else.",
         ),
-        base_ref=None,
+        base_ref=base_ref,
         retry_of=None,
     )
     lifecycle = lifecycle_from_settings(ledger=ledger, settings=settings)
@@ -39,9 +42,9 @@ async def run_demo() -> None:
         client = TaskSupervisorClient(connection)
         request = StartTaskExecutionRequest(
             task_id=task.id,
-            repository=profile.repository,
+            repository=repository,
             prompt=task.prompt,
-            base_ref=None,
+            base_ref=base_ref,
             task_branch=f"gg/demo/{task.id}",
             start_key=task.id,
             deadline_at=datetime.now(UTC) + timedelta(hours=1),
