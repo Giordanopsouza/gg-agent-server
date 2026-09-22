@@ -24,7 +24,6 @@ def _settings(tmp_path: Path, **overrides) -> RuntimeSettings:
         "api_key": "control-secret",
         "image": "test-image:dev",
         "task_db_path": str(tmp_path / "tasks.sqlite"),
-        "repository_allowlist": ("owner/allowed",),
         "max_total_evidence_bytes": 4096,
         "min_free_disk_bytes": 0,
     }

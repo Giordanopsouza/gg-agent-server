@@ -18,7 +18,6 @@ def _settings(**overrides) -> RuntimeSettings:
         "api_key": "control-secret",
         "image": "test-image:dev",
         "task_db_path": ":memory:",
-        "repository_allowlist": ("owner/allowed", "org/repo"),
     }
     base.update(overrides)
     return RuntimeSettings(**base)
@@ -147,7 +146,7 @@ async def test_repository_admits_without_allowlist_or_profile_match() -> None:
 
 @pytest.mark.anyio
 async def test_general_task_admits_without_repository_or_github_config() -> None:
-    app = _app(_settings(repository_allowlist=(), repository_profiles=()))
+    app = _app(_settings())
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://runtime"

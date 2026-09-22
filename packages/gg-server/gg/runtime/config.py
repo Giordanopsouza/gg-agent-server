@@ -6,8 +6,6 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-from gg.sdk.repository_profiles import RepositoryProfile
-
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8001
@@ -46,8 +44,6 @@ class RuntimeSettings(BaseModel):
     port: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
     image: str = DEFAULT_IMAGE
     task_db_path: str = DEFAULT_TASK_DB_PATH
-    repository_allowlist: tuple[str, ...] = Field(default_factory=tuple)
-    repository_profiles: tuple[RepositoryProfile, ...] = Field(default_factory=tuple)
     github_clone_token: str | None = None
     openrouter_api_key: str | None = None
     max_prompt_chars: int = Field(default=DEFAULT_MAX_PROMPT_CHARS, ge=1)
@@ -111,17 +107,6 @@ class RuntimeSettings(BaseModel):
         if not value.strip():
             raise ValueError("task_db_path must not be empty")
         return value
-
-    @field_validator("repository_allowlist")
-    @classmethod
-    # Allowlist entries are stripped and de-duplicated so lookups are exact.
-    def normalize_allowlist(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        normalized: list[str] = []
-        for entry in value:
-            stripped = entry.strip()
-            if stripped and stripped not in normalized:
-                normalized.append(stripped)
-        return tuple(normalized)
 
     @field_validator("modal_app_name", "modal_deployment", "modal_image_name")
     @classmethod
@@ -187,18 +172,11 @@ def _parse_port(raw: str | None) -> int:
     return value
 
 
-# Turn a comma-separated env var into a tuple of repository names.
 def _optional_secret(raw: str | None) -> str | None:
     if raw is None:
         return None
     stripped = raw.strip()
     return stripped or None
-
-
-def _parse_allowlist(raw: str | None) -> tuple[str, ...]:
-    if raw is None or not raw.strip():
-        return ()
-    return tuple(entry.strip() for entry in raw.split(",") if entry.strip())
 
 
 def _parse_int(raw: str | None, default: int) -> int:
@@ -249,7 +227,6 @@ def load_settings() -> RuntimeSettings:
         port=_parse_port(os.getenv("GG_RUNTIME_PORT")),
         image=image,
         task_db_path=os.getenv("GG_TASK_DB_PATH", DEFAULT_TASK_DB_PATH),
-        repository_allowlist=_parse_allowlist(os.getenv("GG_REPOSITORY_ALLOWLIST")),
         github_clone_token=_optional_secret(os.getenv("GG_GITHUB_CLONE_TOKEN")),
         openrouter_api_key=_optional_secret(os.getenv("OPENROUTER_API_KEY")),
         max_prompt_chars=_parse_int(

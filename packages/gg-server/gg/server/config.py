@@ -16,8 +16,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from gg.sdk.repository_profiles import RepositoryProfile
-
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -37,7 +35,6 @@ class Settings(BaseModel):
     conversations_dir: Path = DEFAULT_CONVERSATIONS_DIR
     workspace_dir: Path = DEFAULT_WORKSPACE_DIR
     task_supervisor_dir: Path = DEFAULT_TASK_SUPERVISOR_DIR
-    repository_profiles: tuple[RepositoryProfile, ...] = Field(default_factory=tuple)
     github_clone_token: str | None = None
     process_env: dict[str, str] = Field(default_factory=dict)
     # - # Empty list means an open server (no auth). See task 010 for enforcement.

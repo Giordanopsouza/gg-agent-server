@@ -17,7 +17,6 @@ def _settings(tmp_path) -> RuntimeSettings:
         api_key="control-secret",
         image="test-image:dev",
         task_db_path=str(tmp_path / "tasks.sqlite"),
-        repository_allowlist=("owner/repo",),
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
 

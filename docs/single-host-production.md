@@ -84,8 +84,9 @@ then re-enable dispatch.
 Clients submit general work with `prompt` and `idempotency_key`, omitting
 `repository` and `base_ref`. To run a repository task, also send `repository`
 as `owner/name` and an explicit `base_ref`, and configure
-`GG_GITHUB_CLONE_TOKEN` for cloning and draft PR publication. Repository
-profiles, allowlists, bootstrap commands, and check commands are not required.
+`GG_GITHUB_CLONE_TOKEN` for cloning and draft PR publication. The runtime does
+not read repository allowlist or profile settings, and does not run bootstrap or
+check commands.
 Grant the token access only to the repositories this service should work on.
 
 Modal requires a deployed app (`GG_MODAL_APP_NAME`), published image
