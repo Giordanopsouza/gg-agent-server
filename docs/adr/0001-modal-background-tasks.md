@@ -4,6 +4,8 @@ status: accepted
 
 # A single-host control plane for Modal background tasks
 
+The requirement to preserve historical Docker demos, and the product default that tasks run configured repository bootstrap and check commands, are superseded by [ADR 0002](0002-remove-legacy-learning-surfaces.md).
+
 Evolve the learning server into a minimal internal platform for repository-and-prompt tasks that produce draft GitHub pull requests. Use one always-on control-plane process with SQLite on a local persistent disk, standard Modal sandboxes for execution, and the existing Pi agent server inside each sandbox. Start with a CLI over an authenticated HTTP/WebSocket API and a hard maximum of ten reserved sandbox slots.
 
 SQLite owns the durable queue, task lifecycle, capacity reservations, message receipts, event copies, and publication journal. Existing sandbox conversation persistence remains JSON files. This supersedes the original plan's JSON-only control-plane constraint and exclusions of recovery and managed infrastructure. It preserves historical Docker demos and both import boundaries: `gg.sdk` never imports `gg.server`, and `gg.runtime` reaches `gg.server` only through HTTP/WebSocket contracts.
