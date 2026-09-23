@@ -1,6 +1,6 @@
 """Standalone runtime control plane.
 
-Owns Docker-backed gg sandboxes and the durable background task ledger.
+Owns the durable background task ledger and Modal sandbox dispatch.
 """
 
 from gg.runtime.app import create_app

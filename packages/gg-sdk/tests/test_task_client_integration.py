@@ -15,7 +15,6 @@ from gg.sdk.tasks import CreateTaskRequest, TaskState
 def _settings(tmp_path) -> RuntimeSettings:
     return RuntimeSettings(
         api_key="control-secret",
-        image="test-image:dev",
         task_db_path=str(tmp_path / "tasks.sqlite"),
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )

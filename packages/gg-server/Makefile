@@ -15,7 +15,7 @@ help:
 		'  install            sync workspace dependencies' \
 		'  test               run server and root boundary tests' \
 		'  unit-tests          run non-live tests' \
-		'  integration-tests   run Docker/Pi-marked tests' \
+		'  integration-tests   run the opt-in Modal smoke' \
 		'  lint-check|lint-fix run Ruff linting' \
 		'  format-check|format-fix run Ruff formatting' \
 		'  pre-commit          run format, lint, and unit checks' \
@@ -36,7 +36,7 @@ production-smoke-tests:
 	$(UV_RUN) pytest packages/gg-server/tests/test_production_operations.py
 
 integration-tests:
-	$(UV_RUN) pytest $(TESTS) -m "docker or pi"
+	$(UV_RUN) pytest $(TESTS) -m modal
 
 lint-check:
 	$(UV_RUN) ruff check $(SOURCES)

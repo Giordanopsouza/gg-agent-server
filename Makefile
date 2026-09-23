@@ -2,15 +2,14 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help install test unit-tests integration-tests lint-check lint-fix \
-        format-check format-fix pre-commit build ci run demo-pi docker-build \
-        demo-docker-pr help-gg-sdk help-gg-server install-gg-sdk install-gg-server \
+        format-check format-fix pre-commit build ci run docker-build \
+        help-gg-sdk help-gg-server install-gg-sdk install-gg-server \
         test-gg-sdk test-gg-server unit-tests-gg-sdk unit-tests-gg-server \
         integration-tests-gg-sdk integration-tests-gg-server lint-check-gg-sdk \
         lint-check-gg-server lint-fix-gg-sdk lint-fix-gg-server \
         format-check-gg-sdk format-check-gg-server format-fix-gg-sdk \
         format-fix-gg-server pre-commit-gg-sdk pre-commit-gg-server build-gg-sdk \
-        build-gg-server run-gg-server demo-pi-gg-sdk docker-build-gg-server \
-        demo-docker-pr-gg-sdk
+        build-gg-server run-gg-server docker-build-gg-server
 
 help: help-gg-sdk help-gg-server
 install: install-gg-sdk install-gg-server
@@ -25,9 +24,7 @@ pre-commit: pre-commit-gg-sdk pre-commit-gg-server
 build: build-gg-sdk build-gg-server
 ci: install test lint-check format-check pre-commit build
 run: run-gg-server
-demo-pi: demo-pi-gg-sdk
 docker-build: docker-build-gg-server
-demo-docker-pr: demo-docker-pr-gg-sdk
 
 help-gg-sdk:
 	$(MAKE) -C packages/gg-sdk help
@@ -75,9 +72,5 @@ build-gg-server:
 	$(MAKE) -C packages/gg-server build
 run-gg-server:
 	$(MAKE) -C packages/gg-server run
-demo-pi-gg-sdk:
-	$(MAKE) -C packages/gg-sdk demo-pi
 docker-build-gg-server:
 	$(MAKE) -C packages/gg-server docker-build
-demo-docker-pr-gg-sdk:
-	$(MAKE) -C packages/gg-sdk demo-docker-pr
