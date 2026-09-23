@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from gg.sdk.local_workspace import LocalWorkspace
 
 
+DEFAULT_PI_MODEL = "z-ai/glm-5.3-flashx"
+
+
 class EventEmitter(Protocol):
     def __call__(self, kind: EventKind, payload: dict[str, Any]) -> Event: ...
 
@@ -44,7 +47,7 @@ class PiAgentConfig(BaseModel):
 
     kind: Literal["pi"] = "pi"
     provider: Literal["openrouter"] = "openrouter"
-    model: str = Field(default="google/gemini-3.7-flash", min_length=1)
+    model: str = Field(default=DEFAULT_PI_MODEL, min_length=1)
     timeout_seconds: PositiveFloat = 600
     command_ack_timeout_seconds: PositiveFloat = 5
     cancel_grace_seconds: PositiveFloat = 5
