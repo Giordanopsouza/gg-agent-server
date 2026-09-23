@@ -39,6 +39,7 @@ class RuntimeSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     api_key: str
+    cors_origins: tuple[str, ...] = ()
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
     task_db_path: str = DEFAULT_TASK_DB_PATH
@@ -209,6 +210,11 @@ def load_settings() -> RuntimeSettings:
 
     return RuntimeSettings(
         api_key=api_key,
+        cors_origins=tuple(
+            origin.strip()
+            for origin in os.getenv("GG_RUNTIME_CORS_ORIGINS", "").split(",")
+            if origin.strip()
+        ),
         host=os.getenv("GG_RUNTIME_HOST", DEFAULT_HOST),
         port=_parse_port(os.getenv("GG_RUNTIME_PORT")),
         task_db_path=os.getenv("GG_TASK_DB_PATH", DEFAULT_TASK_DB_PATH),
