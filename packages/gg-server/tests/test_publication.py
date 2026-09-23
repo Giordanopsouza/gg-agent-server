@@ -261,6 +261,45 @@ async def test_publish_creates_one_draft_pr_and_is_idempotent(tmp_path: Path) ->
 
 
 @pytest.mark.anyio
+async def test_adopts_sandbox_published_pr_without_creating_commit(
+    tmp_path: Path,
+) -> None:
+    work, _origin, base_sha = _prepared_repo(tmp_path)
+    ledger, task_id = _ledger_with_task()
+    request = _request(task_id).model_copy(update={"base_sha": base_sha})
+    _edit(work, request.task_branch)
+    _run(["git", "add", "README.md"], cwd=work)
+    _run(["git", "commit", "-m", "sandbox change"], cwd=work)
+    head_sha = _run(["git", "rev-parse", "HEAD"], cwd=work)
+    _run(["git", "push", "-u", "origin", request.task_branch], cwd=work)
+    request = request.model_copy(update={"head_sha": head_sha})
+    github = FakeGitHub(ledger=ledger, task_id=task_id)
+    github.branch_shas[f"{request.repository}:{request.task_branch}"] = head_sha
+    github.pulls.append(
+        RemotePullRequest(
+            number=32,
+            html_url="https://github.com/owner/repo/pull/32",
+            draft=True,
+            state="open",
+            author="gg-bot",
+            title="sandbox PR",
+            body=f"<!-- {marker_token(request.task_marker)} -->",
+            head_ref=request.task_branch,
+            base_ref=request.base_ref,
+            head_sha=head_sha,
+        )
+    )
+
+    record = await _publisher(ledger, github).publish(request)
+
+    assert record.state is PublicationState.PUBLISHED
+    assert record.commit_sha == head_sha
+    assert record.pr_number == 32
+    assert github.create_calls == 0
+    assert "create_draft_pull_request" not in github.calls
+
+
+@pytest.mark.anyio
 async def test_timeout_after_create_is_reconciled_without_second_pr(
     tmp_path: Path,
 ) -> None:

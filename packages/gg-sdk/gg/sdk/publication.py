@@ -35,6 +35,7 @@ class PublicationRequest(BaseModel):
     task_branch: str = Field(min_length=1, max_length=256)
     base_ref: str = Field(min_length=1, max_length=200)
     base_sha: str = Field(min_length=1)
+    head_sha: str | None = None
     task_marker: str = Field(min_length=1, max_length=256)
     agent_outcome: AgentOutcome
     check_outcome: CheckOutcome = CheckOutcome.NOT_RUN
