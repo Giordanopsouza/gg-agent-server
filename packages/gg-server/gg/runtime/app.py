@@ -15,6 +15,7 @@ from fastapi import (
     WebSocket,
     status,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 
 from gg.runtime.config import RuntimeSettings
@@ -116,6 +117,13 @@ def create_app(
             ledger.close()
 
     app = FastAPI(title="gg-runtime", lifespan=lifespan)
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(settings.cors_origins),
+            allow_methods=["GET", "POST"],
+            allow_headers=["X-API-Key", "Content-Type"],
+        )
     app.state.settings = settings
     app.state.task_ledger = ledger
     app.state.task_service = task_service

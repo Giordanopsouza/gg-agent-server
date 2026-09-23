@@ -44,6 +44,41 @@ async def test_control_plane_rejects_missing_or_wrong_api_key() -> None:
 
 
 @pytest.mark.anyio
+async def test_configured_web_origin_can_preflight_api_key() -> None:
+    app = create_app(
+        RuntimeSettings(
+            api_key="control-secret",
+            task_db_path=":memory:",
+            cors_origins=("http://localhost:5173",),
+        )
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime"
+    ) as client:
+        allowed = await client.options(
+            "/tasks",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-api-key,content-type",
+            },
+        )
+        denied = await client.options(
+            "/tasks",
+            headers={
+                "Origin": "https://untrusted.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-api-key",
+            },
+        )
+
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert denied.status_code == 400
+
+
+@pytest.mark.anyio
 async def test_shutdown_detaches_durable_modal(tmp_path) -> None:
     ledger = TaskLedger(db_path=":memory:")
     ledger.open()

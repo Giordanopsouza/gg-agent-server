@@ -41,5 +41,6 @@ uv run --no-editable gg-task submit \
 ## Docs
 
 - [Architecture](docs/architecture.md)
+- [Task web UI](web/README.md)
 - [Plan](docs/tasks/overview.md)
 - [Task tracker](docs/tasks/README.md)

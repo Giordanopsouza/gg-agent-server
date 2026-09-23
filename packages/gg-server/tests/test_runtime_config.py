@@ -10,6 +10,7 @@ _RUNTIME_ENV = (
     "GG_RUNTIME_API_KEY",
     "GG_RUNTIME_HOST",
     "GG_RUNTIME_PORT",
+    "GG_RUNTIME_CORS_ORIGINS",
     "GG_MODAL_APP_NAME",
     "GG_MODAL_DEPLOYMENT",
     "GG_MODAL_IMAGE_NAME",
@@ -38,12 +39,19 @@ def test_runtime_settings_load_from_environment(
     monkeypatch.setenv("GG_RUNTIME_API_KEY", "control-secret")
     monkeypatch.setenv("GG_RUNTIME_HOST", "0.0.0.0")
     monkeypatch.setenv("GG_RUNTIME_PORT", "9000")
+    monkeypatch.setenv(
+        "GG_RUNTIME_CORS_ORIGINS", "https://tasks.example.com, http://localhost:5173"
+    )
 
     settings = load_settings()
 
     assert settings.api_key == "control-secret"
     assert settings.host == "0.0.0.0"
     assert settings.port == 9000
+    assert settings.cors_origins == (
+        "https://tasks.example.com",
+        "http://localhost:5173",
+    )
 
 
 def test_runtime_api_key_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
