@@ -97,6 +97,10 @@ class DraftPublisher:
         if not _should_publish(request):
             return self._record_skip(request, existing)
 
+        adopted = await self.adopt_existing(request)
+        if adopted is not None:
+            return adopted
+
         if repo_dir is None:
             raise PublicationError("repo_dir is required to publish changes")
         self._assert_not_base_branch(request)
@@ -135,6 +139,37 @@ class DraftPublisher:
             raise
         except PublicationError:
             raise
+
+    async def adopt_existing(
+        self, request: PublicationRequest
+    ) -> PublicationRecord | None:
+        """Recover a sandbox-published PR without making a second commit."""
+
+        if not _should_publish(request) or request.head_sha is None:
+            return None
+        self._assert_not_base_branch(request)
+        try:
+            remote_sha = await self._github.get_branch_sha(
+                request.repository, request.task_branch
+            )
+        except GitHubError as exc:
+            raise PublicationError(_redact(str(exc), self._github_token)) from exc
+        if remote_sha != request.head_sha:
+            return None
+        matched = await self._matching_pull_requests(request)
+        if len(matched) > 1:
+            raise PublicationConflictError(
+                "multiple pull requests match repository/head/base/task marker"
+            )
+        if not matched:
+            return None
+        pr = matched[0]
+        if pr.state != "open" or pr.head_sha != request.head_sha:
+            raise PublicationConflictError(
+                "task pull request does not match the published branch head"
+            )
+        self._begin(request, commit_sha=request.head_sha)
+        return self._record_published(request, pr, request.head_sha)
 
     def _record_skip(
         self,

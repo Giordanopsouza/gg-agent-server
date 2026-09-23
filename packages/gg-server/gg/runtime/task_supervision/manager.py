@@ -49,6 +49,8 @@ TASK_BRANCH_PREFIX = "gg/task"
 
 
 class PublicationPort(Protocol):
+    async def adopt_existing(self, request: PublicationRequest) -> object | None: ...
+
     async def publish(
         self, request: PublicationRequest, *, repo_dir: Path | None = None
     ) -> object: ...
@@ -479,10 +481,18 @@ class TaskSupervisionManager:
             evidence_complete=evidence_complete,
             evidence_detail=evidence_detail,
         )
-        await self._maybe_publish(task_id, manifest, archive)
         terminal_state, outcome_detail, check_status = _terminal_from_manifest(
             task, manifest, supervision.cancel_requested
         )
+        try:
+            await self._maybe_publish(task_id, manifest, archive)
+        except Exception as exc:
+            terminal_state = TaskState.FAILED
+            detail = str(exc)
+            github_token = getattr(self._settings, "github_clone_token", None)
+            if github_token:
+                detail = detail.replace(github_token, "[REDACTED]")
+            outcome_detail = f"publication failed: {detail}"
         self._ledger.finish_task(
             task_id,
             state=terminal_state,
@@ -548,6 +558,7 @@ class TaskSupervisionManager:
             task_branch=manifest.task_branch,
             base_ref=manifest.base_ref,
             base_sha=manifest.base_sha,
+            head_sha=manifest.head_sha,
             task_marker=task_id,
             agent_outcome=manifest.agent_outcome,
             check_outcome=manifest.check_outcome,
@@ -558,6 +569,8 @@ class TaskSupervisionManager:
 
         github_token = getattr(self._settings, "github_clone_token", None)
         if github_token is None:
+            return
+        if await self._publisher.adopt_existing(request) is not None:
             return
         with tempfile.TemporaryDirectory(prefix="gg-finalize-") as tmp:
             repo_dir = Path(tmp) / "repo"

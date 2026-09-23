@@ -278,6 +278,59 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
 
 
 @pytest.mark.anyio
+async def test_publication_error_finishes_task_as_failed(tmp_path, monkeypatch) -> None:
+    state = FakeAgentState()
+    ledger = TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
+    ledger.open()
+    lifecycle = ConnectableFakeLifecycle(
+        ledger=ledger, agent_app=_build_fake_agent(state)
+    )
+    settings = RuntimeSettings(
+        api_key="control-secret",
+        task_db_path=str(tmp_path / "tasks.sqlite"),
+        task_dispatch_enabled=True,
+        dispatch_lock_path=str(tmp_path / "dispatch.lock"),
+    )
+    supervision = TaskSupervisionManager(
+        ledger=ledger,
+        lifecycle=lifecycle,  # type: ignore[arg-type]
+        settings=settings,
+    )
+
+    async def fail_publication(*_args) -> None:
+        raise RuntimeError("remote branch conflict")
+
+    monkeypatch.setattr(supervision, "_maybe_publish", fail_publication)
+    app = create_app(
+        settings,
+        task_ledger=ledger,
+        modal_lifecycle=lifecycle,  # type: ignore[arg-type]
+        task_supervision=supervision,
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://runtime"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            created = await client.post(
+                "/tasks",
+                headers=_AUTH,
+                json={"prompt": "do work", "idempotency_key": "publication-failure"},
+            )
+            task_id = created.json()["id"]
+            for _ in range(50):
+                await app.state.task_scheduler.dispatch_once()
+                record = ledger.get(task_id)
+                assert record is not None
+                if record.state is TaskState.FAILED:
+                    break
+                await asyncio.sleep(0.05)
+
+    assert record.state is TaskState.FAILED
+    assert record.outcome_detail == "publication failed: remote branch conflict"
+    assert lifecycle.terminate_calls == [task_id]
+
+
+@pytest.mark.anyio
 async def test_supervision_copies_events_when_conversation_appears_after_start(
     tmp_path,
 ) -> None:
