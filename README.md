@@ -19,15 +19,24 @@ Use `uv sync --no-editable`. Default editable installs break `import gg` on Pyth
 
 ## Demo
 
-Three isolated containers start at once. Each Pi clones `Giordanopsouza/personal-website`, does one change (title, background color, or font), opens a pull request, then the sandboxes are removed. No host directory is mounted.
+Start the control plane locally with dispatch enabled. A submitted task is admitted and the scheduler provisions a Modal sandbox for it.
 
 ```bash
-docker build -t gg-agent-server:dev .
 set -a && source .env && set +a
-uv run --no-editable python -m gg.sdk.demo.docker_pi_github_pr
+GG_RUNTIME_API_KEY=local-demo \
+GG_TASK_DB_PATH=/tmp/gg-tasks.sqlite \
+GG_TASK_DISPATCH_ENABLED=true \
+uv run --no-editable python -m gg.runtime
 ```
 
-Needs `OPENROUTER_API_KEY` and a fine-grained `GH_TOKEN` with contents and pull-request write access.
+In another shell, submit a general task:
+
+```bash
+GG_RUNTIME_API_KEY=local-demo \
+uv run --no-editable gg-task submit \
+  --prompt "Say hello" \
+  --idempotency-key hello-1
+```
 
 ## Docs
 

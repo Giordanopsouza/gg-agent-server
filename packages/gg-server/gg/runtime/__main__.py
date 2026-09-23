@@ -12,7 +12,7 @@ from gg.runtime.config import load_settings
 
 def main() -> None:
     settings = load_settings()
-    parser = argparse.ArgumentParser(description="gg fake runtime API")
+    parser = argparse.ArgumentParser(description="gg runtime control plane")
     parser.add_argument("--host", default=settings.host)
     parser.add_argument("--port", type=int, default=settings.port)
     args = parser.parse_args()

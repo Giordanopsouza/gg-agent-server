@@ -53,10 +53,9 @@ GG_RUN_MODAL_TESTS=1 uv run --no-editable pytest \
 The smoke creates one sandbox, authenticates to `/health`, reconnects from a
 fresh lifecycle client, terminates it, and confirms provider termination.
 
-Running-agent steering and cancellation are verified separately against the
-same Pi version pinned in the image. See
-[Running-agent messages and cancellation](running-agent-controls.md) for the
-receipt semantics and the opt-in control smoke command.
+Running-agent steering and cancellation use the Pi version pinned in the image.
+See [Running-agent messages and cancellation](running-agent-controls.md) for the
+receipt semantics. Offline tests cover those controls.
 
 ## FIFO recovery and lifecycle demo
 

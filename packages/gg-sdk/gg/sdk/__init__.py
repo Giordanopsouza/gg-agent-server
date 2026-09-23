@@ -9,7 +9,6 @@ from gg.sdk.agent_backend import (
     create_agent_backend,
 )
 from gg.sdk.conversation import Conversation
-from gg.sdk.docker_workspace import DockerWorkspace, DockerWorkspaceError
 from gg.sdk.domain import (
     ConversationRecord,
     ConversationStatus,
@@ -50,10 +49,7 @@ from gg.sdk.local_conversation import LocalConversation
 from gg.sdk.local_workspace import CommandResult, LocalWorkspace
 from gg.sdk.pi_agent import PiAgentSettings, PiRpcAgent
 from gg.sdk.publication import PublicationRecord, PublicationRequest, PublicationState
-from gg.sdk.remote_conversation import RemoteConversation, RemoteEventSubscription
 from gg.sdk.remote_workspace import RemoteWorkspace
-from gg.sdk.repository_profiles import RepositoryProfile, load_repository_profiles
-from gg.sdk.runtime_workspace import RuntimeWorkspace
 from gg.sdk.task_client import (
     SubmitResponse,
     TaskClient,
@@ -78,14 +74,6 @@ from gg.sdk.task_supervision import (
     TaskResultRecord,
 )
 from gg.sdk.tasks import CreateTaskRequest, TaskRecord, TaskState
-from gg.sdk.tools import (
-    Observation,
-    Tool,
-    ToolNotFoundError,
-    ToolRegistry,
-    WriteFileTool,
-    default_tool_registry,
-)
 
 
 __all__ = [
@@ -107,8 +95,6 @@ __all__ = [
     "ConversationNotFoundError",
     "ConversationRecord",
     "ConversationStatus",
-    "DockerWorkspace",
-    "DockerWorkspaceError",
     "Event",
     "EventKind",
     "EventLog",
@@ -123,10 +109,7 @@ __all__ = [
     "PublicationRequest",
     "PublicationState",
     "RunningAgentBackend",
-    "RemoteConversation",
-    "RemoteEventSubscription",
     "RemoteWorkspace",
-    "RuntimeWorkspace",
     "SendMessageRequest",
     "SocketReceiptFrame",
     "StartConversationRequest",
@@ -139,7 +122,6 @@ __all__ = [
     "CheckOutcome",
     "CommandCapture",
     "CreateTaskRequest",
-    "RepositoryProfile",
     "StartTaskExecutionRequest",
     "SubmitResponse",
     "TaskClient",
@@ -156,14 +138,7 @@ __all__ = [
     "TaskResultRecord",
     "TaskState",
     "RetryTaskRequest",
-    "load_repository_profiles",
     "load_task_client_settings",
-    "Observation",
-    "Tool",
-    "ToolNotFoundError",
-    "ToolRegistry",
-    "WriteFileTool",
-    "default_tool_registry",
     "create_agent_backend",
     "load_base_state",
     "load_meta",

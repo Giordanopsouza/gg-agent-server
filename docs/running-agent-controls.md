@@ -66,13 +66,4 @@ racing request is either durably accepted for the run or rejected with HTTP 409.
 
 Offline tests use a long-lived fake RPC subprocess to cover HTTP, WebSocket,
 steer acknowledgement, lost acknowledgement, settlement races, abort, and
-process-tree termination. The opt-in smoke runs the same controls against Pi
-0.83.0 inside `gg-agent-server:dev`:
-
-```console
-GG_RUN_DOCKER_PI_CONTROL_TESTS=1 uv run --no-editable pytest \
-  packages/gg-server/tests/test_running_conversation_controls.py -m "docker and pi"
-```
-
-Build the image first and configure `OPENROUTER_API_KEY`; this smoke makes a paid
-model request.
+process-tree termination.

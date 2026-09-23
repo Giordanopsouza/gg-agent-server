@@ -4,7 +4,7 @@ status: accepted
 
 # A single-host control plane for Modal background tasks
 
-> The repository-only task shape, allowlist/profile gates, and mandatory check defaults below are superseded by [ADR 0002](0002-general-background-tasks.md).
+> The repository-only task shape, allowlist/profile gates, and mandatory check defaults below are superseded by [ADR 0002](0002-general-background-tasks.md). The requirement to preserve historical Docker demos is superseded by [ADR 0003](0003-remove-legacy-learning-surfaces.md).
 
 Evolve the learning server into a minimal internal platform for repository-and-prompt tasks that produce draft GitHub pull requests. Use one always-on control-plane process with SQLite on a local persistent disk, standard Modal sandboxes for execution, and the existing Pi agent server inside each sandbox. Start with a CLI over an authenticated HTTP/WebSocket API and a hard maximum of ten reserved sandbox slots.
 

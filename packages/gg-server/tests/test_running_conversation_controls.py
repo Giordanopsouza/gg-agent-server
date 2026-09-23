@@ -3,9 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
-import subprocess
-import threading
 import time
 from pathlib import Path
 
@@ -14,12 +11,7 @@ import pytest
 from httpx import ASGITransport
 from starlette.testclient import TestClient
 
-from gg.sdk import (
-    ConversationStatus,
-    DockerWorkspace,
-    MessageDeliveryStatus,
-    RemoteConversation,
-)
+from gg.sdk import ConversationStatus, MessageDeliveryStatus
 from gg.server import Settings, create_app
 
 
@@ -213,63 +205,3 @@ def test_websocket_can_steer_and_cancel_active_rpc_process(
 
     record = json.loads(record_path.read_text(encoding="utf-8"))
     assert [item["message"] for item in record["steers"]] == ["steer now"]
-
-
-@pytest.mark.docker
-@pytest.mark.pi
-@pytest.mark.skipif(
-    os.getenv("GG_RUN_DOCKER_PI_CONTROL_TESTS") != "1",
-    reason="set GG_RUN_DOCKER_PI_CONTROL_TESTS=1 to run the paid control smoke",
-)
-def test_live_pinned_pi_image_acknowledges_steer_abort_and_settlement() -> None:
-    """Exercise controls against the image's Pi, never an unrelated host Pi."""
-    image = "gg-agent-server:dev"
-    if shutil.which("docker") is None:
-        pytest.skip("Docker CLI is not installed")
-    inspect = subprocess.run(
-        ["docker", "image", "inspect", image],
-        capture_output=True,
-        check=False,
-    )
-    if inspect.returncode != 0:
-        pytest.skip(f"{image} image is not built")
-    if not os.getenv("OPENROUTER_API_KEY"):
-        pytest.skip("OPENROUTER_API_KEY is not configured")
-
-    version = subprocess.run(
-        ["docker", "run", "--rm", "--entrypoint", "pi", image, "--version"],
-        capture_output=True,
-        check=True,
-        text=True,
-    )
-    assert "0.83.0" in version.stdout
-
-    with DockerWorkspace(
-        image=image,
-        secret_env_names=["OPENROUTER_API_KEY"],
-        timeout=30,
-    ) as workspace:
-        conversation = RemoteConversation(workspace=workspace)
-        conversation.send_message("Run `sleep 30`, then report that it completed.")
-        run_thread = threading.Thread(target=conversation.run)
-        run_thread.start()
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            record = workspace.client.get(
-                f"/api/conversations/{conversation.id}",
-                headers=workspace.headers,
-            ).json()
-            if record["status"] == ConversationStatus.RUNNING:
-                break
-            time.sleep(0.05)
-        else:
-            pytest.fail("Pi conversation did not enter running state")
-        time.sleep(1)
-
-        receipt = conversation.steer("live-steer-1", "Stop sleeping and wait.")
-        assert receipt.status == MessageDeliveryStatus.DELIVERED
-
-        conversation.cancel()
-        run_thread.join(timeout=15)
-        assert not run_thread.is_alive()
-        assert conversation.status == ConversationStatus.CANCELLED
