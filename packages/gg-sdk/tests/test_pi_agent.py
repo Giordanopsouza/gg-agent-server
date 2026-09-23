@@ -244,7 +244,7 @@ def test_pi_settings_fix_provider_and_supply_defaults() -> None:
     settings = PiAgentSettings()
 
     assert settings.provider == "openrouter"
-    assert settings.model == "google/gemini-3.7-flash"
+    assert settings.model == "z-ai/glm-5.3-flashx"
     assert settings.timeout_seconds == 600
     assert settings.command_ack_timeout_seconds == 5
     assert settings.cancel_grace_seconds == 5
@@ -274,7 +274,7 @@ def test_success_uses_expected_command_cwd_and_translates_final_events(
         "--provider",
         "openrouter",
         "--model",
-        "google/gemini-3.7-flash",
+        "z-ai/glm-5.3-flashx",
     ]
     assert record["cwd"] == str(tmp_path / "workspace")
     assert record["prompt"]["type"] == "prompt"

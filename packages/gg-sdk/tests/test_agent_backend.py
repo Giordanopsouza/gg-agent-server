@@ -19,4 +19,8 @@ def test_backend_factory_builds_pi_from_persisted_settings() -> None:
 
 
 def test_backend_factory_defaults_to_pi() -> None:
-    assert isinstance(create_agent_backend(PiAgentConfig()), PiRpcAgent)
+    config = PiAgentConfig()
+    backend = create_agent_backend(config)
+
+    assert isinstance(backend, PiRpcAgent)
+    assert config.model == backend.settings.model == "z-ai/glm-5.3-flashx"

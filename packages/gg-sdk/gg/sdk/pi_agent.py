@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, PositiveFloat
 
-from gg.sdk.agent_backend import EventEmitter
+from gg.sdk.agent_backend import DEFAULT_PI_MODEL, EventEmitter
 from gg.sdk.domain import EventKind
 from gg.sdk.exceptions import (
     AgentCancelledError,
@@ -40,7 +40,7 @@ class PiAgentSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: Literal["openrouter"] = "openrouter"
-    model: str = "google/gemini-3.7-flash"
+    model: str = DEFAULT_PI_MODEL
     timeout_seconds: PositiveFloat = 600
     command_ack_timeout_seconds: PositiveFloat = 5
     cancel_grace_seconds: PositiveFloat = 5

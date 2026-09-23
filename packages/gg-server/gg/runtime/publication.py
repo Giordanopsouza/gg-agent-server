@@ -291,12 +291,13 @@ class DraftPublisher:
         repo_dir: Path,
         commit_sha: str,
     ) -> None:
-        remote_sha = _ls_remote(
-            repo_dir,
-            request.task_branch,
-            env=self._git_identity_env(),
-            token=self._github_token,
-        )
+        with _git_auth_env(self._process_env, self._github_token) as env:
+            remote_sha = _ls_remote(
+                repo_dir,
+                request.task_branch,
+                env=env,
+                token=self._github_token,
+            )
         try:
             api_sha = await self._github.get_branch_sha(
                 request.repository, request.task_branch
