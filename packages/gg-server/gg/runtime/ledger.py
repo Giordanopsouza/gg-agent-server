@@ -33,6 +33,13 @@ from gg.sdk.tasks import TaskRecord, TaskState
 # than silently downgrade.
 SUPPORTED_SCHEMA_VERSION = 6
 
+# Outcomes recorded only after the agent finished successfully. A later sandbox
+# reconcile must not replace these with a failure.
+_SETTLED_SUCCESS_OUTCOMES = frozenset({"published", "no_changes", "checks_passed"})
+_TERMINAL_TASK_STATES = frozenset(
+    {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED}
+)
+
 
 class SandboxProviderState(StrEnum):
     """Provider state as last established by a provider operation."""
@@ -817,7 +824,9 @@ class TaskLedger:
                 )
                 if self._conn.execute("SELECT changes()").fetchone()[0] != 1:
                     raise KeyError(f"no reservation for task {task_id}")
-                if task_state is not None:
+                if task_state is not None and not self._task_state_is_terminal(
+                    task_id
+                ):
                     self._conn.execute(
                         "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
                         (task_state.value, now, task_id),
@@ -859,13 +868,35 @@ class TaskLedger:
                 raise
 
     def mark_sandbox_lost(self, task_id: str, *, detail: str) -> None:
-        """Fail execution without erasing previously captured task evidence."""
+        """Fail execution without erasing previously captured task evidence.
+
+        A task that already settled successfully stays completed. The sandbox
+        exiting after publication is cleanup, not a new failure.
+        """
 
         assert self._conn is not None
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 now = _utcnow_iso()
+                row = self._conn.execute(
+                    "SELECT state, outcome_detail FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                if row is None:
+                    self._conn.execute("COMMIT")
+                    return
+                current = TaskState(row["state"])
+                outcome = row["outcome_detail"]
+                if current is TaskState.CANCELLED:
+                    next_state = TaskState.CANCELLED
+                elif (
+                    current is TaskState.COMPLETED
+                    or outcome in _SETTLED_SUCCESS_OUTCOMES
+                ):
+                    next_state = TaskState.COMPLETED
+                else:
+                    next_state = TaskState.FAILED
                 self._conn.execute(
                     """
                     UPDATE tasks
@@ -874,7 +905,7 @@ class TaskLedger:
                     WHERE id = ?
                     """,
                     (
-                        TaskState.FAILED.value,
+                        next_state.value,
                         detail,
                         "confirmed_absent",
                         now,
@@ -888,6 +919,45 @@ class TaskLedger:
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
+
+    def settle_successful_tasks(self) -> None:
+        """Complete tasks whose work already settled and whose sandbox is gone."""
+
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = _utcnow_iso()
+                placeholders = ",".join("?" for _ in _SETTLED_SUCCESS_OUTCOMES)
+                self._conn.execute(
+                    f"""
+                    UPDATE tasks
+                    SET state = ?, updated_at = ?
+                    WHERE sandbox_cleanup_status = 'confirmed_absent'
+                      AND outcome_detail IN ({placeholders})
+                      AND state NOT IN (?, ?)
+                    """,
+                    (
+                        TaskState.COMPLETED.value,
+                        now,
+                        *_SETTLED_SUCCESS_OUTCOMES,
+                        TaskState.COMPLETED.value,
+                        TaskState.CANCELLED.value,
+                    ),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def _task_state_is_terminal(self, task_id: str) -> bool:
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT state FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        return TaskState(row["state"]) in _TERMINAL_TASK_STATES
 
     def begin_sandbox_creation(
         self,

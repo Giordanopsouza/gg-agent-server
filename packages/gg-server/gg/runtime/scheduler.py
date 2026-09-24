@@ -229,6 +229,7 @@ class TaskScheduler:
     async def reconcile(self) -> None:
         """Resolve every existing reservation before any new task is admitted."""
 
+        self._ledger.settle_successful_tasks()
         for reservation in self._ledger.list_reservations():
             creation = self._ledger.get_sandbox_creation(reservation.task_id)
             if creation is None:

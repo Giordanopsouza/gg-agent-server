@@ -265,3 +265,83 @@ async def test_confirmed_sandbox_loss_fails_without_erasing_evidence(tmp_path) -
         assert failed.outcome_detail == "captured output"
         assert failed.check_status == "not_run"
         assert ledger.get_reservation(task.id) is None
+
+
+@pytest.mark.anyio
+async def test_reconcile_keeps_published_task_completed_when_sandbox_stops(
+    tmp_path,
+) -> None:
+    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+        task = _submit(ledger, "published-then-stopped")
+        ledger.reserve_next(capacity=1)
+        _record_creation(ledger, task.id, provider_id="published-provider")
+        ledger.finish_task(
+            task.id, state=TaskState.COMPLETED, outcome_detail="published"
+        )
+        lifecycle = FakeLifecycle(ledger, state=SandboxProviderState.STOPPED)
+        scheduler = TaskScheduler(
+            ledger=ledger,
+            lifecycle=lifecycle,  # type: ignore[arg-type]
+            capacity=1,
+            lock_path=str(tmp_path / "lock"),
+        )
+
+        await scheduler.reconcile()
+
+        settled = ledger.get(task.id)
+        assert settled is not None
+        assert settled.state is TaskState.COMPLETED
+        assert settled.outcome_detail == "published"
+
+
+@pytest.mark.anyio
+async def test_reconcile_does_not_demote_completed_task_while_sandbox_runs(
+    tmp_path,
+) -> None:
+    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+        task = _submit(ledger, "published-still-running")
+        ledger.reserve_next(capacity=1)
+        _record_creation(ledger, task.id, provider_id="running-provider")
+        ledger.update_reservation(task.id, phase=ReservationPhase.FINALIZING)
+        ledger.finish_task(
+            task.id, state=TaskState.COMPLETED, outcome_detail="published"
+        )
+        lifecycle = FakeLifecycle(ledger, state=SandboxProviderState.RUNNING)
+        scheduler = TaskScheduler(
+            ledger=ledger,
+            lifecycle=lifecycle,  # type: ignore[arg-type]
+            capacity=1,
+            lock_path=str(tmp_path / "lock"),
+        )
+
+        await scheduler.reconcile()
+
+        settled = ledger.get(task.id)
+        assert settled is not None
+        assert settled.state is TaskState.COMPLETED
+
+
+@pytest.mark.anyio
+async def test_reconcile_completes_published_task_stuck_after_cleanup(
+    tmp_path,
+) -> None:
+    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+        task = _submit(ledger, "stuck-finalizing")
+        ledger.reserve_next(capacity=1)
+        ledger.finish_task(
+            task.id, state=TaskState.FINALIZING, outcome_detail="published"
+        )
+        ledger.release_reservation(task.id)
+        scheduler = TaskScheduler(
+            ledger=ledger,
+            lifecycle=FakeLifecycle(ledger),  # type: ignore[arg-type]
+            capacity=1,
+            lock_path=str(tmp_path / "lock"),
+        )
+
+        await scheduler.reconcile()
+
+        settled = ledger.get(task.id)
+        assert settled is not None
+        assert settled.state is TaskState.COMPLETED
+        assert settled.outcome_detail == "published"
