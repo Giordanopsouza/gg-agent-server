@@ -7,14 +7,6 @@ depends_on: [009-app-health]
 
 # Session API key
 
-## Migration preflight
-
-- **Target end-state:** empty key list leaves `/api/*` open. A non-empty list requires header `X-Session-API-Key`. `/health` stays public.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** cookies, Bearer tokens, JWT.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** tests cover both open and keyed modes.
-
 ## Scope
 
 Add the auth dependency and apply it to a placeholder `/api` router.

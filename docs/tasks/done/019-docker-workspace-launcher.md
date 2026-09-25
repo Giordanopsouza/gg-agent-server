@@ -7,14 +7,6 @@ depends_on: [017-server-dockerfile, 018-remote-conversation-client]
 
 # Docker workspace launcher
 
-## Migration preflight
-
-- **Target end-state:** `DockerWorkspace` runs the image, maps a free host port to 8000, polls `GET /health`, then behaves as `RemoteWorkspace(host=http://127.0.0.1:{port})`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** default bind-mount of the host project. Forcing `api_key=None` while forwarding a session key env into the container. That is the OpenHands bug. Either no key in the container, or the client sends the same key.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** `__exit__` stops the container.
-
 ## Scope
 
 Client-side `docker run` plus health wait plus cleanup.

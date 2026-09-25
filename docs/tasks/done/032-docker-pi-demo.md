@@ -10,14 +10,6 @@ depends_on:
 
 # Docker Pi demo
 
-## Migration preflight
-
-- **Target end-state:** one demo proves `RemoteConversation -> gg-server -> Pi RPC` inside an isolated container and cleans up the sandbox afterward.
-- **Temporary legacy bridges:** none; the existing dummy Docker demo remains available as an offline checkpoint.
-- **Forbidden legacy dependencies:** host workspace mounts, runtime API, ACP, persisted credentials, or required paid-model calls in the default test suite.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** offline doubles cover orchestration and cleanup; the real model/container smoke test is opt-in.
-
 ## Scope
 
 Add `gg.sdk.demo.docker_pi_notes`, based on the existing Docker demo, to forward the OpenRouter key by name, request a Pi conversation, verify `PI_NOTES.md` in the container, and always stop the container.

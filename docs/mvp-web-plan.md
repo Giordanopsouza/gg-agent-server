@@ -1,6 +1,6 @@
 # Plano do MVP web — Google, OpenRouter, GitHub e Pi
 
-Data: 25/09/2026. Status: proposta para implementação; nenhuma feature deste plano foi implementada nesta exploração.
+Data: 25/09/2026. Revisão: Supabase e preparação para produção. Status: proposta para implementação; nenhuma feature deste plano foi implementada nesta exploração.
 
 ## Objetivo e decisões confirmadas
 
@@ -8,7 +8,9 @@ Entregar uma PR com um frontend responsivo que permita entrar com Google, config
 
 Decisões confirmadas pelo usuário nesta conversa:
 
-- Login Google e interface inspirada no Replicas.
+- Login Google via Supabase Auth e interface inspirada no Replicas.
+- Supabase Postgres como fonte durável do produto; substituir SQLite em produção.
+- Aceite pelo navegador no ambiente publicado, com isolamento, recuperação e limites comprovados.
 - Apenas OpenRouter como provedor inicial, com chave do próprio usuário.
 - Pi cria e controla as PRs.
 - Cada usuário conecta seu próprio GitHub; não limitar o produto a repositórios administrados pela plataforma.
@@ -54,7 +56,7 @@ Complementos documentados: retomada de workspace, compartilhamento, conjuntos de
 | Checks | Supervisor produz check_outcome=not_run; há campos de evidência | Distinguir teste realmente executado, falha e não executado; não inferir CI verde de completed |
 | Operação | Fila, SQLite, reconciliação, isolamento Modal, retenção e backup | Limites por usuário, proteção de credenciais, montagem web/API e prova do fluxo completo |
 
-A tarefa [060](tasks/060-ten-sandbox-production-acceptance.md) continua pendente: não tratar dez execuções simultâneas como capacidade comprovada em produção.
+A antiga tarefa 060 tem número reservado, mas seu arquivo está ausente: não tratar dez execuções simultâneas como capacidade comprovada em produção.
 
 ## Experiência da primeira entrega
 
@@ -73,15 +75,16 @@ Atualização por polling com cursor já atende ao MVP. Melhorar reconexão, ded
 
 ## Arquitetura proposta
 
-Manter React/Vite, FastAPI, SQLite e Modal. Adicionar a camada de identidade e credenciais ao runtime existente, sem criar um segundo backend ou migrar banco apenas por causa do login. Modelos compartilhados permanecem em gg.sdk e nunca importam gg.server.
+Manter React/Vite, FastAPI e a execução em sandbox existentes. Usar Supabase Auth para identidades/sessões e Supabase Postgres para perfis, vínculos GitHub, credenciais cifradas e todo estado durável do runtime. As tasks 077–078 entregam a base e a migração; não manter escrita dupla SQLite/Postgres. JSON no sandbox continua permitido como estado de execução, sem ser fonte durável do produto. Modelos compartilhados permanecem em gg.sdk e nunca importam gg.server.
 
 ```mermaid
 flowchart LR
     U[Usuário] --> W[React responsivo]
     W -->|sessão por cookie| A[FastAPI: identidade e autorização]
-    G[Google OIDC] --> A
+    G[Google] --> SA[Supabase Auth]
+    A <--> SA
     H[GitHub: conta e instalação] --> A
-    A --> D[(SQLite: usuários, sessões, credenciais cifradas e tarefas)]
+    A --> D[(Supabase Postgres: perfis, cofre privado e runtime)]
     A --> Q[Fila e supervisão existentes]
     Q -->|credenciais da tarefa| S[Sandbox Modal]
     S --> P[Pi]
@@ -93,15 +96,20 @@ flowchart LR
 
 ### Identidade e autorização
 
-- Google OIDC no backend, com biblioteca estabelecida; validar assinatura, issuer, audience, expiração, state e nonce. Vincular conta pelo identificador sub, não por coincidência de email. [Referência Google](https://developers.google.com/identity/openid-connect/openid-connect).
-- Sessão opaca no servidor, cookie HttpOnly/Secure/SameSite, proteção CSRF/Origin em mutações, expiração e logout. Servir web e API na mesma origem quando possível.
+- Supabase Auth administra Google e sessões. Usar PKCE e callbacks restritos; identidade da aplicação é o UUID de auth.users, nunca email ou metadados editáveis pelo usuário. [Login Google no Supabase](https://supabase.com/docs/guides/auth/social-login/auth-google).
+- FastAPI intermedeia a sessão: cookies HttpOnly/Secure/SameSite e proteção CSRF/Origin, com tokens fora do JavaScript/localStorage. Validar JWTs no servidor e tratar refresh concorrente. Logout revoga refresh e limpa cookies; ações sensíveis também verificam sessão ativa/conta habilitada, pois JWT emitido não some automaticamente. [Sessões Supabase](https://supabase.com/docs/guides/auth/sessions).
+- Schema privado para cofre e runtime; acesso do navegador apenas pelos contratos FastAPI. Tabelas expostas exigem RLS e grants mínimos; testar permissões reais como anon e usuário comum. A conexão privilegiada do backend não substitui autorização por proprietário. Secret/service_role só no servidor.
 - Adicionar owner_id à tarefa, preenchido pelo servidor. Todas as leituras e ações devem verificar ownership, inclusive streams e endpoints de recibos.
 - Migrar tarefas antigas para escopo administrativo; não entregá-las ao primeiro usuário que entrar. Manter acesso CLI/operador separado da sessão web.
 - Chave de idempotência única por usuário, payload completo na comparação, inclusive modelo/repositório/continuação. A UI reutiliza a chave em reenvio após timeout.
 
+### Persistência e corte de produção
+
+Migrações versionadas e testadas do zero e sobre a versão anterior. A 078 importa SQLite preservando IDs, relações, evidências e reservas, com pausa de escrita e reconciliação; não atribuir registros administrativos antigos a contas novas. Produção exige Postgres, sem fallback local. A 074 ensaia restore isolado e rollback compatível; reabrir um SQLite antigo depois de novas escritas não é recuperação válida.
+
 ### OpenRouter pessoal
 
-- Salvar chave cifrada no backend com chave de criptografia externa ao banco; retornar somente status e máscara. Não persistir a chave em localStorage, prompt ou payload público da tarefa.
+- Salvar chave cifrada no schema privado do Supabase Postgres com chave de criptografia externa ao banco; retornar somente status e máscara. Não persistir a chave em localStorage, prompt ou payload público da tarefa.
 - Validar via GET /api/v1/key no backend. Validação não garante que todo modelo funcionará nem reserva saldo; tratar erro de autenticação, saldo e limite também durante execução. [Referência OpenRouter](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key).
 - No dispatch, resolver credencial do proprietário e injetá-la apenas no sandbox correspondente. Remover qualquer fallback global para tarefas web. Rotação/remoção afeta próximas execuções; deixar clara a política para execução já ativa.
 - Guardar referências/versionamento de credencial, sem copiar segredo para a fila. Redigir eventos e logs antes de persistir/retornar; o agente consegue executar código no sandbox, portanto não prometer impossibilidade absoluta de exposição da credencial que ele usa.
@@ -138,14 +146,15 @@ Título sugerido: **MVP web com Google, OpenRouter pessoal, GitHub e PRs pelo Pi
 
 | Ordem | Incremento | Prova de conclusão |
 |---|---|---|
-| 1 | Login, sessão, ownership e migração de dados | Login/logout; usuário B não acessa nenhum dado/ação de A; chave administrativa ausente do bundle |
+| 0 | Fundação Supabase (077), runtime Postgres (078) e staging antecipado (074 após pré-requisitos) | Migração/upgrade reproduzíveis, restart sem perda e URL HTTPS acessível |
+| 1 | Supabase Auth, sessão e ownership | Login/logout; usuário B não acessa nenhum dado/ação de A; chave administrativa ausente do bundle |
 | 2 | OpenRouter pessoal e modelo até o sandbox | Duas tarefas usam suas respectivas chaves; credencial inválida bloqueia com erro legível; segredo não aparece em eventos |
 | 3 | GitHub App, vínculo de conta e seletor de repo/branch | Repo privado autorizado aparece; repo não autorizado é rejeitado mesmo com request forjado |
 | 4 | Pi publica e runtime reconcilia | Em repo de teste, Pi abre uma draft PR; timeout/reinício não cria duplicata; resultado aponta para PR verificada |
 | 5 | Shell responsivo, chat e ações reais | Criar, acompanhar, enviar instrução, cancelar e recuperar após reload em desktop/mobile |
 | 6 | Continuação e fechamento da entrega | Novo pedido atualiza a mesma PR após término do sandbox; demo de ponta a ponta e configuração de produção documentadas |
 
-Dependências externas para colocar no ar: cliente OAuth Google com domínio/callback, GitHub App com callback/webhook e permissões aprovadas, chave de criptografia, HTTPS, runtime Modal configurado e repositório de teste autorizado. Implementação/testes locais podem avançar antes dessa configuração; não declarar login/PR reais validados por mocks.
+Dependências externas para colocar no ar: projetos Supabase separados para staging/produção, conexão Postgres, Google configurado no Supabase Auth com domínio/callback, GitHub App com callback/webhook e permissões aprovadas, chave de criptografia, HTTPS, runtime Modal configurado e repositório de teste autorizado. Implementação/testes locais podem avançar antes dessa configuração; não declarar login/PR reais validados por mocks.
 
 ## Critérios de aceite e demonstração
 
@@ -166,13 +175,21 @@ Dependências externas para colocar no ar: cliente OAuth Google com domínio/cal
 
 Na implementação, executar a sequência de QA do AGENTS.md, testes/build web, testes de autorização/credenciais e production-smoke-tests quando houver mudança operacional. Integrar os comandos web e a demo ao Makefile raiz.
 
+## Testes orientados à produção
+
+A [matriz de testes e liberação](mvp-production-tests.md) define quatro níveis e seus bloqueios. Antecipar staging na 074; a 075 depende também de UI, integrações e limites completos. A entrega exige URL pública HTTPS (domínio apontando para o IP do servidor), não apenas localhost/IP:porta. Provar login real, isolamento, persistência após redeploy, PR correta, restore e limpeza; não aceitar apenas status succeeded.
+
 ## Depois do MVP
 
 Primeiro: diff interno, busca/paginação mais rica, arquivamento, configuração simples por repositório e checks automatizados configuráveis. Depois: ambientes/herança, uploads, skills/MCP/plugins gerenciados, previews e terminal. Mais adiante: automações, memória, Mothership, organizações/convites, analytics, billing e múltiplos agentes. Evitar copiar as telas desses módulos antes de existir comportamento útil.
 
-## Validação realizada nesta exploração
+## Validação histórica da exploração inicial (antes desta revisão)
 
 - Leitura do frontend, contratos HTTP, autenticação, configuração de credenciais, execução Pi e publicação/reconciliação.
 - npm test em web: **3 testes passaram**.
 - npm run build em web: **TypeScript e build Vite passaram**.
 - Não houve execução de tarefas pagas pela nossa plataforma, teste live de OAuth/Modal/GitHub, alteração de código de aplicação ou abertura de PR de implementação. Os critérios acima são trabalho futuro.
+
+## Revisão do planejamento para Supabase
+
+Esta revisão altera somente documentação e dependências de tasks. Nenhum projeto Supabase foi provisionado, dado migrado ou deploy executado; todos os aceites de implementação permanecem pendentes. A orientação de produção foi conferida na [documentação oficial](https://supabase.com/docs/guides/deployment/going-into-prod); verificar versões e changelog novamente na implementação.

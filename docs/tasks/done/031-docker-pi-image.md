@@ -7,14 +7,6 @@ depends_on: [017-server-dockerfile]
 
 # Docker Pi image
 
-## Migration preflight
-
-- **Target end-state:** the existing non-root agent-server image contains pinned Node and Pi executables ready for `PiRpcAgent` to spawn.
-- **Temporary legacy bridges:** none; the image entrypoint and Python dependency build remain unchanged.
-- **Forbidden legacy dependencies:** unpinned npm installs, runtime downloads, embedded credentials, copied host Pi state, or an ACP adapter.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** build-time version checks plus existing image health and dummy-agent integration tests.
-
 ## Scope
 
 Add a Node build stage, install the pinned Pi package, and copy its runtime into the current Python image without changing the server entrypoint or security user.

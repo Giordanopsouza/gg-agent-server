@@ -7,10 +7,6 @@ depends_on: [070-task-chat-and-live-actions, 071-durable-task-continuation]
 
 # Continuação e histórico de execuções na UI
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Consumir o contrato de 071 e manter distintas as ações enviar instrução, retry e continuar; não deduzir vínculos apenas por URL da PR.
-
 ## Scope
 
 Permitir pedir ajustes após conclusão e acompanhar execuções vinculadas como uma conversa, preservando a PR original.

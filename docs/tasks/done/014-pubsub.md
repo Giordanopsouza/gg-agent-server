@@ -7,14 +7,6 @@ depends_on: [002-domain-types]
 
 # In-process pub/sub
 
-## Migration preflight
-
-- **Target end-state:** a generic in-process `PubSub[Event]` with subscribe, publish, unsubscribe. Max 50 subscribers. No Redis.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** a message broker, HTTP webhooks.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** one slow subscriber cannot raise in the publisher. Isolate errors per subscriber.
-
 ## Scope
 
 Implement pub/sub used by the WebSocket layer.

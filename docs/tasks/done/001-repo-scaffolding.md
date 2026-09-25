@@ -7,14 +7,6 @@ depends_on: []
 
 # Repo scaffolding
 
-## Migration preflight
-
-- **Target end-state:** a uv workspace with `packages/gg-sdk` and `packages/gg-server`, pytest, ruff, and an import rule that `gg.sdk` cannot import `gg.server`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** a third package, a database extra, Docker in this task.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** `import-linter` or a pytest that fails if `gg/sdk` imports `gg.server`.
-
 ## Scope
 
 Create the two packages, the workspace `pyproject.toml`, a passing empty test run, and the import DAG check.

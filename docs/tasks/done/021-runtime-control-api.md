@@ -7,14 +7,6 @@ depends_on: [017-server-dockerfile]
 
 # Runtime control API
 
-## Migration preflight
-
-- **Target end-state:** a small FastAPI process, not `gg.server`, exposes `POST /start`, `GET /sessions/{id}`, `POST /stop`. Start runs `docker run` of `gg-agent-server:dev` and returns `{id, url, session_api_key}`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** Kubernetes clients, OpenHands Cloud URLs, embedding this into `gg.server`.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** this app is `gg.runtime` or a module under `packages/gg-sdk` client extras. It must not live inside the sandbox server. Mixing them hides the lesson.
-
 ## Scope
 
 The fake provisioner. One session maps to one container.

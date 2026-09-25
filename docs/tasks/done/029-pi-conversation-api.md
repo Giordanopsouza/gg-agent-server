@@ -7,14 +7,6 @@ depends_on: [027-pi-rpc-agent, 013-event-routes-and-run]
 
 # Pi conversation API
 
-## Migration preflight
-
-- **Target end-state:** local and remote conversation creation can select a persisted Pi backend configuration while requests without one remain dummy conversations.
-- **Temporary legacy bridges:** old `base_state.json` files without `agent` load as dummy; old message events without `role` remain user messages.
-- **Forbidden legacy dependencies:** credentials must not enter HTTP payloads or persisted state, and `gg.server` must not own Pi subprocess logic.
-- **Bridge removal task:** compatibility defaults remain until a future on-disk schema migration explicitly removes them.
-- **Boundary enforcement:** request/state round-trip tests, old-state fixtures, client/server integration tests, and the existing import-boundary suite.
-
 ## Scope
 
 Add a discriminated agent configuration to conversation creation and persistence, wire the server to the SDK backend factory, and expose the same option through local and remote conversation clients.

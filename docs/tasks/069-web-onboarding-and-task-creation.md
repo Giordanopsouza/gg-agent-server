@@ -7,10 +7,6 @@ depends_on: [064-user-model-and-credential-dispatch, 066-authorized-repositories
 
 # Onboarding e criação de tarefa pelo navegador
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Consumir os contratos de 063–066 via api.ts, sem duplicar regras de autorização no cliente nem persistir segredos no browser.
-
 ## Scope
 
 Entregar configurações pessoais e composer que cria tarefas com repositório, branch e modelo autorizados.

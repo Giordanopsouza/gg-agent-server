@@ -7,10 +7,6 @@ depends_on: [052-fifo-dispatch-and-recovery, 056-idempotent-draft-pr-publication
 
 # Supervise tasks, archive results, and release sandboxes
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), tasks 050–056, and production state transitions. Wire the scheduler to the actual task supervisor through HTTP/WebSocket contracts; `gg.runtime` must not import `gg.server`. Remove task 052's temporary lifecycle-only dispatch wiring and activate production dispatch only after supervisor startup, finalization, evidence archival, and cleanup are connected. Keep conversation persistence local to each sandbox while copying public evidence durably to the control plane.
-
 ## Scope
 
 Complete the production task lifecycle: relay messages and events, recover supervision, archive results, cancel work, and terminate sandboxes automatically.

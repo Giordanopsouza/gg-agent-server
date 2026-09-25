@@ -7,10 +7,6 @@ depends_on: [050-durable-background-task-api, 055-repository-task-runner]
 
 # Publish and reconcile one draft PR per task
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), GitHub's current pull-request API, and existing demo behavior. Production publication must be deterministic application code with a durable operation journal; do not use an LLM instruction as the mechanism enforcing draft-only publication or deduplication.
-
 ## Scope
 
 Commit and push the task's changes and create or recover its draft PR using the configured bot identity. Make publication recoverable after control-plane/network failures.

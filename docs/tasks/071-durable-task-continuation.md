@@ -7,10 +7,6 @@ depends_on: [067-pi-owned-pr-publication]
 
 # Continuação durável na mesma branch e PR
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Inspecionar retry, retenção, journal de publicação e reservas do ledger. Continuação é contrato próprio; não redefinir retry nem criar um segundo scheduler.
-
 ## Scope
 
 Adicionar uma ação de continuação com novo prompt e execução vinculada, reutilizando contexto limitado e branch/PR após encerramento do sandbox.

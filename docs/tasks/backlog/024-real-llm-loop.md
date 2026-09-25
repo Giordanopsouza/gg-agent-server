@@ -7,14 +7,6 @@ depends_on: [016-local-server-demo]
 
 # Real LLM loop
 
-## Migration preflight
-
-- **Target end-state:** `LocalConversation` can call an LLM instead of the dummy agent, still emitting action and observation events.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** baking a vendor SDK into `gg.server`. Keep the model client in `gg.sdk`.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** dummy agent remains the default so tests stay offline.
-
 ## Scope
 
 Replace the scripted agent with a real model behind a flag or env key. Only after slice 1 is green.

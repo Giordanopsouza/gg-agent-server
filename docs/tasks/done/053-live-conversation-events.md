@@ -7,10 +7,6 @@ depends_on: []
 
 # Publish conversation events while Pi runs
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), `LocalConversation`, event persistence, `ConversationService.run_and_publish`, `PubSub`, and WebSocket routes. Replace the post-run publication bridge; do not introduce server imports into SDK emitters. Retain existing event identities and persisted conversation compatibility.
-
 ## Scope
 
 Publish persisted conversation events during execution and make event replay plus live subscription race-free.

@@ -7,14 +7,6 @@ depends_on: [002-domain-types]
 
 # Event log on disk
 
-## Migration preflight
-
-- **Target end-state:** one conversation directory `{conversations_dir}/{id}/` holds `meta.json`, `base_state.json`, and `events/event-{seq:05d}-{id}.json`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** SQLite, a single `events.jsonl` file, in-memory-only logs.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** `EventLog.append` round-trips an `Event` through JSON. A second process can read the same directory.
-
 ## Scope
 
 Implement file persistence for conversation metadata, base state, and the append-only event log.

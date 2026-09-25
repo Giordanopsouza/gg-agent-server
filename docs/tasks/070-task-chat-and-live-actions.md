@@ -7,10 +7,6 @@ depends_on: [067-pi-owned-pr-publication, 069-web-onboarding-and-task-creation]
 
 # Conversa, atividade e ações da tarefa
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Reutilizar polling com cursor e rotas existentes de mensagens, recibos e cancelamento. Não introduzir transporte novo para substituir um contrato que já atende ao MVP.
-
 ## Scope
 
 Tornar a tela da tarefa uma conversa operacional com progresso durável, mensagens durante execução e cancelamento.

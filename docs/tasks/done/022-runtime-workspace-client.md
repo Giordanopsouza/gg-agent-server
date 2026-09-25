@@ -7,14 +7,6 @@ depends_on: [018-remote-conversation-client, 021-runtime-control-api]
 
 # Runtime workspace client
 
-## Migration preflight
-
-- **Target end-state:** `RuntimeWorkspace` calls `POST {runtime_api_url}/start` with `X-API-Key`, then becomes `RemoteWorkspace` against the returned url and sandbox session key.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** kubectl. Talking to Docker from this class. Docker stays in the runtime API process.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** closing the workspace calls `POST /stop` unless `keep_alive=True`.
-
 ## Scope
 
 Client launcher that only speaks HTTP to the fake runtime, then HTTP to the sandbox.
