@@ -7,6 +7,13 @@
 - Keep infrastructure, serving, application, and domain logic loosely separated by responsibility. Shared domain models live in `gg.sdk`; server-only wiring stays in `gg.server` or `gg.runtime`.
 - Every task is independently shippable and ends with an automated test or runnable demo proving the real surface.
 
+## Task worktrees
+
+- For every new task that changes repository files, start in a dedicated Git worktree before editing. Continue using that worktree for follow-up turns on the same task; do not create another one for each turn.
+- Store each worktree under `./agents/worktrees/` in the repository, at `./agents/worktrees/<task-number>-<task-name>`. Use the task's existing number and a short lowercase hyphenated name. For tasks without an assigned number, use the next unused number found across `docs/tasks/` and its subdirectories.
+- Use the same identifier for the task branch (for example, worktree `076-task-worktrees` on branch `076-task-worktrees`).
+- If the current checkout is already the dedicated worktree for this task, keep working there.
+
 # Key Components
 
 - **SDK** — [`packages/gg-sdk/`](packages/gg-sdk/): client library, conversation loop, workspace implementations, Pi backend, and demos. Python library; frozen Pydantic domain models, async I/O, and no imports from `gg.server`. Read [`packages/gg-sdk/AGENTS.md`](packages/gg-sdk/AGENTS.md); deeper conventions: `python-backend`, `uv-python`, `pyproject`, and `ruff-python` specs.
@@ -15,10 +22,6 @@
 
 - `gg-server` depends on `gg-sdk`; `gg-sdk` remains independently importable and never imports server source.
 - The root [`pyproject.toml`](pyproject.toml) and [`uv.lock`](uv.lock) own the shared uv workspace dependency graph.
-
-# Tech Stack
-
-Each package manifest and Makefile are authoritative for dependencies and commands. Python 3.12, uv workspaces, Pydantic, FastAPI, pytest, Ruff, Docker, and the Pi coding agent are the current stack.
 
 ## Running commands
 
@@ -38,10 +41,3 @@ Use `uv sync --no-editable`: editable workspace installs are unreliable here on 
 - **Local server:** run `make run`, then `curl http://127.0.0.1:8000/health`; success is HTTP 200 reporting status `ok`. `GG_SESSION_API_KEYS` is optional on loopback and required before exposing a non-loopback bind.
 - **Platform feature:** after implementing each feature, use [`.agents/skills/local-stack/SKILL.md`](.agents/skills/local-stack/SKILL.md) to run the frontend and `gg.runtime` together and exercise a relevant task flow before shipping. Verify events, the result, and whether the agent actually fulfilled the prompt; `queued` and a `succeeded` label alone do not prove that.
 
-## Production control plane
-
-Single-host deployment, storage retention defaults, backup/restore, and operator
-smoke checks are documented in
-[`docs/single-host-production.md`](docs/single-host-production.md) (task 059).
-Run `make -C packages/gg-server production-smoke-tests` after operational
-changes.
