@@ -20,10 +20,8 @@ Recommended layout:
 | `/var/lib/gg/evidence/` | `0700` | Optional filesystem evidence (`GG_TASK_EVIDENCE_DIR`) |
 | `/etc/gg/runtime.env` | `0600` | Secrets and non-secret configuration |
 
-Use `deploy/production/gg-runtime.service` and
-`deploy/production/Caddyfile.example` as starting points. Terminate TLS at the
-reverse proxy; bind the runtime to loopback unless API keys are enforced on all
-interfaces.
+Terminate TLS at the reverse proxy; bind the runtime to loopback unless API keys
+are enforced on all interfaces.
 
 Graceful shutdown (`SIGTERM`) stops admission, detaches from surviving Modal
 sandboxes, and closes SQLite. Do **not** copy `tasks.sqlite-wal` alone during

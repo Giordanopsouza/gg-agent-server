@@ -36,6 +36,7 @@ Use `uv sync --no-editable`: editable workspace installs are unreliable here on 
 # Testing E2E
 
 - **Local server:** run `make run`, then `curl http://127.0.0.1:8000/health`; success is HTTP 200 reporting status `ok`. `GG_SESSION_API_KEYS` is optional on loopback and required before exposing a non-loopback bind.
+- **Platform feature:** after implementing each feature, use [`.agents/skills/local-stack/SKILL.md`](.agents/skills/local-stack/SKILL.md) to run the frontend and `gg.runtime` together and exercise a relevant task flow before shipping. Verify events, the result, and whether the agent actually fulfilled the prompt; `queued` and a `succeeded` label alone do not prove that.
 
 ## Production control plane
 

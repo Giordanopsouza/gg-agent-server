@@ -1,96 +1,110 @@
 # Tasks
 
-File-based task tracker (`TRACKER_MODE: file`). **One markdown file per
-atomic task**, committed to the repo. Root task files are the active plan.
+Tracker em arquivos (`TRACKER_MODE: file`): **um Markdown por task atômica**, versionado no repositório. O campo `status:` é a fonte de verdade; a pasta indica prioridade/arquivamento.
 
-Plan overview: [overview.md](overview.md). Architecture:
-[About the OpenHands agent-server](../architecture.md).
+O plano ativo é o [MVP web — Google, OpenRouter, GitHub e Pi](../mvp-web-plan.md). O fluxo de entrega é **Google → OpenRouter pessoal → GitHub → tarefa → PR pelo Pi → ajuste na mesma PR**. As tasks abaixo estão `pending`; o índice não comprova implementação.
 
-## Folders
+## Próximos passos do MVP
 
-- `tasks/*.md` — current plan only (plus this README and `overview.md`).
-- `tasks/backlog/*.md` — valid work intentionally outside the current
-  plan; move a file back to root when it is prioritized.
-- `tasks/done/*.md` — completed historical work.
+Começar pela **061**, depois **062**. A tabela está em ordem sugerida; `depends_on` nos arquivos define os bloqueios reais. Após sessão e ownership, o shell web pode avançar enquanto as integrações são construídas; após o cofre, modelo/dispatch e conexão GitHub podem avançar de forma independente. Cada task deve ser revisável e entregável isoladamente; superfícies incompletas ficam indisponíveis ao usuário até seus contratos e autorização estarem prontos.
 
-The frontmatter `status:` remains authoritative after a move.
+| Task | Depende de | Prova principal |
+|---|---|---|
+| [061 — Login Google e sessão web](061-google-login-and-sessions.md) | — | Login/logout e rejeição de sessão/callback inválido |
+| [062 — Ownership, migração e idempotência por usuário](062-task-ownership-and-idempotency.md) | [061](061-google-login-and-sessions.md) | Duas contas isoladas e migração de dados antigos |
+| [063 — Cofre pessoal OpenRouter](063-personal-openrouter-credentials.md) | [061](061-google-login-and-sessions.md) | API de cofre sem segredo em respostas ou banco em texto simples |
+| [064 — Modelo e credencial do usuário até o Pi](064-user-model-and-credential-dispatch.md) | [062](062-task-ownership-and-idempotency.md), [063](063-personal-openrouter-credentials.md) | Chave/modelo corretos até sandbox e Pi |
+| [065 — Conexão da conta GitHub e instalação da App](065-github-account-and-app-connection.md) | [061](061-google-login-and-sessions.md), [063](063-personal-openrouter-credentials.md) | Conta/instalação verificadas e webhook autenticado |
+| [066 — Repositórios autorizados e token restrito da tarefa](066-authorized-repositories-and-task-tokens.md) | [062](062-task-ownership-and-idempotency.md), [065](065-github-account-and-app-connection.md) | Repo privado autorizado; request forjado rejeitado |
+| [067 — Publicação pelo Pi e reconciliação da PR](067-pi-owned-pr-publication.md) | [064](064-user-model-and-credential-dispatch.md), [066](066-authorized-repositories-and-task-tokens.md) | PR pelo Pi verificada, sem duplicata após timeout |
+| [068 — Shell responsivo, login e navegação](068-responsive-web-shell-and-login.md) | [062](062-task-ownership-and-idempotency.md) | Login e histórico acessíveis em quatro larguras |
+| [069 — Onboarding e criação de tarefa pelo navegador](069-web-onboarding-and-task-creation.md) | [064](064-user-model-and-credential-dispatch.md), [066](066-authorized-repositories-and-task-tokens.md), [068](068-responsive-web-shell-and-login.md) | Onboarding e envio idempotente pelo navegador |
+| [070 — Conversa, atividade e ações da tarefa](070-task-chat-and-live-actions.md) | [067](067-pi-owned-pr-publication.md), [069](069-web-onboarding-and-task-creation.md) | Mensagem, recibo, cancelamento e reload |
+| [071 — Continuação durável na mesma branch e PR](071-durable-task-continuation.md) | [067](067-pi-owned-pr-publication.md) | Novo run na mesma PR sem concorrência na branch |
+| [072 — Continuação e histórico de execuções na UI](072-web-continuation-history.md) | [070](070-task-chat-and-live-actions.md), [071](071-durable-task-continuation.md) | Pedido de ajuste e histórico agrupado na UI |
+| [073 — Limites por usuário e proteção de capacidade](073-per-user-runtime-limits.md) | [062](062-task-ownership-and-idempotency.md), [071](071-durable-task-continuation.md) | Quota por usuário e teto global preservados |
+| [074 — Configuração de produção do MVP web](074-web-production-configuration.md) | [065](065-github-account-and-app-connection.md), [072](072-web-continuation-history.md), [073](073-per-user-runtime-limits.md) | Web/API na mesma origem e smoke operacional |
+| [075 — Aceite ponta a ponta do MVP web](075-mvp-web-end-to-end-acceptance.md) | [074](074-web-production-configuration.md) | Demo live, evidências de aceite e limpeza |
 
-## Format
+## Relação com os incrementos do plano
 
-`tasks/<NNN>-<slug>.md` (or the same filename under `backlog/` /
-`done/`), where `NNN` is a zero-padded monotonic counter:
+| Incremento | Tasks |
+|---|---|
+| 1. Login, sessão e ownership | 061–062 |
+| 2. OpenRouter pessoal e modelo | 063–064 |
+| 3. GitHub App e seleção de repo/branch | 065–066; interface em 069 |
+| 4. Pi publica e runtime reconcilia | 067 |
+| 5. Shell, onboarding e conversa responsivos | 068–070 |
+| 6. Continuação e fechamento | 071–075 |
 
-```
-tasks/
-├── done/
-│   ├── 001-repo-scaffolding.md    # status: done
-│   ├── 002-domain-types.md        # status: done
-│   ├── 003-event-log.md           # status: done
-│   ├── 004-local-workspace.md     # status: done
-│   ├── 005-write-file-tool.md     # status: done
-│   ├── 006-local-conversation-loop.md # status: done
-│   ├── 007-in-process-demo.md     # status: done
-│   ├── 008-server-config.md       # status: done
-│   ├── 009-app-health.md          # status: done
-│   ├── 010-session-api-key.md     # status: done
-│   ├── 011-conversation-service.md # status: done
-│   ├── 012-conversation-routes.md # status: done
-│   ├── 013-event-routes-and-run.md # status: done
-│   ├── 014-pubsub.md               # status: done
-│   ├── 015-events-websocket.md     # status: done
-│   ├── 016-local-server-demo.md     # status: done
-│   ├── 017-server-dockerfile.md     # status: done
-│   ├── …                          # 018–028 also archived
-│   ├── 029-pi-conversation-api.md # status: done
-│   ├── 030-docker-secret-forwarding.md # status: done
-│   └── 031-docker-pi-image.md     # status: done
-├── 032-docker-pi-demo.md          # status: done (active plan)
-└── overview.md
-```
+Manter React/Vite, FastAPI, SQLite e Modal; `gg.sdk` nunca importa `gg.server`, e `gg.runtime` acessa o servidor do sandbox por contrato HTTP. A tarefa geral sem repositório continua válida. O fluxo web usa credenciais pessoais e autorização por proprietário; o acesso de CLI/operador permanece separado. Não recuperar superfícies legadas removidas pelo ADR 0003.
 
-State lives in the `status:` frontmatter field — **not** in the filename
-or folder. Folder placement communicates planning/archival intent.
+A publicação pelo Pi e o acesso por usuário mudam premissas dos ADRs anteriores. O preflight de cada task afetada deve registrar a decisão vigente e qualquer ponte de compatibilidade, sem tratar o comportamento legado como requisito do MVP.
 
-Optional frontmatter: `feature:` slug, `depends_on:` list of task ids.
+## Dependências externas e limite do aceite
 
-## Task file shape
+Configurar cliente OAuth Google com domínio/callback, GitHub App com callback/webhook/permissões, chave de criptografia fora do banco, HTTPS, runtime Modal e repo de teste autorizado. Implementação e testes controlados podem avançar antes disso; a task 075 só termina com a demonstração real e limpeza comprovada.
+
+O plano menciona a antiga **060 — aceitação de dez sandboxes**, mas seu arquivo está ausente no estado atual do workspace. O número permanece reservado; não recriar nem marcar como concluída. Capacidade de dez execuções simultâneas **não está comprovada** e não é um bloqueio artificial para iniciar o MVP. A 073 protege os limites configurados; a 075 comprova apenas a capacidade efetivamente exercitada.
+
+Automações, memória, organizações, billing, ambientes avançados, terminal, previews e editor de diff ficam fora deste ciclo, conforme a seção “Depois do MVP” do plano.
+
+## Pastas e numeração
+
+- `tasks/*.md`: plano ativo, mais este índice.
+- `tasks/backlog/*.md`: trabalho válido fora do plano atual; mover para a raiz ao priorizar.
+- `tasks/done/*.md`: histórico concluído.
+
+Formato: `<NNN>-<slug>.md`, com contador monotônico de três dígitos, sem reutilizar ids históricos/removidos. Próximo id após este plano: **076**. Links de dependências usam ids completos em `depends_on`, mesmo quando os arquivos forem arquivados. Ao mover arquivos, corrigir links Markdown relativos dos índices afetados.
+
+## Formato de uma task
 
 ```markdown
 ---
-id: 003-bash-tool
-feature: tools          # the feature slug this task belongs to
-status: pending         # pending | in-progress | done
-depends_on: 
+id: 076-example
+feature: mvp-web
+status: pending
+depends_on: []
 ---
 
-# Bash tool
+# Título
 
 ## Migration preflight
-
-Before implementation, inspect the governing ADRs, this task, and its
-directly dependent or consuming tasks.
-Record the target end-state, temporary legacy bridges, forbidden legacy
-dependencies in new code, the removal task for every bridge, and the
-architecture test or CI check that enforces the boundary.
+Ler os ADRs, a task, suas dependências/consumidores e as instruções do componente.
+Registrar estado final, pontes legadas, dependências proibidas, remoção das pontes
+e teste/checagem que garante a fronteira.
 
 ## Scope
-One atomic, independently-shippable unit of work (1–2 sentences).
+Uma unidade pequena, concreta e independentemente entregável.
 
 ## Acceptance criteria
-- [ ] ...
+- [ ] Comportamento verificável da superfície real.
+
+## Validation
+Teste automatizado ou demo executável, com comando e evidência esperada.
 
 ## Out of scope
-- ...
+Trabalho explicitamente adiado.
 
 ## Log
-### [PA] 2026-06-19 12:30 — Grooming
-...
+### [PA] YYYY-MM-DD HH:MM TZ — Grooming
+Escopo e dependências definidos.
 ```
 
-## Lifecycle
+## Validação e conclusão
 
-- **PA** grooming writes the file with `status: pending`.
-- **SWE** starts it → `status: in-progress`.
-- After the **Tester** PASSES and the task is committed → `status: done`.
+Cada implementação termina em teste automatizado ou demo executável da superfície real. A matriz final de aceite é consolidada na 075; isso não adia os testes de cada incremento.
 
-Every agent **appends** (never rewrites) a timestamped entry to `## Log`: `### [ROLE] YYYY-MM-DD HH:MM — subject`. Roles: `PA`, `SWE`, `Tester`, `PR Reviewer`, `On-Call`.
+Seguir o AGENTS.md: `make format-fix`, `make lint-fix`, `make format-check`, `make lint-check`, `make pre-commit`, `make unit-tests`, nessa ordem. Adicionar testes/build web quando houver mudança web e `make -C packages/gg-server production-smoke-tests` para mudanças operacionais. A 068 integra comandos web ao Makefile raiz; a 075 integra a demo. Fora de targets Makefile, usar `uv run --no-editable ...`.
+
+Testes comuns não provisionam recursos pagos. Demos reais exigem opt-in e registram configuração, resultado e limpeza, sem segredos. Mock não comprova Google/GitHub/OpenRouter/Modal reais.
+
+## Ciclo de vida
+
+- **PA** cria a task com `status: pending`.
+- **SWE** inicia e muda para `status: in-progress`.
+- Após **Tester** aprovar e a task ser commitada, mudar para `status: done`; arquivar em `done/` quando sair do plano ativo.
+
+Seguir uma task/branch/PR por incremento. A entrega do MVP só está pronta quando o fluxo completo passa, mesmo que PRs preparatórias já estejam integradas.
+
+Cada agente **acrescenta**, sem reescrever o histórico, uma entrada em `## Log`: `### [ROLE] YYYY-MM-DD HH:MM TZ — assunto`. Papéis: `PA`, `SWE`, `Tester`, `PR Reviewer`, `On-Call`.
