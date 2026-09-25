@@ -13,3 +13,6 @@ tests/
 .audit/
 **/build/
 .env
+*.sqlite
+*.sqlite-*
+*.sqlite.*

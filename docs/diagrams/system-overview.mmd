@@ -1,0 +1,19 @@
+flowchart LR
+  subgraph SDK[gg.sdk]
+    Models[Shared frozen models]
+    Clients[Conversation and task clients]
+    Workspaces[Local workspace]
+  end
+  subgraph Server[gg.server]
+    Conversations[Conversation service]
+    SandboxRun[Sandbox task supervisor]
+  end
+  subgraph Runtime[gg.runtime]
+    Queue[Task service + SQLite ledger]
+    Dispatch[Scheduler + Modal lifecycle]
+    Finish[Supervision + evidence + draft PR]
+  end
+  Clients --> Workspaces --> Conversations
+  Queue --> Dispatch --> SandboxRun
+  Dispatch --> Conversations
+  SandboxRun --> Finish --> Queue

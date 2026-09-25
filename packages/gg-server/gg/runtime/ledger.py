@@ -824,9 +824,7 @@ class TaskLedger:
                 )
                 if self._conn.execute("SELECT changes()").fetchone()[0] != 1:
                     raise KeyError(f"no reservation for task {task_id}")
-                if task_state is not None and not self._task_state_is_terminal(
-                    task_id
-                ):
+                if task_state is not None and not self._task_state_is_terminal(task_id):
                     self._conn.execute(
                         "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
                         (task_state.value, now, task_id),

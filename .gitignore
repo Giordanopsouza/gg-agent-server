@@ -8,4 +8,8 @@ build/
 .ruff_cache/
 .agents/
 .audit/
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+web/.vite/
 notebooks/scratch/

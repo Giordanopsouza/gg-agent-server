@@ -101,10 +101,11 @@ def test_build_and_publish_uses_repo_dockerfile_not_venv(
         ),
     )
 
-    modal_image.build_and_publish(context_dir=repo)
+    modal_image.build_and_publish(context_dir=repo, force_build=True)
 
     assert captured["path"] == repo / "Dockerfile"
     assert captured["context_dir"] == repo.resolve()
+    assert captured["force_build"] is True
     assert captured["published"] == "gg-agent-server:2026-09-20-v1"
 
 
