@@ -24,7 +24,7 @@ Usar Supabase Auth como autoridade de identidade e sessão, com Google como prov
 
 ## Validation
 
-Testes HTTP determinísticos mais integração com Supabase Auth local e login/logout Google real no staging HTTPS; incluir reload e refresh. Evidência com mocks não comprova OAuth real. Seguir os comandos de QA do [índice](README.md#validação-e-conclusão).
+Testes HTTP determinísticos mais integração com Supabase Auth local e login/logout Google real na URL HTTPS publicada, com conta autorizada e sem fixtures sintéticas em produção; incluir reload e refresh. Evidência com mocks não comprova OAuth real. Seguir os comandos de QA do [índice](README.md#validação-e-conclusão).
 
 ## Out of scope
 

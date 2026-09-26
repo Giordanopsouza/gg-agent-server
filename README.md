@@ -44,3 +44,4 @@ uv run --no-editable gg-task submit \
 - [Task web UI](web/README.md)
 - [Plan](docs/tasks/overview.md)
 - [Task tracker](docs/tasks/README.md)
+- [Supabase foundation](docs/supabase-foundation.md)

@@ -146,7 +146,7 @@ Título sugerido: **MVP web com Google, OpenRouter pessoal, GitHub e PRs pelo Pi
 
 | Ordem | Incremento | Prova de conclusão |
 |---|---|---|
-| 0 | Fundação Supabase (077), runtime Postgres (078) e staging antecipado (074 após pré-requisitos) | Migração/upgrade reproduzíveis, restart sem perda e URL HTTPS acessível |
+| 0 | Fundação Supabase (077), runtime Postgres (078) e configuração HTTPS de produção (074 após pré-requisitos) | Migração/upgrade reproduzíveis, restart sem perda e URL HTTPS acessível |
 | 1 | Supabase Auth, sessão e ownership | Login/logout; usuário B não acessa nenhum dado/ação de A; chave administrativa ausente do bundle |
 | 2 | OpenRouter pessoal e modelo até o sandbox | Duas tarefas usam suas respectivas chaves; credencial inválida bloqueia com erro legível; segredo não aparece em eventos |
 | 3 | GitHub App, vínculo de conta e seletor de repo/branch | Repo privado autorizado aparece; repo não autorizado é rejeitado mesmo com request forjado |
@@ -154,7 +154,7 @@ Título sugerido: **MVP web com Google, OpenRouter pessoal, GitHub e PRs pelo Pi
 | 5 | Shell responsivo, chat e ações reais | Criar, acompanhar, enviar instrução, cancelar e recuperar após reload em desktop/mobile |
 | 6 | Continuação e fechamento da entrega | Novo pedido atualiza a mesma PR após término do sandbox; demo de ponta a ponta e configuração de produção documentadas |
 
-Dependências externas para colocar no ar: projetos Supabase separados para staging/produção, conexão Postgres, Google configurado no Supabase Auth com domínio/callback, GitHub App com callback/webhook e permissões aprovadas, chave de criptografia, HTTPS, runtime Modal configurado e repositório de teste autorizado. Implementação/testes locais podem avançar antes dessa configuração; não declarar login/PR reais validados por mocks.
+Dependências externas para colocar no ar: Supabase local reproduzível e projeto de produção existente, conexão Postgres, Google configurado no Supabase Auth com domínio/callback, GitHub App com callback/webhook e permissões aprovadas, chave de criptografia, HTTPS, runtime Modal configurado e repositório de teste autorizado. O usuário dispensou staging separado após o limite de projetos gratuitos impedir sua criação. Implementação/testes locais podem avançar antes dessa configuração; não declarar login/PR reais validados por mocks.
 
 ## Critérios de aceite e demonstração
 
@@ -177,7 +177,7 @@ Na implementação, executar a sequência de QA do AGENTS.md, testes/build web, 
 
 ## Testes orientados à produção
 
-A [matriz de testes e liberação](mvp-production-tests.md) define quatro níveis e seus bloqueios. Antecipar staging na 074; a 075 depende também de UI, integrações e limites completos. A entrega exige URL pública HTTPS (domínio apontando para o IP do servidor), não apenas localhost/IP:porta. Provar login real, isolamento, persistência após redeploy, PR correta, restore e limpeza; não aceitar apenas status succeeded.
+A [matriz de testes e liberação](mvp-production-tests.md) define quatro níveis e seus bloqueios. Antecipar a configuração HTTPS na 074; a 075 depende também de UI, integrações e limites completos. A entrega exige URL pública HTTPS (domínio apontando para o IP do servidor), não apenas localhost/IP:porta. Provar login real, isolamento, persistência após redeploy, PR correta, restore e limpeza; não aceitar apenas status succeeded.
 
 ## Depois do MVP
 

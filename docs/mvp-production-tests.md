@@ -4,14 +4,14 @@ Status: especificação pendente de implementação. Targets novos devem ser cri
 
 ## Estratégia
 
-Testar o caminho de uma pessoa usando o produto. Aumentar quantidade de testes unitários não substitui integração, browser e recuperação. Supabase local permite testar o mesmo tipo de banco sem gastar recursos por caso; staging separado comprova serviços externos e configuração publicada.
+Testar o caminho de uma pessoa usando o produto. Aumentar quantidade de testes unitários não substitui integração, browser e recuperação. Supabase local permite testar o mesmo tipo de banco sem gastar recursos por caso. Como o usuário dispensou staging separado, serviços externos e configuração publicada são verificados com contas autorizadas na URL de produção, sem fixtures sintéticas ou testes destrutivos.
 
 | Nível | Quando / responsável | Prova e bloqueio |
 |---|---|---|
 | Rápido e determinístico | Toda PR; cada task | Contratos HTTP, regras, UI, erros e fronteira SDK; provedores caros controlados. Falha bloqueia merge. |
 | Integração Supabase local | Toda PR de Auth, dados ou runtime; 077/078/061/062 | Migração vazia e upgrade, Auth, permissões reais, constraints, concorrência em conexões distintas e restart. Falha bloqueia merge. |
-| Browser no staging HTTPS | Candidato a release; 074/075 | Duas contas, onboarding, fluxo até PR e continuação, mobile e falhas. Mesma imagem e migrações de produção; dados/credenciais separados. Falha bloqueia promoção. |
-| Smoke após deploy | Cada release; 074/075 | URL externa, assets/reload, readiness, login/sessão e leitura/escrita de conta sintética isolada. Falha interrompe promoção e aciona recuperação documentada. Execução paga requer opt-in. |
+| Browser na URL HTTPS publicada | Candidato a release; 074/075 | Duas contas autorizadas, onboarding, fluxo até PR e continuação, mobile e falhas, com repo descartável. Falha bloqueia abertura do produto. |
+| Smoke após deploy | Cada release; 074/075 | URL externa, assets/reload, readiness, login/sessão e leitura isolada de conta autorizada. Falha interrompe abertura e aciona recuperação documentada. Execução paga requer opt-in. |
 
 ## Matriz mínima
 
@@ -26,9 +26,9 @@ Testar o caminho de uma pessoa usando o produto. Aumentar quantidade de testes u
 | PR não cumpre o pedido | Conferir diff e resultado de testes contra um prompt com comportamento observável; validar repo/head/base e ajuste na mesma PR | 067, 071, 075 |
 | Recuperação aparente | Restaurar backup em ambiente isolado; conferir dados/relações, recuperar reserva e exigir nova sessão; medir RPO/RTO | 074, 078 |
 | Interface inviável no celular | Browser em 360/390/768/1440 px, teclado/foco, histórico, composer, erros e reload | 068–072, 075 |
-| Capacidade não medida | Carga HTTP em staging com limites definidos antes do ensaio; registrar p95, erros, conexões e fila; executar uma prova paga limitada separadamente | 073, 075 |
+| Capacidade não medida | Carga HTTP no ambiente local isolado com limites definidos antes do ensaio; registrar p95, erros, conexões e fila; executar uma prova paga limitada separadamente | 073, 075 |
 
-Não executar carga, resets ou fixtures destrutivas em produção. Testes Google reais podem exigir interação humana; registrar o roteiro e resultado, sem contornar desafios do provedor. Playwright pode cobrir o restante do browser com contas de teste Supabase, mas isso não comprova o fluxo Google.
+Não executar carga, resets ou fixtures sintéticas em produção. Testes Google reais podem exigir interação humana; registrar o roteiro e resultado, sem contornar desafios do provedor. Playwright pode cobrir o restante do browser com contas autorizadas, mas isso não comprova o fluxo Google.
 
 ## Eficiência e evidência
 
@@ -40,4 +40,4 @@ Não executar carga, resets ou fixtures destrutivas em produção. Testes Google
 
 ## Porta de entrada do produto
 
-Domínio HTTPS apontando para o IP de hospedagem, frontend/API na mesma origem e callbacks permitidos. Staging e produção têm projetos Supabase e segredos próprios. O produto só abre criação de tarefas após ownership, integrações e limites passarem. Billing e organizações ficam para depois; retenção, remoção de conta/dados e canal de suporte precisam de procedimento documentado antes da abertura pública, preservando a reconciliação de execuções ativas.
+Domínio HTTPS apontando para o IP de hospedagem, frontend/API na mesma origem e callbacks permitidos. Supabase local e produção usam configurações e segredos separados. O produto só abre criação de tarefas após ownership, integrações e limites passarem. Billing e organizações ficam para depois; retenção, remoção de conta/dados e canal de suporte precisam de procedimento documentado antes da abertura pública, preservando a reconciliação de execuções ativas.
