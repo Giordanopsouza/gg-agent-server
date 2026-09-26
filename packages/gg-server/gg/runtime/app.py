@@ -29,6 +29,7 @@ from gg.runtime.storage import StorageLimits
 from gg.runtime.task_routes import event_socket_router, router as task_router
 from gg.runtime.task_service import TaskService
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
+from gg.runtime.web_auth import SupabaseAuth, web_auth_router
 
 
 _CONTROL_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -59,6 +60,7 @@ def create_app(
     modal_lifecycle: ModalSandboxLifecycle | None = None,
     task_scheduler: TaskScheduler | None = None,
     task_supervision: TaskSupervisionManager | None = None,
+    web_auth: SupabaseAuth | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app."""
     ledger = task_ledger or TaskLedger(db_path=settings.task_db_path)
@@ -154,6 +156,7 @@ def create_app(
         return report.model_dump(mode="json")
 
     app.include_router(task_router, dependencies=[Depends(_check_api_key)])
+    app.include_router(web_auth_router(settings, web_auth or SupabaseAuth(settings)))
     app.include_router(
         event_socket_router, dependencies=[Depends(_check_socket_api_key)]
     )

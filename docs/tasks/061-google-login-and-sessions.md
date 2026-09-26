@@ -1,7 +1,7 @@
 ---
 id: 061-google-login-and-sessions
 feature: mvp-web
-status: pending
+status: in-progress
 depends_on: [077-supabase-foundation]
 ---
 
@@ -39,3 +39,15 @@ Task derivada do plano do MVP web. Escopo, dependências e prova de conclusão d
 ### [PA] 2026-09-25 — Revisão para produção com Supabase
 
 Plano atualizado por solicitação do usuário: Supabase Auth/Postgres, isolamento e provas no ambiente publicado. Critérios continuam pendentes; esta revisão não implementa nem valida o serviço.
+
+### [SWE] 2026-09-25 — Implementação iniciada
+
+Plano Supabase incorporado ao worktree da 061. A implementação direta de Google OIDC/SQLite que estava em andamento será substituída pelo fluxo Supabase Auth. A fundação 077 permanece pré-requisito para migrações, permissões e integração real; rotas de tarefas continuam exclusivas da credencial de operador até a 062.
+
+### [SWE] 2026-09-25 — Contrato HTTP e validação local
+
+FastAPI inicia OAuth Google via Supabase Auth com PKCE, troca o código no callback e expõe sessão/logout com cookie cifrado HttpOnly, state vinculado ao navegador, verificação JWKS/claims e proteção de Origin. O endpoint público JWKS do projeto `xmqpgubedtjirohntdwg` anuncia ES256. Testes HTTP controlados passaram; `make pre-commit`, `make unit-tests` e `production-smoke-tests` passaram. Smoke local em `127.0.0.1:8011`: `/health` 200, `/tasks` sem chave 401, `/auth/session` sem cookie 401, logout com origem indevida 403 e início de login 303 para o projeto correto. O provedor Google real, Postgres privado da 077 e validação de revogação em `auth.sessions` ainda não foram exercitados; task permanece em progresso.
+
+### [SWE] 2026-09-25 — Login Google real no ambiente local
+
+Projeto Supabase `xmqpgubedtjirohntdwg`: provedor Google habilitado, Client ID correspondente ao cliente Google Cloud e callback do Google configurado para o Supabase. Site URL e redirect local de `127.0.0.1:8001` confirmados no painel. Como outra versão do runtime ocupava 8001, a versão desta worktree foi iniciada isoladamente em 8011, com redirect temporário adicionado e removido após o teste. No navegador, o fluxo chegou à seleção de conta Google, retornou ao callback do runtime e `/auth/session` respondeu 200 com o mesmo UUID após recarregar. `POST /auth/logout` respondeu 200 e a consulta seguinte à sessão respondeu 401. O runtime de teste foi encerrado. A integração Postgres da 077, a verificação de revogação em `auth.sessions` e o login em staging HTTPS ainda estão pendentes; a task permanece em progresso.

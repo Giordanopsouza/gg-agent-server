@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from cryptography.fernet import Fernet
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -39,6 +48,11 @@ class RuntimeSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     api_key: str
+    supabase_url: str | None = None
+    supabase_publishable_key: str | None = None
+    web_cookie_key: str | None = None
+    web_origin: str | None = None
+    web_cookie_secure: bool = True
     cors_origins: tuple[str, ...] = ()
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
@@ -90,6 +104,41 @@ class RuntimeSettings(BaseModel):
                 "api_key must be non-empty and cannot contain surrounding whitespace"
             )
         return value
+
+    @field_validator("supabase_url", "web_origin")
+    @classmethod
+    def validate_web_url(cls, value: str | None) -> str | None:
+        if value is not None:
+            parsed = urlsplit(value)
+            if (
+                not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or parsed.scheme not in ("https", "http")
+                or (
+                    parsed.scheme == "http"
+                    and parsed.hostname not in ("localhost", "127.0.0.1")
+                )
+            ):
+                raise ValueError(
+                    "web URLs must be HTTPS origins or loopback HTTP origins"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def validate_web_cookie_settings(self) -> RuntimeSettings:
+        if self.web_cookie_key is not None:
+            try:
+                Fernet(self.web_cookie_key)
+            except (ValueError, TypeError) as exc:
+                raise ValueError("web_cookie_key must be a Fernet key") from exc
+        if not self.web_cookie_secure and self.web_origin:
+            if urlsplit(self.web_origin).hostname not in ("localhost", "127.0.0.1"):
+                raise ValueError("insecure web cookies are allowed only on loopback")
+        return self
 
     @field_validator("task_db_path")
     @classmethod
@@ -210,6 +259,13 @@ def load_settings() -> RuntimeSettings:
 
     return RuntimeSettings(
         api_key=api_key,
+        supabase_url=_optional_secret(os.getenv("GG_SUPABASE_URL")),
+        supabase_publishable_key=_optional_secret(
+            os.getenv("GG_SUPABASE_PUBLISHABLE_KEY")
+        ),
+        web_cookie_key=_optional_secret(os.getenv("GG_WEB_COOKIE_KEY")),
+        web_origin=_optional_secret(os.getenv("GG_WEB_ORIGIN")),
+        web_cookie_secure=_parse_bool(os.getenv("GG_WEB_COOKIE_SECURE"), True),
         cors_origins=tuple(
             origin.strip()
             for origin in os.getenv("GG_RUNTIME_CORS_ORIGINS", "").split(",")
