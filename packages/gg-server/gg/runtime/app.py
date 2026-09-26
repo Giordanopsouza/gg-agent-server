@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from gg.runtime.config import RuntimeSettings
 from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
+from gg.runtime.postgres import RuntimePostgres
 from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.readiness import readiness_from_scheduler
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
@@ -29,6 +31,8 @@ from gg.runtime.storage import StorageLimits
 from gg.runtime.task_routes import event_socket_router, router as task_router
 from gg.runtime.task_service import TaskService
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
+from gg.runtime.web_auth import SupabaseAuth, web_auth_router
+from gg.runtime.web_sessions import PostgresWebSessions
 
 
 _CONTROL_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -59,6 +63,8 @@ def create_app(
     modal_lifecycle: ModalSandboxLifecycle | None = None,
     task_scheduler: TaskScheduler | None = None,
     task_supervision: TaskSupervisionManager | None = None,
+    web_auth: SupabaseAuth | None = None,
+    web_sessions: PostgresWebSessions | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app."""
     ledger = task_ledger or TaskLedger(db_path=settings.task_db_path)
@@ -101,11 +107,21 @@ def create_app(
         storage_limits=storage_limits,
         task_db_path=settings.task_db_path,
     )
+    web_pool = None
+    if (
+        web_sessions is None
+        and settings.supabase_url
+        and os.getenv("GG_RUNTIME_DATABASE_URL")
+    ):
+        web_pool = RuntimePostgres.from_env().pool()
+        web_sessions = PostgresWebSessions(web_pool)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         scheduler_started = False
         try:
+            if web_pool is not None:
+                web_pool.open()
             await supervision.startup()
             await scheduler.start()
             scheduler_started = True
@@ -114,6 +130,8 @@ def create_app(
             if scheduler_started:
                 await scheduler.stop()
             await supervision.shutdown()
+            if web_pool is not None:
+                web_pool.close()
             ledger.close()
 
     app = FastAPI(title="gg-runtime", lifespan=lifespan)
@@ -154,6 +172,9 @@ def create_app(
         return report.model_dump(mode="json")
 
     app.include_router(task_router, dependencies=[Depends(_check_api_key)])
+    app.include_router(
+        web_auth_router(settings, web_auth or SupabaseAuth(settings), web_sessions)
+    )
     app.include_router(
         event_socket_router, dependencies=[Depends(_check_socket_api_key)]
     )
