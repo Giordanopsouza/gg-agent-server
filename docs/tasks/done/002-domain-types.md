@@ -7,14 +7,6 @@ depends_on: [001-repo-scaffolding]
 
 # Domain types
 
-## Migration preflight
-
-- **Target end-state:** `gg.sdk` exports `ConversationStatus`, `Event`, and `ConversationRecord` as typed models. Illegal combinations do not compile or validate.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** booleans like `is_running` plus `is_finished` on the same object.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** status is a str enum or literal union. Tests construct each variant and reject an unknown status string.
-
 ## Scope
 
 Define the core data shape for a conversation, its status machine, and an event. No persistence and no loop yet.

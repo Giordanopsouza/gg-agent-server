@@ -7,10 +7,6 @@ depends_on: [062-task-ownership-and-idempotency]
 
 # Shell responsivo, login e navegação
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Inspecionar App.tsx, api.ts e styles.css. Remover o fluxo de chave administrativa/localStorage; reutilizar React/Vite e identidade visual existentes.
-
 ## Scope
 
 Adaptar o frontend existente à sessão web, com login, navegação de histórico e layout utilizável no celular.

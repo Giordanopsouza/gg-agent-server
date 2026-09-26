@@ -7,14 +7,6 @@ depends_on: [030-docker-secret-forwarding]
 
 # GitHub secret forwarding
 
-## Migration preflight
-
-- **Target end-state:** `DockerWorkspace` can forward a host GitHub token by environment name alongside the OpenRouter key, without placing either value in Docker arguments or persisted data.
-- **Temporary legacy bridges:** none; callers that do not request GitHub forwarding behave exactly as before.
-- **Forbidden legacy dependencies:** arbitrary environment forwarding, raw token values in command arguments, logs, exceptions, metadata, events, or runtime API requests.
-- **Bridge removal task:** n/a; a future secret manager may replace this narrow mechanism.
-- **Boundary enforcement:** focused command-construction and failure-path tests assert that only names cross argv and that every forwarded value is redacted from surfaced output.
-
 ## Scope
 
 Widen the `secret_env_names` allowlist to accept `GH_TOKEN` and `GITHUB_TOKEN` next to `OPENROUTER_API_KEY`, keeping name-only `--env` forwarding and redacted failure handling.

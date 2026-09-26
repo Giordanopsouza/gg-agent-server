@@ -10,14 +10,6 @@ depends_on:
 
 # Docker Pi GitHub PR demo
 
-## Migration preflight
-
-- **Target end-state:** one demo starts three isolated containers. Each Pi clones `Giordanopsouza/personal-website`, applies one change (title, background, or font), opens a pull request with `gh`, and the sandboxes stop.
-- **Temporary legacy bridges:** none; the notes demo stays the unpaid-path checkpoint.
-- **Forbidden legacy dependencies:** host workspace mounts, git credential helpers in the image, baked `gh auth` state, arbitrary secret forwarding, or required paid-model calls in the default test suite.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** offline doubles cover orchestration and cleanup; the live Docker/model/GitHub smoke test is opt-in.
-
 ## Scope
 
 Add `gg.sdk.demo.docker_pi_github_pr` from the existing Docker Pi notes demo. Forward OpenRouter and `GH_TOKEN` by name, start three sandboxes, ask each Pi to clone the personal website and open one PR, prove each PR with `gh pr list`, and always stop every container.

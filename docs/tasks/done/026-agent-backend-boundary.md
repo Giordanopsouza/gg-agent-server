@@ -7,14 +7,6 @@ depends_on: [006-local-conversation-loop]
 
 # Agent backend boundary
 
-## Migration preflight
-
-- **Target end-state:** `LocalConversation` delegates one run to an injected agent backend, with the current dummy behavior remaining the default.
-- **Temporary legacy bridges:** `plan_write_notes` remains available behind `DummyAgentBackend` while existing demos and callers migrate without behavior changes.
-- **Forbidden legacy dependencies:** agent backends must live in `gg.sdk`; `gg.sdk` must not import `gg.server`.
-- **Bridge removal task:** n/a; the dummy backend remains the permanent offline default and test fixture.
-- **Boundary enforcement:** extend the import-boundary tests and keep the full existing SDK/server suite green.
-
 ## Scope
 
 Introduce an agent backend protocol with `run(prompt, workspace, emit)`, move the current scripted behavior into `DummyAgentBackend`, and make `LocalConversation` accept an injected backend while defaulting to the dummy.

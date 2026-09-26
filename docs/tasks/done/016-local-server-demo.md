@@ -7,14 +7,6 @@ depends_on: [015-events-websocket, 007-in-process-demo]
 
 # Local server demo
 
-## Migration preflight
-
-- **Target end-state:** a documented script starts the server, creates a conversation, sends a message, POSTs run, disconnects, reconnects, and finds `NOTES.md` plus the event log.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** Docker. A real LLM.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** the demo talks HTTP and WebSocket only. It does not import `LocalConversation`.
-
 ## Scope
 
 Prove slice 1b end to end, including background-agent reconnect.

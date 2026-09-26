@@ -7,10 +7,6 @@ depends_on: [062-task-ownership-and-idempotency, 071-durable-task-continuation]
 
 # Limites por usuário e proteção de capacidade
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Inspecionar scheduler, reservas, storage e limites atuais. A chave pessoal OpenRouter não paga Modal; usar contadores duráveis existentes quando possível, sem novo broker.
-
 ## Scope
 
 Limitar fila e execuções por usuário sem enfraquecer o limite global e a reconciliação de capacidade existentes.
@@ -23,6 +19,8 @@ Limitar fila e execuções por usuário sem enfraquecer o limite global e a reco
 - [ ] Despachar tarefas elegíveis sem que a quota esgotada de uma conta paralise todas as demais, preservando ordem entre candidatas elegíveis.
 - [ ] Exibir limite atingido na UI com ação apropriada, sem revelar tarefas ou consumo de outra conta.
 - [ ] Testar submissões concorrentes, cancelamento/limpeza pendente, recuperação e liberação de quota sem ultrapassar teto global.
+
+- [ ] Provar atomicidade de quotas em Postgres real com conexões concorrentes e restart; não usar SQLite em memória como prova das transações de produção. Definir teto de duração, fila, taxa de admissão e gasto de infraestrutura por período; testar bloqueio e recuperação sem depender de sandboxes pagos para cada caso.
 
 ## Validation
 
@@ -37,3 +35,7 @@ Billing, planos pagos, escalonamento distribuído e afirmar capacidade live de d
 ### [PA] 2026-09-25 16:16 -03 — Grooming
 
 Task derivada do plano do MVP web. Escopo, dependências e prova de conclusão definidos; implementação ainda não iniciada.
+
+### [PA] 2026-09-25 — Revisão para produção com Supabase
+
+Plano atualizado por solicitação do usuário: Supabase Auth/Postgres, isolamento e provas no ambiente publicado. Critérios continuam pendentes; esta revisão não implementa nem valida o serviço.

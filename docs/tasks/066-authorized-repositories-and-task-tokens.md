@@ -7,10 +7,6 @@ depends_on: [062-task-ownership-and-idempotency, 065-github-account-and-app-conn
 
 # Repositórios autorizados e token restrito da tarefa
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Inspecionar github.py, repo_prep.py e dispatch. Substituir token global somente no fluxo web; preservar tarefas sem repositório e não restaurar allowlists/perfis removidos pelo ADR 0002.
-
 ## Scope
 
 Listar repositórios/branches autorizados e fornecer credencial GitHub restrita ao repositório na execução.

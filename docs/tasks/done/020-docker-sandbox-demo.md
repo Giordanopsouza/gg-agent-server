@@ -7,14 +7,6 @@ depends_on: [019-docker-workspace-launcher, 016-local-server-demo]
 
 # Docker sandbox demo
 
-## Migration preflight
-
-- **Target end-state:** `uv run python -m gg.sdk.demo.docker_notes` builds or assumes `gg-agent-server:dev`, starts a container, runs the dummy agent through `RemoteConversation`, and shows `NOTES.md` inside the container filesystem.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** talking to a server on the host with `LocalConversation`.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** the demo uses `DockerWorkspace` only.
-
 ## Scope
 
 Prove slice 2. Same user code as slice 1, different workspace class.

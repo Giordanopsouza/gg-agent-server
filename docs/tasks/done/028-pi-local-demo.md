@@ -7,14 +7,6 @@ depends_on: [027-pi-rpc-agent]
 
 # Pi local demo
 
-## Migration preflight
-
-- **Target end-state:** one Python module proves that a real local Pi process can complete a file-writing task through `LocalConversation` with no server.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** the demo must not start FastAPI, Docker, ACP, or silently install Pi.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** the standard test uses a fake Pi backend; the real paid smoke test is explicitly opt-in.
-
 ## Scope
 
 Add `gg.sdk.demo.pi_notes`, using a temporary workspace by default, to ask Pi to create `PI_NOTES.md` containing a unique marker and display the resulting file and event summary.

@@ -7,14 +7,6 @@ depends_on: [009-app-health]
 
 # Server Dockerfile
 
-## Migration preflight
-
-- **Target end-state:** an image whose PID 1 is `python -m gg.server --host 0.0.0.0 --port 8000`. User is non-root. `GET /health` works on 8000.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** Docker-in-Docker, VSCode, VNC, copying the host workspace by default.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** the image does not contain the client's source as a mounted default. `/workspace/project` exists and is writable.
-
 ## Scope
 
 Write a Dockerfile for `gg-server` plus a local build command.

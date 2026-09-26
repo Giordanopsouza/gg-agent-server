@@ -7,14 +7,6 @@ depends_on: [026-agent-backend-boundary]
 
 # Pi RPC agent
 
-## Migration preflight
-
-- **Target end-state:** `PiRpcAgent` runs one headless Pi subprocess per conversation run and translates its final RPC events into the gg event log.
-- **Temporary legacy bridges:** none; the dummy backend remains the default when Pi is not explicitly selected.
-- **Forbidden legacy dependencies:** no TypeScript SDK embedding, ACP adapter, vendor client in `gg.server`, persisted API key, or network-dependent default test.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** subprocess management, settings, parsing, and event translation live in `gg.sdk` and are exercised with a fake executable.
-
 ## Scope
 
 Add `PiAgentSettings` and a synchronous `PiRpcAgent` backend that speaks strict JSONL over stdio, uses OpenRouter with Gemini 3.7 Flash, and cleans up the subprocess after a single run.

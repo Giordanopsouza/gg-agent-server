@@ -7,14 +7,6 @@ depends_on: [008-server-config]
 
 # App factory and health
 
-## Migration preflight
-
-- **Target end-state:** `python -m gg.server` starts uvicorn. `GET /health` and `GET /ready` return 200. Default bind is `127.0.0.1`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** conversation routes, VSCode, a global app constructed at import for tests. Tests call `create_app(settings)`.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** `__main__` binds `127.0.0.1` when no session keys are configured.
-
 ## Scope
 
 Stand up FastAPI: `create_app`, lifespan, `/health`, `/ready`, CLI entry.

@@ -7,10 +7,6 @@ depends_on: []
 
 # Durable background task API
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), the runtime API, and tasks 051–060. New production task state must use SQLite; existing Docker session APIs remain a separate learning/demo surface, never an implementation dependency. Preserve existing JSON conversation files. Enforce both package boundaries: `gg.sdk` never imports `gg.server`, and `gg.runtime` never imports `gg.server`; host orchestration reaches the agent server through HTTP/WebSocket contracts.
-
 ## Scope
 
 Add shared frozen task models in `gg.sdk` and a SQLite task ledger behind authenticated submission, list, and detail routes in `gg.runtime`. Accept an allowlisted GitHub repository, prompt, and optional base ref.

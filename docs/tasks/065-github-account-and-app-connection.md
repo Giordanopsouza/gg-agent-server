@@ -7,10 +7,6 @@ depends_on: [061-google-login-and-sessions, 063-personal-openrouter-credentials]
 
 # Conexão da conta GitHub e instalação da App
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Inspecionar o cliente GitHub e a configuração do runtime. Guardar chave privada da App apenas no host e proteger os tokens pessoais necessários ao vínculo usando o padrão de cofre da 063.
-
 ## Scope
 
 Vincular a identidade GitHub à sessão Google e registrar instalações verificadas da GitHub App.
@@ -25,6 +21,8 @@ Vincular a identidade GitHub à sessão Google e registrar instalações verific
 - [ ] Documentar callbacks, webhook, permissões mínimas e o fato de operações com token de instalação aparecerem atribuídas à App.
 - [ ] Testar callbacks forjados, vínculo de outra conta, webhook inválido/repetido e desconexão.
 
+- [ ] Persistir vínculos, instalações e deduplicação de webhook no Supabase Postgres por UUID do usuário; tokens cifrados em schema privado. Login Google via Supabase não concede acesso a instalações GitHub.
+
 ## Validation
 
 Testes HTTP com GitHub controlado e roteiro opt-in de conexão real da App; não requerer instalação paga nos testes comuns. Seguir os comandos de QA do [índice](README.md#validação-e-conclusão).
@@ -38,3 +36,7 @@ Seleção de repositório/branch e emissão do token da tarefa (066), GitLab e c
 ### [PA] 2026-09-25 16:16 -03 — Grooming
 
 Task derivada do plano do MVP web. Escopo, dependências e prova de conclusão definidos; implementação ainda não iniciada.
+
+### [PA] 2026-09-25 — Revisão para produção com Supabase
+
+Plano atualizado por solicitação do usuário: Supabase Auth/Postgres, isolamento e provas no ambiente publicado. Critérios continuam pendentes; esta revisão não implementa nem valida o serviço.

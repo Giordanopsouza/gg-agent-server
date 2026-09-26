@@ -7,14 +7,6 @@ depends_on: [012-conversation-routes, 013-event-routes-and-run, 015-events-webso
 
 # Remote conversation client
 
-## Migration preflight
-
-- **Target end-state:** `RemoteConversation` is an HTTP and WebSocket client. `Conversation(workspace=RemoteWorkspace(host=...))` returns it. The server still builds `LocalConversation`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** importing `gg.server` from the client. Sharing memory with the server process.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** factory tests use a fake host and do not call Docker.
-
 ## Scope
 
 Implement `RemoteWorkspace` as a host plus api_key, and `RemoteConversation` for create, send, run, list events, and optional WS subscribe.

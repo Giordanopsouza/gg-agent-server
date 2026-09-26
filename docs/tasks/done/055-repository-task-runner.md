@@ -7,10 +7,6 @@ depends_on: [051-modal-sandbox-lifecycle, 054-running-agent-messages-and-cancel]
 
 # Run repository tasks and record test evidence
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md) and tasks 052/056/057
-
 ## Scope
 
 Add a sandbox task supervisor that prepares an allowlisted repository, runs Pi against a fixed starting revision, executes configured checks, and exposes a durable local result manifest.

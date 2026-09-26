@@ -7,10 +7,6 @@ depends_on: [064-user-model-and-credential-dispatch, 066-authorized-repositories
 
 # Publicação pelo Pi e reconciliação da PR
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Inspecionar publication.py, bloqueio de GH_TOKEN no supervisor e journal existente. Registrar a substituição da publicação pelo host prevista nos ADRs: no fluxo web, DraftPublisher nunca cria uma PR como fallback.
-
 ## Scope
 
 Permitir que o Pi faça commit/push e abra ou atualize draft PR, enquanto o runtime verifica e reconcilia a publicação.

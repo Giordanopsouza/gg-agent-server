@@ -7,14 +7,6 @@ depends_on: [013-event-routes-and-run, 014-pubsub]
 
 # Events WebSocket
 
-## Migration preflight
-
-- **Target end-state:** `WS /sockets/events/{id}` auth via first JSON frame `{"type":"auth","session_api_key":"..."}` when keys are configured. Then it subscribes and pushes events. Inbound user JSON calls `send_message` with `run=true`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** query-string keys as the only auth path. Cookie auth.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** unknown conversation closes with 4004. Bad auth closes with 4001.
-
 ## Scope
 
 Wire pub/sub to a WebSocket and auto-run inbound messages.

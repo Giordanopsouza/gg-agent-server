@@ -7,10 +7,6 @@ depends_on: [050-durable-background-task-api]
 
 # Standard Modal sandbox lifecycle
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), the current Docker image and runtime launcher, and tasks 052/055/057. Add one concrete Modal integration under `gg.runtime`; do not build a provider registry or route new work through `DockerWorkspace`. Preserve existing Docker demos.
-
 ## Scope
 
 Build a versioned standard Modal sandbox image containing the agent server, Pi, Git, and required runtime tools. Implement asynchronous create, inspect, reconnect, authenticated connect, detach, and terminate operations.

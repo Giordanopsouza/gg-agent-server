@@ -7,10 +7,6 @@ depends_on: [050-durable-background-task-api, 051-modal-sandbox-lifecycle]
 
 # FIFO dispatch and restart recovery
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md) and tasks 051/055/057. Production dispatch must use the durable ledger rather than `RuntimeService._sessions`. Existing stop-everything-on-close behavior remains confined to the legacy Docker runtime. Enforce that separation through lifecycle integration tests.
-
 ## Scope
 
 Run one lifespan-managed scheduler that transactionally reserves capacity and provisions FIFO queued work. Recover existing reservations and surviving Modal sandboxes before admitting additional work.

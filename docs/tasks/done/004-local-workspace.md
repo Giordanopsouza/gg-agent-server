@@ -7,14 +7,6 @@ depends_on: [002-domain-types]
 
 # Local workspace
 
-## Migration preflight
-
-- **Target end-state:** `LocalWorkspace` reads and writes files under `working_dir` and runs a subprocess with that cwd.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** HTTP, Docker, path sandboxing that pretends to be isolation.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** missing `working_dir` is created on start. Tests never touch the repo root.
-
 ## Scope
 
 Implement the in-process workspace: mkdir, write, read, and `execute_command` with cwd defaulting to `working_dir`.

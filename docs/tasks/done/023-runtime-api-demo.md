@@ -7,14 +7,6 @@ depends_on: [022-runtime-workspace-client, 020-docker-sandbox-demo]
 
 # Runtime API demo
 
-## Migration preflight
-
-- **Target end-state:** one command starts the runtime API, which starts a sandbox container, which runs the dummy agent. `NOTES.md` appears in that container. Both processes clean up.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** a real cloud account. A kubeconfig.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** the demo file should look like the Docker demo with `RuntimeWorkspace(...)` instead of `DockerWorkspace(...)`.
-
 ## Scope
 
 Prove slice 3 end to end.

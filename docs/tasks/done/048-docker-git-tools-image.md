@@ -7,14 +7,6 @@ depends_on: [031-docker-pi-image]
 
 # Docker git tools image
 
-## Migration preflight
-
-- **Target end-state:** the non-root agent-server image contains pinned `git` and GitHub CLI executables so Pi can clone, commit, push, and open pull requests inside the sandbox.
-- **Temporary legacy bridges:** none; the image entrypoint, Python dependency build, and Pi runtime stage remain unchanged.
-- **Forbidden legacy dependencies:** unpinned tool installs, runtime downloads, embedded credentials or `gh auth` state, host git configuration copied into the image, or running tools as root.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** build-time version checks for both tools plus existing image health and agent integration tests.
-
 ## Scope
 
 Add pinned `git` and `gh` to the final image stage, verify both at build time, and keep the `gg` security user and server entrypoint untouched.

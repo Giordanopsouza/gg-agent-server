@@ -7,14 +7,6 @@ depends_on: [019-docker-workspace-launcher]
 
 # Docker secret forwarding
 
-## Migration preflight
-
-- **Target end-state:** `DockerWorkspace` can forward the host's OpenRouter key by environment name without placing its value in Docker arguments or persisted data.
-- **Temporary legacy bridges:** none; callers that do not request secret forwarding behave exactly as before.
-- **Forbidden legacy dependencies:** arbitrary environment forwarding, raw secret values in command arguments, logs, exceptions, metadata, or runtime API requests.
-- **Bridge removal task:** n/a; a future secret manager may replace this narrow mechanism.
-- **Boundary enforcement:** focused command-construction and failure-path tests assert that only the name crosses argv.
-
 ## Scope
 
 Add `secret_env_names` to `DockerWorkspace`, restricted to `OPENROUTER_API_KEY`, and forward the inherited host value with Docker's name-only `--env` form.

@@ -7,14 +7,6 @@ depends_on: [020-docker-sandbox-demo]
 
 # ACP agent (bring your own agent)
 
-## Migration preflight
-
-- **Target end-state:** `ACPAgent` in `gg.sdk` spawns an ACP-compatible subprocess (Claude Code, Codex, Gemini CLI) inside the sandbox `working_dir`. `ConversationService` can start a conversation with `agent_kind: acp` instead of Pi.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** baking ACP subprocess management into `gg.server`. Keep spawn, session, and relay logic in `gg.sdk`.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** `gg.sdk` must not import `gg.server`. Docker image pre-installs ACP CLIs; server only selects agent settings from the create request.
-
 ## Scope
 
 Add Agent Client Protocol support so users can run third-party coding agents (Claude Code via `claude-agent-acp`, Codex, Gemini) inside the gg sandbox instead of on their laptop. Mirror the upstream `ACPAgent` pattern from `software-agent-sdk`.

@@ -7,10 +7,6 @@ depends_on: [062-task-ownership-and-idempotency, 063-personal-openrouter-credent
 
 # Modelo e credencial do usuário até o Pi
 
-## Migration preflight
-
-Ler o [plano do MVP](../mvp-web-plan.md), os ADRs [0001](../adr/0001-modal-background-tasks.md), [0002](../adr/0002-general-background-tasks.md) e [0003](../adr/0003-remove-legacy-learning-surfaces.md), o AGENTS.md do componente e as tasks diretamente dependentes/consumidoras. Registrar estado final, pontes temporárias com legado, responsável pela remoção e teste que protege a fronteira. Inspecionar configuração, scheduler, modal_sandbox e contrato HTTP do supervisor. Manter `gg.runtime` separado de `gg.server` por HTTP e modelos compartilhados no SDK.
-
 ## Scope
 
 Transportar o modelo escolhido e resolver a chave pessoal no dispatch até o processo Pi no sandbox correspondente.

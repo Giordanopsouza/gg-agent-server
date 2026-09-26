@@ -7,14 +7,6 @@ depends_on: [006-local-conversation-loop, 009-app-health]
 
 # Conversation service
 
-## Migration preflight
-
-- **Target end-state:** `ConversationService` is process-wide. It creates, loads, and holds `LocalConversation` objects keyed by id. Catalog comes from `conversations_dir/*/meta.json`.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** leases, idle eviction, thread pool tuning beyond one `asyncio` task per run.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** the service lives in `gg.server` and imports `gg.sdk`. The SDK still does not import the server.
-
 ## Scope
 
 Wrap `LocalConversation` in a process manager with create, get, and list.

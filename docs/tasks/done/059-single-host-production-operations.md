@@ -7,10 +7,6 @@ depends_on: [057-task-supervision-results-and-cleanup]
 
 # Operate the single-host control plane
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), root guidance, existing Makefiles, and deployment configuration. Update current project guidance to distinguish production SQLite task state from JSON conversation files and historical learning constraints. Do not change the one-task/one-branch/one-PR workflow.
-
 ## Scope
 
 Provide a reproducible always-on deployment, bounded storage and resource policies, and tested backup/recovery procedures for one persistent-disk host.

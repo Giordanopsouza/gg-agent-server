@@ -7,14 +7,6 @@ depends_on: [012-conversation-routes]
 
 # Event routes and run
 
-## Migration preflight
-
-- **Target end-state:** `POST /api/conversations/{id}/events` appends a user message with `run` default false. `POST /api/conversations/{id}/run` starts the dummy loop. `GET .../events` lists persisted events.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** running on every REST send by default. Match OpenHands REST: send does not run.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** a second concurrent `run` returns 409.
-
 ## Scope
 
 HTTP for send_message, run, and event listing.

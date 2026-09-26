@@ -7,10 +7,6 @@ depends_on: [053-live-conversation-events]
 
 # Message and cancel a running Pi agent
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), the pinned Pi RPC documentation, `AgentBackend`, `PiRpcAgent`, `LocalConversation`, and conversation routes. Replace the one-shot-only control restriction with the smallest Pi-compatible control surface. Keep any compatibility bridge confined to existing callers and remove it when all callers migrate in this task.
-
 ## Scope
 
 Add idempotent messages for a running conversation and cooperative cancellation. Persist message acceptance and delivery outcomes without promising exactly-once effects across a subprocess failure.

@@ -7,14 +7,6 @@ depends_on: [011-conversation-service, 010-session-api-key]
 
 # Conversation HTTP routes
 
-## Migration preflight
-
-- **Target end-state:** REST under `/api/conversations` for create, get, and list. Re-POST of the same id reattaches and returns 200.
-- **Temporary legacy bridges:** none.
-- **Forbidden legacy dependencies:** query-string session keys, agent blobs in `meta.json`.
-- **Bridge removal task:** n/a.
-- **Boundary enforcement:** request bodies parse into SDK types at the router. Handlers do not accept raw dicts.
-
 ## Scope
 
 Expose create, get, and list over HTTP.

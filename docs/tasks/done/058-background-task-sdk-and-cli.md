@@ -7,10 +7,6 @@ depends_on: [057-task-supervision-results-and-cleanup]
 
 # SDK and CLI for background coding tasks
 
-## Migration preflight
-
-Inspect [ADR 0001](../adr/0001-modal-background-tasks.md), SDK conventions, and the `cli-tool-python` spec. Add a client over public HTTP/WebSocket contracts; prohibit imports from `gg.server` or `gg.runtime` and avoid exposing provider credentials.
-
 ## Scope
 
 Ship an SDK task client and a Click command-line entry point for the full task workflow.
