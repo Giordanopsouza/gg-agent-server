@@ -52,7 +52,7 @@ Supabase Auth revokes refresh tokens on sign-out; an already issued JWT can
 remain cryptographically valid until its expiry. The runtime checks its
 `session_id` against `auth.sessions` through a narrow private SQL function,
 including on `/auth/session`, so a revoked session is rejected immediately.
-Run `PYTHONPATH=packages/gg-server:packages/gg-sdk uv run --no-editable python
+Run `PYTHONPATH=backend:packages/gg-sdk uv run --no-editable python
 scripts/supabase_web_session_smoke.py` against disposable local Supabase to
 prove profile creation and rejection after Auth logout. Until task 062 adds
 owner checks, all task routes remain operator only.

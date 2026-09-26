@@ -29,7 +29,9 @@ def _imported_modules(node: ast.AST) -> set[str]:
 
 
 def _violates_boundary(module_name: str) -> bool:
-    return module_name == "gg.server" or module_name.startswith("gg.server.")
+    return module_name in {"gg.server", "gg.runtime"} or module_name.startswith(
+        ("gg.server.", "gg.runtime.")
+    )
 
 
 def _relative_path(path: Path) -> str:
@@ -41,17 +43,19 @@ def _relative_path(path: Path) -> str:
     _iter_python_files(SDK_ROOT),
     ids=_relative_path,
 )
-def test_sdk_does_not_import_server(path: Path) -> None:
+def test_sdk_does_not_import_backend_or_sandbox(path: Path) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     offenders = sorted(
         module_name
         for module_name in _imported_modules(tree)
         if _violates_boundary(module_name)
     )
-    assert not offenders, f"{path} imports forbidden server modules: {offenders}"
+    assert not offenders, (
+        f"{path} imports forbidden backend or sandbox modules: {offenders}"
+    )
 
 
-def test_boundary_detector_rejects_from_gg_import_server() -> None:
-    tree = ast.parse("from gg import server")
-
-    assert any(_violates_boundary(module) for module in _imported_modules(tree))
+def test_boundary_detector_rejects_backend_and_sandbox_imports() -> None:
+    for name in ("server", "runtime"):
+        tree = ast.parse(f"from gg import {name}")
+        assert any(_violates_boundary(module) for module in _imported_modules(tree))

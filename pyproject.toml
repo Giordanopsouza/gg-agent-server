@@ -1,14 +1,16 @@
 [tool.uv.workspace]
-members = ["packages/gg-sdk", "packages/gg-server"]
+members = ["packages/gg-sdk", "backend", "sandboxes"]
 
 [tool.uv.sources]
 gg-sdk = { workspace = true }
-gg-server = { workspace = true }
+gg-backend = { workspace = true }
+gg-sandbox = { workspace = true }
 
 [dependency-groups]
 dev = [
     "gg-sdk",
-    "gg-server",
+    "gg-backend",
+    "gg-sandbox",
     "ipykernel>=6.29",
     "jupyter>=1.0",
     "pytest>=8.0",
@@ -30,7 +32,8 @@ lines-after-imports = 2
 [tool.pytest.ini_options]
 testpaths = [
     "packages/gg-sdk/tests",
-    "packages/gg-server/tests",
+    "backend/tests",
+    "sandboxes/tests",
     "tests",
 ]
 python_files = ["test_*.py"]

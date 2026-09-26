@@ -47,7 +47,7 @@ image:
 
 ```console
 GG_RUN_MODAL_TESTS=1 uv run --no-editable pytest \
-  packages/gg-server/tests/test_modal_sandbox_live.py -m modal
+  backend/tests/test_modal_sandbox_live.py -m modal
 ```
 
 The smoke creates one sandbox, authenticates to `/health`, reconnects from a

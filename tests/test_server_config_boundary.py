@@ -7,15 +7,21 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SERVER_ROOT = REPO_ROOT / "packages" / "gg-server" / "gg" / "server"
+SERVER_ROOT = REPO_ROOT / "sandboxes" / "gg" / "server"
 # - # config.py is the single module allowed to read the environment.
 ALLOWED_MODULE = "config.py"
 
 _ENV_NAMES = {"environ", "getenv"}
 
 
+# The Pi subprocess adapter reads its environment locally; this rule covers
+# the sandbox HTTP server and task supervisor configuration boundary.
 def _iter_python_files(root: Path) -> list[Path]:
-    return sorted(path for path in root.rglob("*.py") if path.is_file())
+    return sorted(
+        path
+        for path in root.rglob("*.py")
+        if path.is_file() and "agent" not in path.relative_to(root).parts
+    )
 
 
 def _relative_path(path: Path) -> str:

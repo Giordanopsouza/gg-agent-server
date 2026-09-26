@@ -38,7 +38,10 @@ def main() -> None:
         data=json.dumps(
             {"email": email, "password": secrets.token_urlsafe(24)}
         ).encode(),
-        headers={"apikey": status["PUBLISHABLE_KEY"], "Content-Type": "application/json"},
+        headers={
+            "apikey": status["PUBLISHABLE_KEY"],
+            "Content-Type": "application/json",
+        },
     )
     with urlopen(signup, timeout=10) as response:
         tokens = json.load(response)

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+DOCKERFILE = (ROOT / "sandboxes" / "Dockerfile").read_text(encoding="utf-8")
 
 
 def test_dockerfile_pins_pi_runtime_and_disables_install_scripts() -> None:

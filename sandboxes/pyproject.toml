@@ -1,0 +1,22 @@
+[project]
+name = "gg-sandbox"
+version = "0.1.0"
+description = "gg sandbox agent server and Pi execution"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.104",
+    "gg-sdk",
+    "pydantic>=2.0",
+    "uvicorn>=0.31.1",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.setuptools.packages.find]
+include = ["gg.server*"]
+namespaces = true

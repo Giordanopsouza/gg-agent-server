@@ -1,3 +1,6 @@
 # gg-sdk
 
-Client-side Python package for domain models, local conversations, the task client, and agent backends. Preserve its independence from `gg.server`; use frozen Pydantic models for shared state, async I/O at remote boundaries, and tests beside this package. See the root [`AGENTS.md`](../../AGENTS.md) for repository-wide workflow and conventions; run `make -C packages/gg-sdk help` for component commands.
+Client-side Python package for shared Pydantic HTTP contracts, the task client,
+and the `gg-task` CLI. It must be independently importable and never import
+`gg.server` or `gg.runtime`. Sandbox-local Pi, workspace, and conversation
+execution live in `sandboxes/gg/server/agent`.

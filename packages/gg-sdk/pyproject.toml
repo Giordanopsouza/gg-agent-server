@@ -1,7 +1,7 @@
 [project]
 name = "gg-sdk"
 version = "0.1.0"
-description = "gg-agent-server SDK — agent loop, workspace, and client types"
+description = "gg Python task client, CLI, and shared contracts"
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.0",
