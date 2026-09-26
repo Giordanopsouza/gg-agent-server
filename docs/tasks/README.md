@@ -6,7 +6,7 @@ O plano ativo é o [MVP web — Google, OpenRouter, GitHub e Pi](../mvp-web-plan
 
 ## Próximos passos do MVP
 
-Começar pela **077** (fundação Supabase); depois **061** (Auth) e **078** (runtime Postgres), que podem avançar independentemente. A **062** exige ambas. Antecipar **074** após 061/078 para exercitar staging antes do frontend completo. A tabela está em ordem sugerida; `depends_on` nos arquivos define os bloqueios reais. Após sessão e ownership, o shell web pode avançar enquanto as integrações são construídas; após o cofre, modelo/dispatch e conexão GitHub podem avançar de forma independente. Cada task deve ser revisável e entregável isoladamente; superfícies incompletas ficam indisponíveis ao usuário até seus contratos e autorização estarem prontos.
+Começar pela **077** (fundação Supabase); depois **061** (Auth) e **078** (runtime Postgres), que podem avançar independentemente. A **062** exige ambas. Antecipar **074** após 061/078 para exercitar o ambiente local e a configuração de produção antes do frontend completo. A tabela está em ordem sugerida; `depends_on` nos arquivos define os bloqueios reais. Após sessão e ownership, o shell web pode avançar enquanto as integrações são construídas; após o cofre, modelo/dispatch e conexão GitHub podem avançar de forma independente. Cada task deve ser revisável e entregável isoladamente; superfícies incompletas ficam indisponíveis ao usuário até seus contratos e autorização estarem prontos.
 
 | Task | Depende de | Prova principal |
 |---|---|---|
@@ -32,7 +32,7 @@ Começar pela **077** (fundação Supabase); depois **061** (Auth) e **078** (ru
 
 | Incremento | Tasks |
 |---|---|
-| 0. Fundação e migração Postgres | 077–078; staging antecipado na 074 |
+| 0. Fundação e migração Postgres | 077–078; ambiente local e configuração de produção na 074 |
 | 1. Supabase Auth, sessão e ownership | 061–062 |
 | 2. OpenRouter pessoal e modelo | 063–064 |
 | 3. GitHub App e seleção de repo/branch | 065–066; interface em 069 |
@@ -46,7 +46,7 @@ A publicação pelo Pi e o acesso por usuário mudam premissas dos ADRs anterior
 
 ## Dependências externas e limite do aceite
 
-Configurar Supabase local e projetos separados de staging/produção, Google via Supabase Auth com domínio/callback, GitHub App com callback/webhook/permissões, chave de criptografia fora do banco, HTTPS, runtime Modal e repo de teste autorizado. Implementação e testes controlados podem avançar antes disso; a task 075 só termina com a demonstração real e limpeza comprovada.
+Configurar Supabase local e o projeto de produção existente, Google via Supabase Auth com domínio/callback, GitHub App com callback/webhook/permissões, chave de criptografia fora do banco, HTTPS, runtime Modal e repo de teste autorizado. O usuário dispensou um projeto staging separado após o limite de projetos gratuitos impedir sua criação; fixtures sintéticas ficam restritas ao ambiente local. Implementação e testes controlados podem avançar antes disso; a task 075 só termina com a demonstração real e limpeza comprovada.
 
 O plano menciona a antiga **060 — aceitação de dez sandboxes**, mas seu arquivo está ausente no estado atual do workspace. O número permanece reservado; não recriar nem marcar como concluída. Capacidade de dez execuções simultâneas **não está comprovada** e não é um bloqueio artificial para iniciar o MVP. A 073 protege os limites configurados; a 075 comprova apenas a capacidade efetivamente exercitada.
 

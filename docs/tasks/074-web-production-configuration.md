@@ -21,7 +21,7 @@ Documentar e exercitar a montagem web/API na mesma origem com HTTPS, migrações
 - [ ] Registrar limites realmente configurados e o que foi validado; não apresentar a antiga task 060 ausente como evidência de capacidade.
 - [ ] Manter configuração segura em exemplos e validar bundle/artefatos sem segredos.
 
-- [ ] Disponibilizar staging desde o início, com projeto Supabase e credenciais separados de produção, mesma imagem/build e migrações versionadas. Features ainda incompletas ficam fechadas. A 075 valida depois a configuração final com todas as integrações.
+- [ ] Manter integração local Supabase reproduzível e configurar o projeto de produção existente com migrações versionadas. O usuário dispensou staging separado pelo limite de projetos gratuitos; features incompletas ficam fechadas. A 075 valida depois a configuração final com todas as integrações.
 - [ ] Publicar entrada HTTPS com domínio e certificado válido apontando para o IP do servidor; IP/porta isolados não são o critério de entrega. Configurar proxy, redirects permitidos, cookies, CORS/Origin, callback Supabase e OAuth Google real; nenhuma conexão pública direta ao banco.
 - [ ] Pipeline aplica migrações uma vez, executa readiness e smoke na URL publicada, e promove o mesmo artefato aprovado. Ensaiar rollback da aplicação com schema compatível; não restaurar snapshot antigo sobre novas escritas como rollback automático.
 - [ ] Disponibilizar logs estruturados com correlação request/task, métricas de erro/fila/latência, alertas acionáveis e procedimento para interromper admissões; comprovar uma falha e sua detecção sem vazar prompts ou segredos.
