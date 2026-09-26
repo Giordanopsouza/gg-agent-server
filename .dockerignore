@@ -16,3 +16,5 @@ tests/
 *.sqlite
 *.sqlite-*
 *.sqlite.*
+node_modules/
+frontend/dist/

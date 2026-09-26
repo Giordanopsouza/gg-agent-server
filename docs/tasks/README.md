@@ -93,7 +93,7 @@ Escopo e dependências definidos.
 
 Cada implementação termina em teste automatizado ou demo executável da superfície real. A matriz final de aceite é consolidada na 075; isso não adia os testes de cada incremento.
 
-Seguir o AGENTS.md: `make format-fix`, `make lint-fix`, `make format-check`, `make lint-check`, `make pre-commit`, `make unit-tests`, nessa ordem. Adicionar testes/build web quando houver mudança web e `make -C packages/gg-server production-smoke-tests` para mudanças operacionais. A 068 integra comandos web ao Makefile raiz; a 075 integra a demo. Fora de targets Makefile, usar `uv run --no-editable ...`.
+Seguir o AGENTS.md: `make format-fix`, `make lint-fix`, `make format-check`, `make lint-check`, `make pre-commit`, `make unit-tests`, nessa ordem. Adicionar testes/build web quando houver mudança web e `make -C backend production-smoke-tests` para mudanças operacionais. A 068 integra comandos web ao Makefile raiz; a 075 integra a demo. Fora de targets Makefile, usar `uv run --no-editable ...`.
 
 Aplicar a [matriz de testes para produção](../mvp-production-tests.md). Testes de persistência/autorização usam Supabase/Postgres real local; SQLite não prova comportamento de produção. Testes comuns não provisionam recursos pagos. Demos reais exigem opt-in e registram configuração, resultado e limpeza, sem segredos. Mock não comprova Google/GitHub/OpenRouter/Modal reais.
 

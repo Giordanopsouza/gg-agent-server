@@ -1,47 +1,56 @@
 # gg-agent-server
 
-The shortest mental model is: **control plane manages sandboxes; client SDK provides the interface; server SDK manages conversation state; Pi Agent executes the work.**
+The control plane manages tasks and sandboxes. Each sandbox runs a Pi agent.
+The Python SDK supplies shared contracts and a task client; the React frontend
+calls the control plane API directly.
 
-![Background agents](docs/background-agents.png)
+## Repository map
+
+- `backend/` — the control plane (`gg.runtime`): task API, durable state,
+  scheduling, Modal lifecycle, supervision, and publication. Its runtime
+  modules are part of this backend deployment.
+- `frontend/` — the React task UI. It uses HTTP through `src/api.ts`.
+- `sandboxes/` — the per-task image and agent server (`gg.server`), including
+  Pi, local workspaces, and conversation persistence.
+- `packages/gg-sdk/` — shared Pydantic HTTP contracts, Python task client,
+  and `gg-task` CLI. It imports neither backend nor sandbox code.
+- `supabase/` — database configuration and migrations.
+- `scripts/` — operational smoke checks.
+- `docs/` — architecture, decisions, and task history.
+- `tests/` — repository-wide boundary and image checks.
+
+The backend calls the sandbox server over HTTP/WebSocket contracts. The
+sandbox and backend both use `gg.sdk` models. Runtime data such as conversation
+files belongs outside source control for new runs; existing tracked
+`workspace/` fixtures are preserved until their purpose is confirmed.
 
 ## Develop
 
-Python 3.12. Packages live under `packages/gg-sdk` and `packages/gg-server`.
+Use Python 3.12 and Node 22.
 
 ```bash
 uv sync --no-editable
-uv run pytest
-uv run ruff check .
-uv run python -m gg.server --host 127.0.0.1 --port 8000
+make unit-tests
+make lint-check
+make format-check
+make run-runtime
 ```
 
-Use `uv sync --no-editable`. Default editable installs break `import gg` on Python 3.12.
-
-## Demo
-
-Start the control plane locally with dispatch enabled. A submitted task is admitted and the scheduler provisions a Modal sandbox for it.
+The control plane starts on port 8001. To work on the frontend:
 
 ```bash
-set -a && source .env && set +a
-GG_RUNTIME_API_KEY=local-demo \
-GG_TASK_DB_PATH=/tmp/gg-tasks.sqlite \
-GG_TASK_DISPATCH_ENABLED=true \
-uv run --no-editable python -m gg.runtime
+cd frontend
+npm ci
+npm run dev
 ```
 
-In another shell, submit a general task:
-
-```bash
-GG_RUNTIME_API_KEY=local-demo \
-uv run --no-editable gg-task submit \
-  --prompt "Say hello" \
-  --idempotency-key hello-1
-```
+`make run` starts the sandbox agent server locally on port 8000.
+`make docker-build` builds its image from `sandboxes/Dockerfile`.
 
 ## Docs
 
 - [Architecture](docs/architecture.md)
-- [Task web UI](web/README.md)
-- [Plan](docs/tasks/overview.md)
+- [Component layout decision](docs/adr/0004-component-layout.md)
+- [Task web UI](frontend/README.md)
 - [Task tracker](docs/tasks/README.md)
-- [Supabase foundation](docs/supabase-foundation.md)
+- [Modal sandboxes](docs/modal-sandboxes.md)

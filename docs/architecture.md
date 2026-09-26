@@ -105,17 +105,22 @@ O fluxo admite tarefas **gerais**, com workspace vazio, e tarefas de **repositó
 
 ## Building blocks e responsabilidades
 
+No repositório, `backend/` contém `gg.runtime`; `sandboxes/` contém
+`gg.server` e a execução Pi; `frontend/` contém o cliente React. O
+`packages/gg-sdk/` contém contratos e o cliente Python.
+
+
 | Bloco | Módulos principais | Responsabilidade |
 |---|---|---|
-| **Web UI** | [`web/src/App.tsx`](../web/src/App.tsx), [`web/src/api.ts`](../web/src/api.ts) | Cria e lista tarefas; consulta eventos, resultado e PR. Usa polling porque WebSocket no navegador não envia o header de autenticação exigido. O composer de follow-up ainda está desabilitado. |
+| **Web UI** | [`frontend/src/App.tsx`](../frontend/src/App.tsx), [`frontend/src/api.ts`](../frontend/src/api.ts) | Cria e lista tarefas; consulta eventos, resultado e PR. Usa polling porque WebSocket no navegador não envia o header de autenticação exigido. O composer de follow-up ainda está desabilitado. |
 | **SDK e CLI** | [`gg/sdk/task_client.py`](../packages/gg-sdk/gg/sdk/task_client.py), [`gg/sdk/cli/`](../packages/gg-sdk/gg/sdk/cli/) | Cliente tipado da Task API: submit, leitura, eventos, mensagem, cancelamento e retry. A CLI é outra entrada para o mesmo contrato. |
 | **Modelos compartilhados** | [`gg/sdk/tasks.py`](../packages/gg-sdk/gg/sdk/tasks.py), [`gg/sdk/task_execution.py`](../packages/gg-sdk/gg/sdk/task_execution.py), [`gg/sdk/domain.py`](../packages/gg-sdk/gg/sdk/domain.py) | Contratos Pydantic imutáveis para tarefas, execução, conversa e eventos. `gg.sdk` não importa `gg.server`. |
-| **Task API e serviço** | [`gg/runtime/app.py`](../packages/gg-server/gg/runtime/app.py), [`task_routes.py`](../packages/gg-server/gg/runtime/task_routes.py), [`task_service.py`](../packages/gg-server/gg/runtime/task_service.py) | Autentica, valida, admite com idempotência e expõe estado, resultado, eventos, mensagem, cancelamento e retry. |
-| **Ledger durável** | [`gg/runtime/ledger.py`](../packages/gg-server/gg/runtime/ledger.py), [`storage.py`](../packages/gg-server/gg/runtime/storage.py) | SQLite mantém fila FIFO, reservas, identidade do sandbox, recibos, cópias de eventos, manifesto, publicação e limites de retenção. |
-| **Scheduler e infraestrutura** | [`gg/runtime/scheduler.py`](../packages/gg-server/gg/runtime/scheduler.py), [`modal_sandbox.py`](../packages/gg-server/gg/runtime/modal_sandbox.py) | Reserva capacidade, cria/reativa/encerra sandboxes e reconcilia estados ambíguos após reinício. O lock limita o dispatch a um processo no host. |
-| **Supervisão e publicação** | [`gg/runtime/task_supervision/manager.py`](../packages/gg-server/gg/runtime/task_supervision/manager.py), [`publication.py`](../packages/gg-server/gg/runtime/publication.py) | Inicia e acompanha a execução remota, copia evidências, conclui a tarefa e publica draft PR com journal e reconciliação de efeitos remotos. |
-| **Servidor no sandbox** | [`gg/server/app.py`](../packages/gg-server/gg/server/app.py), [`task_supervisor/service.py`](../packages/gg-server/gg/server/task_supervisor/service.py), [`conversation_service.py`](../packages/gg-server/gg/server/conversation_service.py) | Recebe comandos do control plane, prepara repo/workspace, executa a conversa e escreve eventos e manifesto locais. |
-| **Agente** | [`gg/sdk/pi_agent.py`](../packages/gg-sdk/gg/sdk/pi_agent.py), [`local_conversation.py`](../packages/gg-sdk/gg/sdk/local_conversation.py), [`event_log.py`](../packages/gg-sdk/gg/sdk/event_log.py) | Executa o Pi como subprocesso RPC, comunica-se com o modelo, persiste eventos e recebe steering/cancelamento durante a execução. |
+| **Task API e serviço** | [`gg/runtime/app.py`](../backend/gg/runtime/app.py), [`task_routes.py`](../backend/gg/runtime/task_routes.py), [`task_service.py`](../backend/gg/runtime/task_service.py) | Autentica, valida, admite com idempotência e expõe estado, resultado, eventos, mensagem, cancelamento e retry. |
+| **Ledger durável** | [`gg/runtime/ledger.py`](../backend/gg/runtime/ledger.py), [`storage.py`](../backend/gg/runtime/storage.py) | SQLite mantém fila FIFO, reservas, identidade do sandbox, recibos, cópias de eventos, manifesto, publicação e limites de retenção. |
+| **Scheduler e infraestrutura** | [`gg/runtime/scheduler.py`](../backend/gg/runtime/scheduler.py), [`modal_sandbox.py`](../backend/gg/runtime/modal_sandbox.py) | Reserva capacidade, cria/reativa/encerra sandboxes e reconcilia estados ambíguos após reinício. O lock limita o dispatch a um processo no host. |
+| **Supervisão e publicação** | [`gg/runtime/task_supervision/manager.py`](../backend/gg/runtime/task_supervision/manager.py), [`publication.py`](../backend/gg/runtime/publication.py) | Inicia e acompanha a execução remota, copia evidências, conclui a tarefa e publica draft PR com journal e reconciliação de efeitos remotos. |
+| **Servidor no sandbox** | [`gg/server/app.py`](../sandboxes/gg/server/app.py), [`task_supervisor/service.py`](../sandboxes/gg/server/task_supervisor/service.py), [`conversation_service.py`](../sandboxes/gg/server/conversation_service.py) | Recebe comandos do control plane, prepara repo/workspace, executa a conversa e escreve eventos e manifesto locais. |
+| **Agente** | [`gg/server/agent/pi_agent.py`](../sandboxes/gg/server/agent/pi_agent.py), [`local_conversation.py`](../sandboxes/gg/server/agent/local_conversation.py), [`event_log.py`](../sandboxes/gg/server/agent/event_log.py) | Executa o Pi como subprocesso RPC, comunica-se com o modelo, persiste eventos e recebe steering/cancelamento durante a execução. |
 
 ## Estado, segurança e recuperação
 

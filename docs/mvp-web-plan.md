@@ -42,16 +42,16 @@ Complementos documentados: retomada de workspace, compartilhamento, conjuntos de
 
 | Área | Evidência atual | Lacuna |
 |---|---|---|
-| Frontend | [App.tsx](../web/src/App.tsx), React/Vite/TypeScript; criar/listar tarefa, eventos, resultados e link da PR | Login, onboarding, configurações pessoais, ações e navegação completas |
-| Mobile | [styles.css](../web/src/styles.css) tem breakpoints | A lista de tarefas é escondida abaixo de 650px sem navegação substituta; falta QA de uso real |
-| Autenticação | [runtime/app.py](../packages/gg-server/gg/runtime/app.py) usa chave global; UI salva essa chave em localStorage | Sessão por usuário; a chave administrativa não pode ser a credencial do navegador |
-| Ownership | [tasks.py](../packages/gg-sdk/gg/sdk/tasks.py) e [task_service.py](../packages/gg-server/gg/runtime/task_service.py) não recebem identidade de usuário | Escopo em tarefas, eventos, resultados, mensagens, cancelamento, retry e streams; idempotência por usuário |
-| OpenRouter | [config.py](../packages/gg-server/gg/runtime/config.py) e [modal_sandbox.py](../packages/gg-server/gg/runtime/modal_sandbox.py) usam chave do processo | Cofre por usuário e resolução da chave no dispatch, sem fallback silencioso para a chave global |
-| Modelo | [task_supervisor/service.py](../packages/gg-server/gg/server/task_supervisor/service.py) instancia PiAgentConfig padrão | Transportar e persistir o modelo selecionado em toda a execução |
+| Frontend | [App.tsx](../frontend/src/App.tsx), React/Vite/TypeScript; criar/listar tarefa, eventos, resultados e link da PR | Login, onboarding, configurações pessoais, ações e navegação completas |
+| Mobile | [styles.css](../frontend/src/styles.css) tem breakpoints | A lista de tarefas é escondida abaixo de 650px sem navegação substituta; falta QA de uso real |
+| Autenticação | [runtime/app.py](../backend/gg/runtime/app.py) usa chave global; UI salva essa chave em localStorage | Sessão por usuário; a chave administrativa não pode ser a credencial do navegador |
+| Ownership | [tasks.py](../packages/gg-sdk/gg/sdk/tasks.py) e [task_service.py](../backend/gg/runtime/task_service.py) não recebem identidade de usuário | Escopo em tarefas, eventos, resultados, mensagens, cancelamento, retry e streams; idempotência por usuário |
+| OpenRouter | [config.py](../backend/gg/runtime/config.py) e [modal_sandbox.py](../backend/gg/runtime/modal_sandbox.py) usam chave do processo | Cofre por usuário e resolução da chave no dispatch, sem fallback silencioso para a chave global |
+| Modelo | [task_supervisor/service.py](../sandboxes/gg/server/task_supervisor/service.py) instancia PiAgentConfig padrão | Transportar e persistir o modelo selecionado em toda a execução |
 | GitHub | Token global para clone/publicação | Conectar identidade GitHub, instalação autorizada e repositórios de cada usuário |
-| Mensagem/cancel/retry | Rotas já existem em [task_routes.py](../packages/gg-server/gg/runtime/task_routes.py) | Cliente web e controles; o composer hoje é somente leitura |
+| Mensagem/cancel/retry | Rotas já existem em [task_routes.py](../backend/gg/runtime/task_routes.py) | Cliente web e controles; o composer hoje é somente leitura |
 | Pi e PR | O servidor remove GH_TOKEN e rejeita sua presença no ambiente do Pi | Credencial restrita da tarefa e fluxo de publicação comandado pelo Pi |
-| Reconciliação | [publication.py](../packages/gg-server/gg/runtime/publication.py) já adota uma PR publicada no sandbox | Reaproveitar identificação/recuperação sem backend criar outra PR como fallback nesse fluxo |
+| Reconciliação | [publication.py](../backend/gg/runtime/publication.py) já adota uma PR publicada no sandbox | Reaproveitar identificação/recuperação sem backend criar outra PR como fallback nesse fluxo |
 | Continuação | Retry atual repete prompt de uma tarefa terminal em nova tarefa | Novo prompt, contexto anterior e continuidade na branch/PR; retry não equivale a continuar conversa |
 | Checks | Supervisor produz check_outcome=not_run; há campos de evidência | Distinguir teste realmente executado, falha e não executado; não inferir CI verde de completed |
 | Operação | Fila, SQLite, reconciliação, isolamento Modal, retenção e backup | Limites por usuário, proteção de credenciais, montagem web/API e prova do fluxo completo |

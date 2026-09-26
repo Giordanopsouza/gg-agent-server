@@ -103,7 +103,7 @@ admission.
 From the repository root after `uv sync --no-editable`:
 
 ```console
-make -C packages/gg-server production-smoke-tests
+make -C backend production-smoke-tests
 ```
 
 The suite covers authenticated task access, readiness ownership, second-process
