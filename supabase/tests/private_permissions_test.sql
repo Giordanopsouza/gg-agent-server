@@ -1,0 +1,26 @@
+begin;
+select plan(20);
+
+select ok(to_regnamespace('app_private') is not null, 'app schema exists');
+select ok(to_regnamespace('runtime_private') is not null, 'runtime schema exists');
+select ok(to_regnamespace('vault_private') is not null, 'vault schema exists');
+select ok(to_regclass('app_private.profiles') is not null, 'profiles exists');
+select ok((select relrowsecurity from pg_class where oid = 'app_private.profiles'::regclass), 'profiles has RLS');
+select ok((select rolcanlogin and not rolbypassrls and not rolsuper from pg_roles where rolname = 'gg_runtime'), 'runtime role is a non-privileged login');
+select ok(not has_schema_privilege('anon', 'app_private', 'USAGE'), 'anon cannot use app schema');
+select ok(not has_schema_privilege('authenticated', 'app_private', 'USAGE'), 'authenticated cannot use app schema');
+select ok(not has_schema_privilege('service_role', 'app_private', 'USAGE'), 'service role cannot use app schema');
+select ok(not has_schema_privilege('anon', 'runtime_private', 'USAGE'), 'anon cannot use runtime schema');
+select ok(not has_schema_privilege('authenticated', 'vault_private', 'USAGE'), 'authenticated cannot use vault schema');
+select ok(not has_table_privilege('anon', 'app_private.profiles', 'SELECT'), 'anon cannot read profiles');
+select ok(not has_table_privilege('authenticated', 'app_private.profiles', 'SELECT'), 'authenticated cannot read profiles');
+select ok(not has_table_privilege('service_role', 'app_private.profiles', 'SELECT'), 'service role cannot read profiles');
+select ok(has_schema_privilege('gg_runtime', 'app_private', 'USAGE'), 'runtime can use app schema');
+select ok(has_table_privilege('gg_runtime', 'app_private.profiles', 'SELECT,INSERT,UPDATE'), 'runtime can manage profiles');
+select ok(not has_table_privilege('gg_runtime', 'app_private.profiles', 'DELETE'), 'runtime cannot delete profiles');
+select ok(not has_table_privilege('gg_runtime', 'auth.users', 'SELECT'), 'runtime cannot read Auth users');
+select ok(not has_schema_privilege('gg_runtime', 'runtime_private', 'CREATE'), 'runtime cannot migrate schema');
+select ok(not has_schema_privilege('gg_runtime', 'vault_private', 'USAGE'), 'runtime has no vault access yet');
+
+select * from finish();
+rollback;

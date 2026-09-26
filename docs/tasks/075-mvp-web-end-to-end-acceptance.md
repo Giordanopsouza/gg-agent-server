@@ -22,7 +22,7 @@ Consolidar a entrega com demo opt-in real e evidência rastreável de todos os c
 - [ ] Registrar URL da PR, ids dos runs, modelo, ambiente, data e confirmação de limpeza dos sandboxes; recursos pagos não rodam na suíte padrão.
 - [ ] Executar QA na ordem do AGENTS.md, testes/build web e production-smoke-tests; manter checklist do plano atualizado e não declarar entrega pronta com validação real pendente.
 
-- [ ] Executar a matriz de [testes para produção](../mvp-production-tests.md): CI rápido, integração Supabase/Postgres, browser em staging e smoke pós-deploy. Falha crítica bloqueia promoção; pendência live não vira aceite por mock.
+- [ ] Executar a matriz de [testes para produção](../mvp-production-tests.md): CI rápido, integração Supabase/Postgres local, browser na URL HTTPS publicada com contas autorizadas e smoke pós-deploy. Falha crítica bloqueia abertura do produto; pendência live não vira aceite por mock.
 - [ ] Provar persistência após redeploy sem volume SQLite, isolamento entre duas contas, migração/restore ensaiados e falhas de Auth/banco com comportamento seguro. Registrar build/commit, versão de schema, URL e resultados sanitizados.
 - [ ] Verificar o conteúdo da PR e os testes executados pelo Pi contra o prompt. Status succeeded, HTTP 200 e existência de uma PR isoladamente não comprovam atendimento.
 
