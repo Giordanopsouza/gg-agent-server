@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import httpx
+import psycopg
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -39,7 +40,20 @@ def auth_app(tmp_path):
         "refresh": 0,
         "banned": False,
         "logout_first_401": False,
+        "revoked": False,
+        "session_store_error": False,
     }
+
+    class FakeSessions:
+        def active(self, user_id: str, session_id: str) -> bool:
+            if state["session_store_error"]:
+                raise psycopg.OperationalError("database unavailable")
+            assert user_id == USER_ID
+            assert UUID(session_id)
+            return not state["revoked"]
+
+        def ensure_profile(self, user_id: str, session_id: str) -> bool:
+            return self.active(user_id, session_id)
 
     def access_token() -> str:
         now = int(time.time())
@@ -95,7 +109,7 @@ def auth_app(tmp_path):
     provider = SupabaseAuth(settings, transport=httpx.MockTransport(provider_response))
     state["provider"] = provider
     state["access_token"] = access_token
-    app = create_app(settings, web_auth=provider)
+    app = create_app(settings, web_auth=provider, web_sessions=FakeSessions())
     with TestClient(app, base_url="https://app.example") as client:
         yield client, settings, state
 
@@ -201,6 +215,23 @@ def test_invalid_cookie_does_not_authorize(auth_app):
     client, _, _ = auth_app
     client.cookies.set("gg_session", "forged")
     assert client.get("/auth/session").status_code == 401
+
+
+def test_revoked_session_rejects_unexpired_access_token(auth_app):
+    client, _, state = auth_app
+    assert _callback(client, _start(client)).status_code == 303
+    assert client.get("/auth/session").status_code == 200
+    state["revoked"] = True
+    assert client.get("/auth/session").status_code == 401
+
+
+def test_revoked_callback_and_unavailable_session_store(auth_app):
+    client, _, state = auth_app
+    state["revoked"] = True
+    assert _callback(client, _start(client)).status_code == 400
+    state["revoked"] = False
+    state["session_store_error"] = True
+    assert _callback(client, _start(client)).status_code == 503
 
 
 def test_expired_access_refreshes_once_for_stale_parallel_cookies(auth_app):

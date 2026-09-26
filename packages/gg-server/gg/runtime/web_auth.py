@@ -13,12 +13,14 @@ from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 import httpx
+import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from joserfc import jwk, jwt
 
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.web_sessions import PostgresWebSessions
 
 
 SESSION_COOKIE = "gg_session"
@@ -47,13 +49,16 @@ def _require_origin(request: Request, settings: RuntimeSettings) -> None:
         raise HTTPException(status_code=403, detail="invalid origin")
 
 
-def _configured(settings: RuntimeSettings) -> None:
+def _configured(
+    settings: RuntimeSettings, sessions: PostgresWebSessions | None
+) -> None:
     if not all(
         (
             settings.supabase_url,
             settings.supabase_publishable_key,
             settings.web_cookie_key,
             settings.web_origin,
+            sessions,
         )
     ):
         raise HTTPException(status_code=503, detail="web login is not configured")
@@ -165,7 +170,7 @@ class SupabaseAuth:
             ):
                 raise ValueError("invalid access token claims")
             subject = str(UUID(claims["sub"]))
-            UUID(claims["session_id"])
+            session_id = str(UUID(claims["session_id"]))
             user_response = await client.get(
                 "/auth/v1/user", headers={"Authorization": f"Bearer {access_token}"}
             )
@@ -173,7 +178,11 @@ class SupabaseAuth:
             user = user_response.json()
             if user.get("id") != subject or user.get("banned_until"):
                 raise ValueError("inactive user")
-            return {"id": subject, "email": user.get("email")}
+            return {
+                "id": subject,
+                "email": user.get("email"),
+                "session_id": session_id,
+            }
 
     async def sign_out(self, access_token: str) -> None:
         async with self._client() as client:
@@ -185,12 +194,16 @@ class SupabaseAuth:
             response.raise_for_status()
 
 
-def web_auth_router(settings: RuntimeSettings, provider: SupabaseAuth) -> APIRouter:
+def web_auth_router(
+    settings: RuntimeSettings,
+    provider: SupabaseAuth,
+    sessions: PostgresWebSessions | None,
+) -> APIRouter:
     router = APIRouter(prefix="/auth")
 
     @router.get("/google/start")
     def start(return_to: str = "/") -> RedirectResponse:
-        _configured(settings)
+        _configured(settings, sessions)
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
         flow = provider.seal(
             {
@@ -216,7 +229,7 @@ def web_auth_router(settings: RuntimeSettings, provider: SupabaseAuth) -> APIRou
 
     @router.get("/google/callback")
     async def callback(request: Request) -> RedirectResponse:
-        _configured(settings)
+        _configured(settings, sessions)
         flow = provider.open(request.cookies.get(FLOW_COOKIE, ""), ttl=FLOW_SECONDS)
         state = request.query_params.get("state", "")
         if (
@@ -233,13 +246,24 @@ def web_auth_router(settings: RuntimeSettings, provider: SupabaseAuth) -> APIRou
                 raise HTTPException(status_code=400, detail="invalid login callback")
             try:
                 tokens = await provider.exchange(code, flow["verifier"])
-                await provider.verified_user(tokens["access_token"])
+                user = await provider.verified_user(tokens["access_token"])
                 if not tokens.get("refresh_token"):
                     raise ValueError("missing refresh token")
             except Exception:
                 raise HTTPException(
                     status_code=400, detail="invalid login callback"
                 ) from None
+            assert sessions is not None
+            try:
+                profile_ready = await asyncio.to_thread(
+                    sessions.ensure_profile, user["id"], user["session_id"]
+                )
+            except psycopg.Error:
+                raise HTTPException(
+                    status_code=503, detail="session store unavailable"
+                ) from None
+            if not profile_ready:
+                raise HTTPException(status_code=400, detail="inactive login session")
             response = RedirectResponse(flow["return_to"], status_code=303)
             response.set_cookie(
                 SESSION_COOKIE,
@@ -262,7 +286,7 @@ def web_auth_router(settings: RuntimeSettings, provider: SupabaseAuth) -> APIRou
 
     @router.get("/session")
     async def session(request: Request, response: Response) -> dict[str, Any]:
-        _configured(settings)
+        _configured(settings, sessions)
         response.headers["Cache-Control"] = "no-store"
         payload = provider.open(
             request.cookies.get(SESSION_COOKIE, ""), ttl=SESSION_SECONDS
@@ -293,11 +317,22 @@ def web_auth_router(settings: RuntimeSettings, provider: SupabaseAuth) -> APIRou
                 raise HTTPException(
                     status_code=401, detail="session expired or absent"
                 ) from None
-        return {"user": user}
+        assert sessions is not None
+        try:
+            active = await asyncio.to_thread(
+                sessions.active, user["id"], user["session_id"]
+            )
+        except psycopg.Error:
+            raise HTTPException(
+                status_code=503, detail="session store unavailable"
+            ) from None
+        if not active:
+            raise HTTPException(status_code=401, detail="session expired or absent")
+        return {"user": {"id": user["id"], "email": user["email"]}}
 
     @router.post("/logout")
     async def logout(request: Request, response: Response) -> dict[str, bool]:
-        _configured(settings)
+        _configured(settings, sessions)
         _require_origin(request, settings)
         response.headers["Cache-Control"] = "no-store"
         payload = provider.open(
