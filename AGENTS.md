@@ -46,10 +46,9 @@ Use `uv sync --no-editable`: editable workspace installs are unreliable here on 
 ## Infrastructure & external services
 
 - **Git/GitHub** — use `git` locally and `gh` for pull requests, issues, Actions, and demo verification.
-- **Persistence** — sandbox conversation state is stored as JSON files inside each execution environment. The Modal background-task control plane (`gg.runtime`) stores durable queueing, reservations, evidence copies, and publication records in local SQLite on the host (`GG_TASK_DB_PATH`). Do not treat the learning-server JSON layout as the production task store.
+- **Persistence** — sandbox conversation state is stored as JSON files inside each execution environment. The Modal background-task control plane (`gg.runtime`) stores durable queueing, reservations, evidence copies, and publication records in Supabase Postgres (`runtime_private`). Do not treat sandbox JSON as the product task store.
 
 # Testing E2E
 
 - **Local server:** run `make run`, then `curl http://127.0.0.1:8000/health`; success is HTTP 200 reporting status `ok`. `GG_SESSION_API_KEYS` is optional on loopback and required before exposing a non-loopback bind.
 - **Platform feature:** after implementing each feature, use [`.agents/skills/local-stack/SKILL.md`](.agents/skills/local-stack/SKILL.md) with `frontend/` in place of its old `web/` path to run the frontend and `gg.runtime` together and exercise a relevant task flow before shipping. Verify events, the result, and whether the agent actually fulfilled the prompt; `queued` and a `succeeded` label alone do not prove that.
-

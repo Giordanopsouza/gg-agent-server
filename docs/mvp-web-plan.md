@@ -105,7 +105,7 @@ flowchart LR
 
 ### Persistência e corte de produção
 
-Migrações versionadas e testadas do zero e sobre a versão anterior. A 078 importa SQLite preservando IDs, relações, evidências e reservas, com pausa de escrita e reconciliação; não atribuir registros administrativos antigos a contas novas. Produção exige Postgres, sem fallback local. A 074 ensaia restore isolado e rollback compatível; reabrir um SQLite antigo depois de novas escritas não é recuperação válida.
+Migrações versionadas e testadas do zero e sobre a versão anterior. A 078 substitui SQLite com pausa de escrita e reconciliação; por decisão posterior do usuário, não importa registros antigos, que ficam em arquivo offline. Produção exige Postgres, sem fallback local. A 074 ensaia restore isolado e rollback compatível; reabrir um SQLite antigo depois de novas escritas não é recuperação válida.
 
 ### OpenRouter pessoal
 

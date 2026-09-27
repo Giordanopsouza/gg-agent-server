@@ -11,7 +11,7 @@ Começar pela **077** (fundação Supabase); depois **061** (Auth) e **078** (ru
 | Task | Depende de | Prova principal |
 |---|---|---|
 | [077 — Fundação Supabase](077-supabase-foundation.md) | — | Auth/Postgres local, migrações e permissões reais |
-| [078 — Runtime Postgres](078-runtime-postgres-migration.md) | [077](077-supabase-foundation.md) | Importação, concorrência e recuperação sem SQLite em produção |
+| [078 — Runtime Postgres](078-runtime-postgres-migration.md) | [077](077-supabase-foundation.md) | Concorrência e recuperação sem SQLite em produção; dados antigos ficam offline |
 | [061 — Login Google via Supabase Auth](061-google-login-and-sessions.md) | [077](077-supabase-foundation.md) | Login/logout e rejeição de sessão/callback inválido |
 | [062 — Ownership, migração e idempotência por usuário](062-task-ownership-and-idempotency.md) | [061](061-google-login-and-sessions.md), [078](078-runtime-postgres-migration.md) | Duas contas isoladas e migração de dados antigos |
 | [063 — Cofre pessoal OpenRouter](063-personal-openrouter-credentials.md) | [061](061-google-login-and-sessions.md) | API de cofre sem segredo em respostas ou banco em texto simples |

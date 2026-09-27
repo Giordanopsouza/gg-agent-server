@@ -30,7 +30,10 @@ class FakeModalLifecycle:
 
 @pytest.mark.anyio
 async def test_control_plane_rejects_missing_or_wrong_api_key() -> None:
-    app = create_app(RuntimeSettings(api_key="control-secret", task_db_path=":memory:"))
+    app = create_app(
+        RuntimeSettings(api_key="control-secret", task_db_path=":memory:"),
+        task_ledger=TaskLedger(db_path=":memory:"),
+    )
     transport = ASGITransport(app=app)
 
     async with httpx.AsyncClient(
@@ -50,7 +53,8 @@ async def test_configured_web_origin_can_preflight_api_key() -> None:
             api_key="control-secret",
             task_db_path=":memory:",
             cors_origins=("http://localhost:5173",),
-        )
+        ),
+        task_ledger=TaskLedger(db_path=":memory:"),
     )
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(

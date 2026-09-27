@@ -4,19 +4,20 @@ This document describes the always-on control plane for Modal background tasks o
 one persistent-disk host. It supersedes older guidance that treated the server as
 JSON-only with no database. Conversation state inside sandboxes remains JSON
 files; durable queueing, reservations, evidence copies, and publication records
-live in local SQLite (`GG_TASK_DB_PATH`, default `gg-tasks.sqlite`).
+live in Supabase Postgres (`runtime_private`). See the
+[Postgres cutover and recovery runbook](runtime-postgres-cutover.md).
 
 ## Service layout
 
 Run exactly **one** worker process per deployment. The runtime holds an exclusive
-advisory lock (`GG_DISPATCH_LOCK_PATH` or `<db>.dispatch.lock`). A second local
+advisory lock (`GG_DISPATCH_LOCK_PATH` or a temporary runtime lock). A second local
 process fails startup rather than sharing dispatch ownership.
 
 Recommended layout:
 
 | Path | Mode | Purpose |
 |---|---|---|
-| `/var/lib/gg/tasks.sqlite` | `0600` | Durable control-plane ledger (WAL) |
+| Supabase Postgres | Private role | Durable control-plane ledger |
 | `/var/lib/gg/evidence/` | `0700` | Optional filesystem evidence (`GG_TASK_EVIDENCE_DIR`) |
 | `/etc/gg/runtime.env` | `0600` | Secrets and non-secret configuration |
 
@@ -24,8 +25,7 @@ Terminate TLS at the reverse proxy; bind the runtime to loopback unless API keys
 are enforced on all interfaces.
 
 Graceful shutdown (`SIGTERM`) stops admission, detaches from surviving Modal
-sandboxes, and closes SQLite. Do **not** copy `tasks.sqlite-wal` alone during
-backup; use the online backup API (below).
+sandboxes, and closes the Postgres connection.
 
 ## Authentication and secrets
 
@@ -60,22 +60,17 @@ When limits are exceeded, new admissions return HTTP 503 before unsafe writes.
 Active or unresolved reservation rows are never evicted. Payload expiry removes
 bulky evidence but retains compact idempotency and remote-side-effect tombstones
 until the tombstone retention window ends.
+The free-disk floor applies only when filesystem evidence is configured; the
+durable ledger is stored in Postgres.
 
 ## Backup and restore
 
-Create backups while the service is running:
-
-```console
-uv run --no-editable python -m gg.runtime.backup_cli backup \
-  --db /var/lib/gg/tasks.sqlite \
-  --destination /var/backups/gg \
-  --evidence-dir /var/lib/gg/evidence
-```
-
-Restore by copying the backup bundle to the data directory, setting
-`GG_TASK_DISPATCH_ENABLED=false`, starting the runtime, and reconciling Modal
-ownership via `GET /tasks/dispatch/status` until provider conditions clear. Only
-then re-enable dispatch.
+The current Supabase Free project requires periodic logical exports with
+`supabase db dump` or `pg_dump`, retained encrypted off site. Rehearse a restore
+into a separate database and compare records before production use.
+Back up filesystem evidence separately. During restore, keep admission and
+dispatch disabled and reconcile Modal and GitHub side effects before reopening.
+The [cutover runbook](runtime-postgres-cutover.md) gives the sequence.
 
 ## GitHub bot, Modal, and threat model
 
@@ -106,5 +101,6 @@ From the repository root after `uv sync --no-editable`:
 make -C backend production-smoke-tests
 ```
 
-The suite covers authenticated task access, readiness ownership, second-process
-lock rejection, storage pressure, retention, and online backup restore.
+The suite covers authenticated task access, readiness ownership, storage
+pressure, and retention. Run the Postgres ledger integration test against local
+Supabase before deployment.

@@ -7,8 +7,8 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from gg.runtime import RuntimeSettings, TaskLedger, create_app
-from gg.runtime.backup import backup_sqlite_online
+from gg.runtime import RuntimeSettings, create_app
+from gg.runtime.ledger import TaskLedger
 from gg.runtime.scheduler import DeploymentLock, DispatchLockError
 from gg.runtime.storage import StorageLimits, admission_pressure, run_retention_pass
 from gg.runtime.task_service import StoragePressureError, TaskService
@@ -33,7 +33,10 @@ def _settings(tmp_path: Path, **overrides) -> RuntimeSettings:
 
 @pytest.mark.anyio
 async def test_runtime_ready_reports_scheduler_ownership(tmp_path: Path) -> None:
-    app = create_app(_settings(tmp_path))
+    app = create_app(
+        _settings(tmp_path),
+        task_ledger=TaskLedger(db_path=str(tmp_path / "tasks.sqlite")),
+    )
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://runtime"
@@ -50,7 +53,10 @@ async def test_runtime_ready_reports_scheduler_ownership(tmp_path: Path) -> None
 
 @pytest.mark.anyio
 async def test_health_is_public_and_tasks_require_auth(tmp_path: Path) -> None:
-    app = create_app(_settings(tmp_path))
+    app = create_app(
+        _settings(tmp_path),
+        task_ledger=TaskLedger(db_path=str(tmp_path / "tasks.sqlite")),
+    )
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://runtime"
@@ -139,22 +145,6 @@ def test_retention_expires_terminal_payload_but_keeps_idempotency(
         assert replay.payload_expired is True
 
 
-def test_online_backup_creates_consistent_sqlite_copy(tmp_path: Path) -> None:
-    source = tmp_path / "tasks.sqlite"
-    backup_path = tmp_path / "backup" / "tasks.sqlite"
-    with TaskLedger(db_path=str(source)) as ledger:
-        ledger.submit(
-            idempotency_key="backup",
-            repository="owner/allowed",
-            prompt="x",
-            base_ref=None,
-            retry_of=None,
-        )
-        backup_sqlite_online(ledger=ledger, destination=backup_path)
-    with TaskLedger(db_path=str(backup_path)) as restored:
-        assert len(restored.list()) == 1
-
-
 def test_second_process_cannot_take_dispatch_lock(tmp_path: Path) -> None:
     lock_path = str(tmp_path / "dispatch.lock")
     first = DeploymentLock(lock_path)
@@ -176,9 +166,7 @@ def test_admission_pressure_uses_configured_free_disk_floor(tmp_path: Path) -> N
             max_artifact_bytes=1024,
             max_total_evidence_bytes=10_000_000,
             min_free_disk_bytes=10**18,
-            evidence_dir=None,
+            evidence_dir=tmp_path,
         )
-        pressure = admission_pressure(
-            ledger, limits, db_path=str(tmp_path / "tasks.sqlite")
-        )
+        pressure = admission_pressure(ledger, limits)
         assert pressure.blocked is True

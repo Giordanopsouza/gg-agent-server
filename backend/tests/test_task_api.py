@@ -7,7 +7,8 @@ import pytest
 from httpx import ASGITransport
 from starlette.testclient import TestClient, WebSocketDenialResponse
 
-from gg.runtime import RuntimeSettings, TaskLedger, create_app
+from gg.runtime import RuntimeSettings, create_app
+from gg.runtime.ledger import TaskLedger
 
 
 _AUTH = {"X-API-Key": "control-secret"}

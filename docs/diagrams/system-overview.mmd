@@ -9,7 +9,7 @@ flowchart LR
     SandboxRun[Sandbox task supervisor]
   end
   subgraph Runtime[gg.runtime]
-    Queue[Task service + SQLite ledger]
+    Queue[Task service + Supabase Postgres ledger]
     Dispatch[Scheduler + Modal lifecycle]
     Finish[Supervision + evidence + draft PR]
   end

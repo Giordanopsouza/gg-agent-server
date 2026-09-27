@@ -6,7 +6,8 @@ import sqlite3
 
 from starlette.testclient import TestClient
 
-from gg.runtime import RuntimeSettings, TaskLedger, create_app
+from gg.runtime import RuntimeSettings, create_app
+from gg.runtime.ledger import TaskLedger
 from gg.sdk.task_client import TaskClient
 from gg.sdk.task_settings import TaskClientSettings
 from gg.sdk.tasks import CreateTaskRequest, TaskState
@@ -15,7 +16,6 @@ from gg.sdk.tasks import CreateTaskRequest, TaskState
 def _settings(tmp_path) -> RuntimeSettings:
     return RuntimeSettings(
         api_key="control-secret",
-        task_db_path=str(tmp_path / "tasks.sqlite"),
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
 
@@ -26,7 +26,9 @@ def _client_settings() -> TaskClientSettings:
 
 def test_client_workflow_submit_list_show_cancel(tmp_path) -> None:
     settings = _settings(tmp_path)
-    app = create_app(settings, task_ledger=TaskLedger(db_path=settings.task_db_path))
+    app = create_app(
+        settings, task_ledger=TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
+    )
 
     with TestClient(app, headers={"X-API-Key": "control-secret"}) as http:
         with TaskClient(_client_settings(), client=http) as client:
@@ -61,7 +63,7 @@ def test_follow_up_submit_uses_prior_branch_without_mutating_original(
     tmp_path,
 ) -> None:
     settings = _settings(tmp_path)
-    ledger = TaskLedger(db_path=settings.task_db_path)
+    ledger = TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
     ledger.open()
     app = create_app(settings, task_ledger=ledger)
     prior_branch = "gg/task/task-original"
@@ -76,7 +78,7 @@ def test_follow_up_submit_uses_prior_branch_without_mutating_original(
                     idempotency_key="k-original",
                 )
             )
-            with sqlite3.connect(settings.task_db_path) as conn:
+            with sqlite3.connect(tmp_path / "tasks.sqlite") as conn:
                 conn.execute(
                     "UPDATE tasks SET state = ? WHERE id = ?",
                     (TaskState.COMPLETED.value, original.record.id),

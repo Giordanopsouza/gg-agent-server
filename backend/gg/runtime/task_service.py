@@ -99,11 +99,7 @@ class TaskService:
     def submit(self, request: CreateTaskRequest) -> tuple[TaskRecord, bool]:
         self.validate(request)
         limits = StorageLimits.from_settings(self._settings)
-        pressure = admission_pressure(
-            self._ledger,
-            limits,
-            db_path=self._settings.task_db_path,
-        )
+        pressure = admission_pressure(self._ledger, limits)
         if pressure.blocked:
             raise StoragePressureError(pressure.reason or "storage pressure")
         record, created = self._ledger.submit(

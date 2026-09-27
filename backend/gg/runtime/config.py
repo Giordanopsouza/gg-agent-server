@@ -18,7 +18,6 @@ from pydantic import (
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8001
-DEFAULT_TASK_DB_PATH = "gg-tasks.sqlite"
 DEFAULT_MAX_PROMPT_CHARS = 16_000
 DEFAULT_MAX_BASE_REF_CHARS = 200
 DEFAULT_MAX_IDEMPOTENCY_KEY_CHARS = 256
@@ -56,7 +55,6 @@ class RuntimeSettings(BaseModel):
     cors_origins: tuple[str, ...] = ()
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
-    task_db_path: str = DEFAULT_TASK_DB_PATH
     github_clone_token: str | None = None
     openrouter_api_key: str | None = None
     max_prompt_chars: int = Field(default=DEFAULT_MAX_PROMPT_CHARS, ge=1)
@@ -139,14 +137,6 @@ class RuntimeSettings(BaseModel):
             if urlsplit(self.web_origin).hostname not in ("localhost", "127.0.0.1"):
                 raise ValueError("insecure web cookies are allowed only on loopback")
         return self
-
-    @field_validator("task_db_path")
-    @classmethod
-    # The SQLite path must be usable; ":memory:" is allowed for tests.
-    def validate_task_db_path(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("task_db_path must not be empty")
-        return value
 
     @field_validator("modal_app_name", "modal_deployment", "modal_image_name")
     @classmethod
@@ -273,7 +263,6 @@ def load_settings() -> RuntimeSettings:
         ),
         host=os.getenv("GG_RUNTIME_HOST", DEFAULT_HOST),
         port=_parse_port(os.getenv("GG_RUNTIME_PORT")),
-        task_db_path=os.getenv("GG_TASK_DB_PATH", DEFAULT_TASK_DB_PATH),
         github_clone_token=_optional_secret(os.getenv("GG_GITHUB_CLONE_TOKEN")),
         openrouter_api_key=_optional_secret(os.getenv("OPENROUTER_API_KEY")),
         max_prompt_chars=_parse_int(

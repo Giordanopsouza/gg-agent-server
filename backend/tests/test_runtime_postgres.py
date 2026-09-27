@@ -2,6 +2,8 @@
 
 import pytest
 
+from gg.runtime.app import create_app
+from gg.runtime.config import RuntimeSettings
 from gg.runtime.postgres import RuntimePostgres
 
 
@@ -78,3 +80,11 @@ def test_hosted_pool_uses_bundled_ca() -> None:
     with config.pool() as pool:
         assert pool.kwargs["sslrootcert"].endswith("supabase-prod-ca-2021.crt")
         assert pool.kwargs["prepare_threshold"] is None
+
+
+def test_runtime_refuses_missing_postgres_without_test_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GG_RUNTIME_DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="GG_RUNTIME_DATABASE_URL is required"):
+        create_app(RuntimeSettings(api_key="control-secret"))

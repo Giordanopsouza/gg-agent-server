@@ -1,20 +1,10 @@
-"""SQLite online backup helpers for the control-plane ledger."""
+"""Filesystem evidence backup helpers."""
 
 from __future__ import annotations
 
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-
-from gg.runtime.ledger import TaskLedger
-
-
-def backup_sqlite_online(*, ledger: TaskLedger, destination: Path) -> Path:
-    """Copy the open WAL-mode database using SQLite's online backup API."""
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    ledger.online_backup(destination)
-    return destination
 
 
 def backup_evidence_tree(*, source: Path, destination: Path) -> Path:
@@ -33,4 +23,4 @@ def timestamped_backup_dir(base: Path) -> Path:
     return base / stamp
 
 
-__all__ = ["backup_evidence_tree", "backup_sqlite_online", "timestamped_backup_dir"]
+__all__ = ["backup_evidence_tree", "timestamped_backup_dir"]

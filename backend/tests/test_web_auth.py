@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.ledger import TaskLedger
 from gg.runtime.web_auth import SupabaseAuth
 
 
@@ -109,7 +110,12 @@ def auth_app(tmp_path):
     provider = SupabaseAuth(settings, transport=httpx.MockTransport(provider_response))
     state["provider"] = provider
     state["access_token"] = access_token
-    app = create_app(settings, web_auth=provider, web_sessions=FakeSessions())
+    app = create_app(
+        settings,
+        task_ledger=TaskLedger(db_path=str(tmp_path / "auth-tasks.sqlite")),
+        web_auth=provider,
+        web_sessions=FakeSessions(),
+    )
     with TestClient(app, base_url="https://app.example") as client:
         yield client, settings, state
 
