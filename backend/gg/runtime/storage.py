@@ -149,14 +149,11 @@ def free_disk_bytes(*paths: Path) -> int:
 def admission_pressure(
     ledger: TaskLedger,
     limits: StorageLimits,
-    *,
-    db_path: str,
 ) -> StoragePressure:
-    db_parent = Path(db_path).resolve().parent
-    evidence_paths = [db_parent]
-    if limits.evidence_dir is not None:
-        evidence_paths.append(limits.evidence_dir.resolve())
-    if free_disk_bytes(*evidence_paths) < limits.min_free_disk_bytes:
+    if (
+        limits.evidence_dir is not None
+        and free_disk_bytes(limits.evidence_dir.resolve()) < limits.min_free_disk_bytes
+    ):
         return StoragePressure(
             blocked=True,
             reason=(

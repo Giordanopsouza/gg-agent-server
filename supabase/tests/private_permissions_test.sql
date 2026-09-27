@@ -1,5 +1,6 @@
 begin;
-select plan(24);
+set local search_path = extensions, public;
+select plan(30);
 
 select ok(to_regnamespace('app_private') is not null, 'app schema exists');
 select ok(to_regnamespace('runtime_private') is not null, 'runtime schema exists');
@@ -25,6 +26,12 @@ select ok(has_function_privilege('gg_runtime', 'app_private.web_session_active(u
 select ok(not has_function_privilege('anon', 'app_private.web_session_active(uuid,uuid)', 'EXECUTE'), 'anon cannot check sessions');
 select ok(not has_function_privilege('authenticated', 'app_private.web_session_active(uuid,uuid)', 'EXECUTE'), 'authenticated cannot check sessions');
 select ok(not has_function_privilege('service_role', 'app_private.web_session_active(uuid,uuid)', 'EXECUTE'), 'service role cannot check sessions');
+select ok(to_regclass('runtime_private.tasks') is not null, 'runtime ledger exists');
+select ok(has_table_privilege('gg_runtime', 'runtime_private.tasks', 'SELECT,INSERT,UPDATE,DELETE'), 'runtime can manage tasks');
+select ok(not has_table_privilege('anon', 'runtime_private.tasks', 'SELECT'), 'anon cannot read tasks');
+select ok(not has_table_privilege('authenticated', 'runtime_private.tasks', 'SELECT'), 'authenticated cannot read tasks');
+select ok(not has_table_privilege('service_role', 'runtime_private.tasks', 'SELECT'), 'service role cannot read tasks');
+select ok(not has_table_privilege('gg_runtime', 'runtime_private.schema_meta', 'UPDATE'), 'runtime cannot change schema version');
 
 select * from finish();
 rollback;

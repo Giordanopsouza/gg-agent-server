@@ -57,7 +57,7 @@ Running-agent steering and cancellation use the Pi version pinned in the image.
 See [Running-agent messages and cancellation](running-agent-controls.md) for the
 receipt semantics. Offline tests cover those controls.
 
-## FIFO recovery and lifecycle demo
+## FIFO recovery
 
 The runtime takes an exclusive local deployment lock, reconciles every durable
 reservation before considering queued work, and counts unresolved creation or
@@ -66,38 +66,13 @@ to 10 and may only be lowered. `GET /tasks/dispatch/status` reports pending work
 and provider conditions to authenticated operators.
 
 Production admission provisions sandboxes, starts sandbox task execution,
-archives evidence to SQLite, runs optional draft-PR finalization, and
+archives evidence to Supabase Postgres, runs optional draft-PR finalization, and
 terminates sandboxes after confirmed cleanup. Enable it with
 `GG_TASK_DISPATCH_ENABLED=true` once Modal and agent credentials are configured.
 General tasks need no GitHub configuration. Repository tasks require
 `GG_GITHUB_CLONE_TOKEN` and an explicit `base_ref` in the create request.
 
-To exercise only reservation, provisioning, detach/reconnect, and confirmed
-termination against Modal, use the standalone demo after publishing the image:
-
-```console
-GG_RUNTIME_API_KEY=demo-only \
-  uv run --no-editable python -m gg.runtime.modal_lifecycle_demo
-```
-
-The demo uses a private temporary ledger by default, accepts no HTTP coding
-requests, and fails if its final reconciliation cannot confirm cleanup of every
-demo-owned sandbox. Set `GG_LIFECYCLE_DEMO_DB_PATH` to retain its ledger for
-diagnosis.
-
-## Repository task demo
-
-After publishing the image, configure `GG_GITHUB_CLONE_TOKEN`,
-`OPENROUTER_API_KEY`, `GG_REPOSITORY_DEMO_REPOSITORY` (owner/name), and
-`GG_REPOSITORY_DEMO_BASE_REF`, then run:
-
-```console
-GG_RUNTIME_API_KEY=demo-only \
-  uv run --no-editable python -m gg.runtime.modal_repository_task_demo
-```
-
-The demo provisions one sandbox, starts a nonblocking repository execution,
-polls for completion, and prints the local result manifest (check output and
-agent outcome). Enable production dispatch with `GG_TASK_DISPATCH_ENABLED=true`
-once repository profiles, credentials, and single-host operations from task 059
-are in place.
+Exercise the runtime through the local task stack described in
+`AGENTS.md`, with dispatch enabled only after Modal and agent credentials are
+configured. Verify the task events, manifest, and final response through the
+API or frontend before considering the flow successful.

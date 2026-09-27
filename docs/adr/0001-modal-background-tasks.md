@@ -6,7 +6,7 @@ status: accepted
 
 > The repository-only task shape, allowlist/profile gates, and mandatory check defaults below are superseded by [ADR 0002](0002-general-background-tasks.md). The requirement to preserve historical Docker demos is superseded by [ADR 0003](0003-remove-legacy-learning-surfaces.md).
 
-Evolve the learning server into a minimal internal platform for repository-and-prompt tasks that produce draft GitHub pull requests. Use one always-on control-plane process with SQLite on a local persistent disk, standard Modal sandboxes for execution, and the existing Pi agent server inside each sandbox. Start with a CLI over an authenticated HTTP/WebSocket API and a hard maximum of ten reserved sandbox slots.
+Evolve the learning server into a minimal internal platform for repository-and-prompt tasks that produce draft GitHub pull requests. Use one always-on control-plane process with SQLite on a local persistent disk, standard Modal sandboxes for execution, and the existing Pi agent server inside each sandbox. Start with a CLI over an authenticated HTTP/WebSocket API and a hard maximum of ten reserved sandbox slots. The SQLite persistence decision is superseded by [ADR 0005](0005-runtime-postgres-ledger.md).
 
 SQLite owns the durable queue, task lifecycle, capacity reservations, message receipts, event copies, and publication journal. Existing sandbox conversation persistence remains JSON files. This supersedes the original plan's JSON-only control-plane constraint and exclusions of recovery and managed infrastructure. It preserves historical Docker demos and both import boundaries: `gg.sdk` never imports `gg.server`, and `gg.runtime` reaches `gg.server` only through HTTP/WebSocket contracts.
 

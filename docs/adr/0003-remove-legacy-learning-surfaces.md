@@ -4,7 +4,7 @@ status: accepted
 
 # Remove the pre-Modal learning surfaces
 
-The shipped path is the control plane in `gg.runtime`: it admits tasks into SQLite and dispatches them to Modal sandboxes. Inside each sandbox, `gg.server` still runs Pi through the conversation service and the task supervisor. The earlier learning path is not on that path and is deleted.
+The shipped path is the control plane in `gg.runtime`: it admits tasks and dispatches them to Modal sandboxes. [ADR 0005](0005-runtime-postgres-ledger.md) replaces the earlier SQLite ledger with Supabase Postgres. Inside each sandbox, `gg.server` still runs Pi through the conversation service and the task supervisor. The earlier learning path is not on that path and is deleted.
 
 This supersedes two clauses in [ADR 0001](0001-modal-background-tasks.md): the requirement to preserve historical Docker demos, and the product default that tasks run configured repository bootstrap and check commands. Import boundaries stay as 0001 stated them. `gg.sdk` does not import `gg.server`. `gg.runtime` reaches the agent server only over HTTP.
 

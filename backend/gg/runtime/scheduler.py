@@ -110,7 +110,6 @@ class TaskScheduler:
         poll_seconds: float = 1.0,
         supervision: TaskSupervisionManager | None = None,
         storage_limits: StorageLimits | None = None,
-        task_db_path: str = "gg-tasks.sqlite",
     ) -> None:
         if not 1 <= capacity <= 10:
             raise ValueError("scheduler capacity must be between 1 and 10")
@@ -121,7 +120,6 @@ class TaskScheduler:
         self._poll_seconds = poll_seconds
         self._supervision = supervision
         self._storage_limits = storage_limits
-        self._task_db_path = task_db_path
         self._lock = DeploymentLock(lock_path)
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
@@ -203,11 +201,7 @@ class TaskScheduler:
             if not self._admission_enabled or self._stop.is_set():
                 return
             if self._storage_limits is not None:
-                pressure = admission_pressure(
-                    self._ledger,
-                    self._storage_limits,
-                    db_path=self._task_db_path,
-                )
+                pressure = admission_pressure(self._ledger, self._storage_limits)
                 if pressure.blocked:
                     return
             if self._supervision is not None:

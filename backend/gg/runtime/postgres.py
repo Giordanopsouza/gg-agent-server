@@ -59,11 +59,7 @@ class RuntimePostgres:
 
     def pool(self) -> ConnectionPool:
         # Keep prepared statements disabled across local and hosted pool modes.
-        kwargs = {"prepare_threshold": None, "connect_timeout": 5}
-        if urlsplit(self.url).hostname not in {"127.0.0.1", "localhost", "::1"}:
-            kwargs["sslrootcert"] = str(
-                files("gg.runtime").joinpath("certs/supabase-prod-ca-2021.crt")
-            )
+        kwargs = self.connection_kwargs()
         return ConnectionPool(
             conninfo=self.url,
             min_size=0,
@@ -72,3 +68,11 @@ class RuntimePostgres:
             kwargs=kwargs,
             open=False,
         )
+
+    def connection_kwargs(self) -> dict[str, object]:
+        kwargs: dict[str, object] = {"prepare_threshold": None, "connect_timeout": 5}
+        if urlsplit(self.url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+            kwargs["sslrootcert"] = str(
+                files("gg.runtime").joinpath("certs/supabase-prod-ca-2021.crt")
+            )
+        return kwargs

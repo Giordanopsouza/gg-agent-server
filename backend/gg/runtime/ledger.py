@@ -1,13 +1,12 @@
-"""SQLite-backed durable ledger for background tasks.
+"""Legacy SQLite fixture and shared task-ledger operations.
 
-Owns schema versioning, FIFO sequence assignment, idempotency, and the
-transactional submission of one task. The ledger never imports ``gg.server``;
-it shares only frozen SDK models across the package boundary.
+The production runtime instantiates ``PostgresTaskLedger``. This module keeps
+the old SQLite implementation for deterministic fixture tests while the
+Postgres subclass reuses its task operations against a Postgres connection.
+Neither implementation imports ``gg.server``.
 
-Concurrency: a single connection guarded by a lock. Writers open
-``BEGIN IMMEDIATE`` so concurrent submissions serialize at the SQLite level
-and never expose a partially submitted task. ``seq`` is monotonically assigned
-inside the same transaction that inserts the row.
+SQLite fixtures use ``BEGIN IMMEDIATE``; the Postgres connection adapter uses
+a transaction-scoped advisory lock for the same multi-step decisions.
 """
 
 from __future__ import annotations
@@ -189,7 +188,7 @@ def _row_to_record(row: sqlite3.Row) -> TaskRecord:
 
 
 class TaskLedger:
-    """Durable SQLite ledger for background tasks."""
+    """Legacy SQLite fixture whose task methods back the Postgres subclass."""
 
     def __init__(
         self, *, db_path: str, schema_version: int = SUPPORTED_SCHEMA_VERSION
@@ -1253,6 +1252,7 @@ class TaskLedger:
                 if existing is not None:
                     record = _row_to_supervision(existing)
                     if record.task_id != task_id or record.start_key != start_key:
+                        self._conn.execute("ROLLBACK")
                         raise SupervisionIdentityError(
                             "start_key already bound to a different task"
                         )
