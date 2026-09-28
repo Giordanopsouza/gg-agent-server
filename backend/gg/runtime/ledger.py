@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.publication import PublicationRecord, PublicationState
@@ -167,6 +167,7 @@ def _row_to_publication(row: sqlite3.Row) -> PublicationRecord:
 
 def _row_to_record(row: sqlite3.Row) -> TaskRecord:
     return TaskRecord(
+        owner_id=row["owner_id"] if "owner_id" in row.keys() else None,
         id=row["id"],
         seq=row["seq"],
         state=TaskState(row["state"]),
@@ -259,7 +260,8 @@ class TaskLedger:
                         id TEXT PRIMARY KEY,
                         seq INTEGER NOT NULL UNIQUE,
                         state TEXT NOT NULL,
-                        idempotency_key TEXT NOT NULL UNIQUE,
+                        idempotency_key TEXT NOT NULL,
+                        owner_id TEXT,
                         repository TEXT NOT NULL,
                         prompt TEXT NOT NULL,
                         base_ref TEXT,
@@ -275,6 +277,10 @@ class TaskLedger:
                 )
                 self._conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tasks_seq ON tasks(seq)"
+                )
+                self._conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_owner_key "
+                    "ON tasks (COALESCE(owner_id, ''), idempotency_key)"
                 )
                 self._conn.execute(
                     "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
@@ -392,6 +398,26 @@ class TaskLedger:
                 self._create_supervision_schema()
             if self._expected_schema_version >= 6:
                 self._create_retention_schema()
+                task_columns = {
+                    row["name"]
+                    for row in self._conn.execute("PRAGMA table_info(tasks)").fetchall()
+                }
+                if "owner_id" not in task_columns:
+                    self._conn.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
+                tombstone_columns = {
+                    row["name"]
+                    for row in self._conn.execute(
+                        "PRAGMA table_info(retention_tombstones)"
+                    ).fetchall()
+                }
+                if "owner_id" not in tombstone_columns:
+                    self._conn.execute(
+                        "ALTER TABLE retention_tombstones ADD COLUMN owner_id TEXT"
+                    )
+                self._conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tombstones_owner_key "
+                    "ON retention_tombstones (COALESCE(owner_id, ''), idempotency_key)"
+                )
 
     def _create_sandbox_schema(self) -> None:
         assert self._conn is not None
@@ -565,7 +591,8 @@ class TaskLedger:
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS retention_tombstones (
-                idempotency_key TEXT PRIMARY KEY,
+                idempotency_key TEXT NOT NULL,
+                owner_id TEXT,
                 task_id TEXT NOT NULL,
                 repository TEXT NOT NULL,
                 prompt TEXT NOT NULL,
@@ -577,9 +604,14 @@ class TaskLedger:
                 updated_at TEXT NOT NULL,
                 remote_effect_json TEXT,
                 payload_expired_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
+                expires_at TEXT NOT NULL,
+                UNIQUE (owner_id, idempotency_key)
             )
             """
+        )
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_tombstones_task_id "
+            "ON retention_tombstones (task_id)"
         )
 
     def _create_publication_schema(self) -> None:
@@ -620,22 +652,25 @@ class TaskLedger:
         prompt: str,
         base_ref: str | None,
         retry_of: str | None,
+        owner_id: UUID | None = None,
     ) -> tuple[TaskRecord, bool]:
         assert self._conn is not None
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                scope, scope_params = self._owner_scope(owner_id)
                 existing = self._conn.execute(
-                    "SELECT * FROM tasks WHERE idempotency_key = ?",
-                    (idempotency_key,),
+                    f"SELECT * FROM tasks WHERE idempotency_key = ? AND {scope}",
+                    (idempotency_key, *scope_params),
                 ).fetchone()
                 if existing is not None:
                     self._conn.execute("COMMIT")
                     return _row_to_record(existing), False
                 if self._schema_version() >= 6:
                     tombstone = self._conn.execute(
-                        "SELECT * FROM retention_tombstones WHERE idempotency_key = ?",
-                        (idempotency_key,),
+                        "SELECT * FROM retention_tombstones "
+                        f"WHERE idempotency_key = ? AND {scope}",
+                        (idempotency_key, *scope_params),
                     ).fetchone()
                     if tombstone is not None:
                         self._conn.execute("COMMIT")
@@ -650,16 +685,17 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     INSERT INTO tasks (
-                        id, seq, state, idempotency_key, repository, prompt,
+                        id, seq, state, idempotency_key, owner_id, repository, prompt,
                         base_ref, base_sha, retry_of, created_at, updated_at,
                         outcome_detail, check_status, sandbox_cleanup_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL)
                     """,
                     (
                         task_id,
                         seq,
                         TaskState.QUEUED.value,
                         idempotency_key,
+                        self._owner_param(owner_id),
                         repository or "",
                         prompt,
                         base_ref,
@@ -674,6 +710,7 @@ class TaskLedger:
                 raise
         return (
             TaskRecord(
+                owner_id=owner_id,
                 id=task_id,
                 seq=seq,
                 state=TaskState.QUEUED,
@@ -713,19 +750,42 @@ class TaskLedger:
         assert row is not None
         return _row_to_record(row)
 
-    def get(self, task_id: str) -> TaskRecord | None:
+    def _owner_param(self, owner_id: UUID | None) -> str | UUID | None:
+        return str(owner_id) if owner_id else None
+
+    def _owner_scope(self, owner_id: UUID | None) -> tuple[str, tuple[str | UUID, ...]]:
+        if owner_id is None:
+            return "owner_id IS NULL", ()
+        return "owner_id = ?", (self._owner_param(owner_id),)
+
+    def get(self, task_id: str, *, owner_id: UUID | None = None) -> TaskRecord | None:
         assert self._conn is not None
         with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM tasks WHERE id = ?", (task_id,)
-            ).fetchone()
+            if owner_id is None:
+                row = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+            else:
+                scope, params = self._owner_scope(owner_id)
+                row = self._conn.execute(
+                    f"SELECT * FROM tasks WHERE id = ? AND {scope}",
+                    (task_id, *params),
+                ).fetchone()
         return _row_to_record(row) if row is not None else None
 
     # Return all tasks in FIFO (seq) order.
-    def list(self) -> list[TaskRecord]:
+    def list(self, *, owner_id: UUID | None = None) -> list[TaskRecord]:
         assert self._conn is not None
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM tasks ORDER BY seq ASC").fetchall()
+            if owner_id is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM tasks ORDER BY seq ASC"
+                ).fetchall()
+            else:
+                scope, params = self._owner_scope(owner_id)
+                rows = self._conn.execute(
+                    f"SELECT * FROM tasks WHERE {scope} ORDER BY seq ASC", params
+                ).fetchall()
         return [_row_to_record(row) for row in rows]
 
     def reserve_next(self, *, capacity: int) -> TaskRecord | None:
@@ -1759,15 +1819,15 @@ class TaskLedger:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT idempotency_key FROM retention_tombstones
+                SELECT idempotency_key, task_id FROM retention_tombstones
                 WHERE expires_at < ?
                 """,
                 (before.isoformat(),),
             ).fetchall()
             for row in rows:
                 self._conn.execute(
-                    "DELETE FROM retention_tombstones WHERE idempotency_key = ?",
-                    (row["idempotency_key"],),
+                    "DELETE FROM retention_tombstones WHERE task_id = ?",
+                    (row["task_id"],),
                 )
         return len(rows)
 
@@ -1804,17 +1864,19 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     INSERT INTO retention_tombstones (
-                        idempotency_key, task_id, repository, prompt, base_ref,
+                        idempotency_key, owner_id, task_id, repository, prompt,
+                        base_ref,
                         retry_of, terminal_state, seq, created_at, updated_at,
                         remote_effect_json, payload_expired_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(idempotency_key) DO UPDATE SET
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
                         remote_effect_json = excluded.remote_effect_json,
                         payload_expired_at = excluded.payload_expired_at,
                         expires_at = excluded.expires_at
                     """,
                     (
                         record["idempotency_key"],
+                        record["owner_id"],
                         task_id,
                         record["repository"],
                         record["prompt"],
@@ -1861,6 +1923,7 @@ class TaskLedger:
     @staticmethod
     def _record_from_tombstone(row: sqlite3.Row) -> TaskRecord:
         return TaskRecord(
+            owner_id=row["owner_id"],
             id=row["task_id"],
             seq=row["seq"],
             state=TaskState(row["terminal_state"]),

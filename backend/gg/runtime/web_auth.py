@@ -194,6 +194,56 @@ class SupabaseAuth:
             response.raise_for_status()
 
 
+async def authenticated_web_user(
+    provider: SupabaseAuth,
+    sessions: PostgresWebSessions | None,
+    cookie: str,
+    response: Response | None = None,
+) -> dict[str, str | None]:
+    """Verify the signed cookie, Auth identity, and live server-side session."""
+    if sessions is None:
+        raise HTTPException(status_code=503, detail="web login is not configured")
+    payload = provider.open(cookie, ttl=SESSION_SECONDS)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="session expired or absent")
+    try:
+        user = await provider.verified_user(payload["access"])
+    except Exception:
+        try:
+            tokens = await provider.refresh(payload["refresh"])
+            user = await provider.verified_user(tokens["access_token"])
+            if response is not None:
+                response.set_cookie(
+                    SESSION_COOKIE,
+                    provider.seal(
+                        {
+                            "access": tokens["access_token"],
+                            "refresh": tokens["refresh_token"],
+                        }
+                    ),
+                    max_age=SESSION_SECONDS,
+                    httponly=True,
+                    secure=provider.settings.web_cookie_secure,
+                    samesite="lax",
+                    path="/",
+                )
+        except Exception:
+            raise HTTPException(
+                status_code=401, detail="session expired or absent"
+            ) from None
+    try:
+        active = await asyncio.to_thread(
+            sessions.active, user["id"], user["session_id"]
+        )
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=503, detail="session store unavailable"
+        ) from None
+    if not active:
+        raise HTTPException(status_code=401, detail="session expired or absent")
+    return user
+
+
 def web_auth_router(
     settings: RuntimeSettings,
     provider: SupabaseAuth,
@@ -288,46 +338,9 @@ def web_auth_router(
     async def session(request: Request, response: Response) -> dict[str, Any]:
         _configured(settings, sessions)
         response.headers["Cache-Control"] = "no-store"
-        payload = provider.open(
-            request.cookies.get(SESSION_COOKIE, ""), ttl=SESSION_SECONDS
+        user = await authenticated_web_user(
+            provider, sessions, request.cookies.get(SESSION_COOKIE, ""), response
         )
-        if payload is None:
-            raise HTTPException(status_code=401, detail="session expired or absent")
-        try:
-            user = await provider.verified_user(payload["access"])
-        except Exception:
-            try:
-                tokens = await provider.refresh(payload["refresh"])
-                user = await provider.verified_user(tokens["access_token"])
-                response.set_cookie(
-                    SESSION_COOKIE,
-                    provider.seal(
-                        {
-                            "access": tokens["access_token"],
-                            "refresh": tokens["refresh_token"],
-                        }
-                    ),
-                    max_age=SESSION_SECONDS,
-                    httponly=True,
-                    secure=settings.web_cookie_secure,
-                    samesite="lax",
-                    path="/",
-                )
-            except Exception:
-                raise HTTPException(
-                    status_code=401, detail="session expired or absent"
-                ) from None
-        assert sessions is not None
-        try:
-            active = await asyncio.to_thread(
-                sessions.active, user["id"], user["session_id"]
-            )
-        except psycopg.Error:
-            raise HTTPException(
-                status_code=503, detail="session store unavailable"
-            ) from None
-        if not active:
-            raise HTTPException(status_code=401, detail="session expired or absent")
         return {"user": {"id": user["id"], "email": user["email"]}}
 
     @router.post("/logout")

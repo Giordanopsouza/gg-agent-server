@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
@@ -60,7 +61,10 @@ class PostgresTaskLedger(TaskLedger):
         self._lock = threading.Lock()
         self._conn: _LedgerConnection | None = None
         self._db_path = "postgres"
-        self._expected_schema_version = 6
+        self._expected_schema_version = 7
+
+    def _owner_param(self, owner_id: UUID | None) -> UUID | None:
+        return owner_id
 
     def open(self) -> None:
         if self._conn is not None:

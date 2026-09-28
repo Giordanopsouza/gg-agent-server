@@ -156,8 +156,8 @@ def test_login_session_and_operator_boundary(auth_app):
     session = client.get("/auth/session")
     assert session.status_code == 200
     assert session.json() == {"user": {"id": USER_ID, "email": "person@example.com"}}
-    assert client.get("/tasks").status_code == 401
-    assert client.post("/tasks", json={"prompt": "example"}).status_code == 401
+    assert client.get("/tasks").status_code == 200
+    assert client.post("/tasks", json={"prompt": "example"}).status_code == 403
 
 
 @pytest.mark.parametrize(

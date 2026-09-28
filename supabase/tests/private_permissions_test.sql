@@ -1,6 +1,6 @@
 begin;
 set local search_path = extensions, public;
-select plan(30);
+select plan(35);
 
 select ok(to_regnamespace('app_private') is not null, 'app schema exists');
 select ok(to_regnamespace('runtime_private') is not null, 'runtime schema exists');
@@ -32,6 +32,11 @@ select ok(not has_table_privilege('anon', 'runtime_private.tasks', 'SELECT'), 'a
 select ok(not has_table_privilege('authenticated', 'runtime_private.tasks', 'SELECT'), 'authenticated cannot read tasks');
 select ok(not has_table_privilege('service_role', 'runtime_private.tasks', 'SELECT'), 'service role cannot read tasks');
 select ok(not has_table_privilege('gg_runtime', 'runtime_private.schema_meta', 'UPDATE'), 'runtime cannot change schema version');
+select ok((select atttypid = 'uuid'::regtype from pg_attribute where attrelid = 'runtime_private.tasks'::regclass and attname = 'owner_id'), 'task owner is a UUID');
+select ok((select atttypid = 'uuid'::regtype from pg_attribute where attrelid = 'runtime_private.retention_tombstones'::regclass and attname = 'owner_id'), 'tombstone owner is a UUID');
+select ok(to_regclass('runtime_private.tasks_owner_idempotency') is not null, 'task keys are unique per owner');
+select ok(to_regclass('runtime_private.tombstones_owner_idempotency') is not null, 'tombstone keys are unique per owner');
+select ok(not has_table_privilege('authenticated', 'runtime_private.retention_tombstones', 'SELECT'), 'web users cannot read tombstones directly');
 
 select * from finish();
 rollback;
