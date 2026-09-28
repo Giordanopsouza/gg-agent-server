@@ -38,7 +38,6 @@ DEFAULT_MAX_LOG_EVIDENCE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_TOTAL_EVIDENCE_BYTES = 5 * 1024 * 1024 * 1024
 DEFAULT_MIN_FREE_DISK_BYTES = 1024 * 1024 * 1024
-SUPPORTED_TASK_SCHEMA_VERSION = 3
 
 
 class RuntimeSettings(BaseModel):
@@ -50,6 +49,7 @@ class RuntimeSettings(BaseModel):
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
     web_cookie_key: str | None = None
+    openrouter_vault_key: str | None = None
     web_origin: str | None = None
     web_cookie_secure: bool = True
     cors_origins: tuple[str, ...] = ()
@@ -128,11 +128,14 @@ class RuntimeSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_web_cookie_settings(self) -> RuntimeSettings:
-        if self.web_cookie_key is not None:
+        for name in ("web_cookie_key", "openrouter_vault_key"):
+            key = getattr(self, name)
+            if key is None:
+                continue
             try:
-                Fernet(self.web_cookie_key)
+                Fernet(key)
             except (ValueError, TypeError) as exc:
-                raise ValueError("web_cookie_key must be a Fernet key") from exc
+                raise ValueError(f"{name} must be a Fernet key") from exc
         if not self.web_cookie_secure and self.web_origin:
             if urlsplit(self.web_origin).hostname not in ("localhost", "127.0.0.1"):
                 raise ValueError("insecure web cookies are allowed only on loopback")
@@ -254,6 +257,7 @@ def load_settings() -> RuntimeSettings:
             os.getenv("GG_SUPABASE_PUBLISHABLE_KEY")
         ),
         web_cookie_key=_optional_secret(os.getenv("GG_WEB_COOKIE_KEY")),
+        openrouter_vault_key=_optional_secret(os.getenv("GG_OPENROUTER_VAULT_KEY")),
         web_origin=_optional_secret(os.getenv("GG_WEB_ORIGIN")),
         web_cookie_secure=_parse_bool(os.getenv("GG_WEB_COOKIE_SECURE"), True),
         cors_origins=tuple(

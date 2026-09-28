@@ -26,6 +26,7 @@ from gg.sdk.task_execution import (
     TaskResultManifest,
 )
 from gg.sdk.tasks import TaskState
+from test_support.postgres_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -221,12 +222,11 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
 ) -> None:
     state = FakeAgentState()
     agent_app = _build_fake_agent(state)
-    ledger = TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
+    ledger = new_ledger()
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent_app)
     settings = RuntimeSettings(
         api_key="control-secret",
-        task_db_path=str(tmp_path / "tasks.sqlite"),
         task_dispatch_enabled=True,
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
@@ -280,14 +280,13 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
 @pytest.mark.anyio
 async def test_publication_error_finishes_task_as_failed(tmp_path, monkeypatch) -> None:
     state = FakeAgentState()
-    ledger = TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
+    ledger = new_ledger()
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(
         ledger=ledger, agent_app=_build_fake_agent(state)
     )
     settings = RuntimeSettings(
         api_key="control-secret",
-        task_db_path=str(tmp_path / "tasks.sqlite"),
         task_dispatch_enabled=True,
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
@@ -336,12 +335,11 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
 ) -> None:
     state = FakeAgentState(conversation_on_start=False, distinct_execution_id=True)
     agent_app = _build_fake_agent(state)
-    ledger = TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
+    ledger = new_ledger()
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent_app)
     settings = RuntimeSettings(
         api_key="control-secret",
-        task_db_path=str(tmp_path / "tasks.sqlite"),
         task_dispatch_enabled=True,
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
@@ -397,11 +395,10 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
 
 @pytest.mark.anyio
 async def test_cancel_queued_task_is_idempotent(tmp_path) -> None:
-    ledger = TaskLedger(db_path=":memory:")
+    ledger = new_ledger()
     ledger.open()
     settings = RuntimeSettings(
         api_key="control-secret",
-        task_db_path=":memory:",
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
     app = create_app(settings, task_ledger=ledger)

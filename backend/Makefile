@@ -45,4 +45,4 @@ run:
 	$(UV_RUN) python -m gg.runtime --host 127.0.0.1 --port 8001
 
 production-smoke-tests:
-	$(UV_RUN) pytest backend/tests/test_production_operations.py
+	$(UV_RUN) python scripts/runtime_postgres_tests.py backend/tests/test_production_operations.py

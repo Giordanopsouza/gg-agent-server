@@ -3,7 +3,7 @@
 
 .PHONY: help install test unit-tests integration-tests lint-check lint-fix
 .PHONY: format-check format-fix pre-commit build ci run run-runtime docker-build
-.PHONY: supabase-local-start supabase-local-reset supabase-integration-tests
+.PHONY: supabase-local-start supabase-local-reset supabase-integration-tests postgres-tests
 
 help:
 	@$(MAKE) -C packages/gg-sdk help
@@ -24,18 +24,21 @@ integration-tests:
 	uv run --no-editable pytest -m "modal or github"
 
 lint-check:
-	uv run --no-editable ruff check packages/gg-sdk backend sandboxes tests scripts
+	uv run --no-editable ruff check packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
 
 lint-fix:
-	uv run --no-editable ruff check --fix packages/gg-sdk backend sandboxes tests scripts
+	uv run --no-editable ruff check --fix packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
 
 format-check:
-	uv run --no-editable ruff format --check packages/gg-sdk backend sandboxes tests scripts
+	uv run --no-editable ruff format --check packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
 
 format-fix:
-	uv run --no-editable ruff format packages/gg-sdk backend sandboxes tests scripts
+	uv run --no-editable ruff format packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
 
 pre-commit: format-check lint-check unit-tests
+
+postgres-tests:
+	uv run --no-editable python scripts/runtime_postgres_tests.py -m "not docker and not pi and not modal and not github"
 
 build:
 	uv build --package gg-sdk
