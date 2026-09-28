@@ -21,6 +21,7 @@ from gg.sdk.task_execution import (
 from gg.server.agent import AgentError
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
+from gg.server.secret_redaction import redact_secret
 from gg.server.task_supervisor.git_prep import (
     GitPrepError,
     checkout_task_branch,
@@ -94,6 +95,7 @@ class TaskSupervisorService:
                 task_branch=request.task_branch,
                 base_ref=request.base_ref,
                 deadline_at=request.deadline_at,
+                model=request.model,
             )
         except StartKeyConflictError:
             raise
@@ -190,7 +192,7 @@ class TaskSupervisorService:
                 conversation_id=conversation_id,
                 completed_at=datetime.now(UTC),
             )
-            path = self._store.save_manifest(manifest)
+            path = self._store.save_manifest(self._redact_manifest(manifest))
             terminal = (
                 TaskExecutionPhase.COMPLETED
                 if agent_outcome in {AgentOutcome.NO_CHANGES, AgentOutcome.SUCCEEDED}
@@ -250,7 +252,7 @@ class TaskSupervisorService:
         meta = self._conversation_service.create(
             working_dir=repo_dir,
             conversation_id=conversation_id,
-            agent=PiAgentConfig(),
+            agent=PiAgentConfig(model=request.model),
         )
         _ = meta
         self._conversation_service.send_message(conversation_id, request.prompt)
@@ -304,7 +306,7 @@ class TaskSupervisorService:
             outcome_detail=detail,
             completed_at=datetime.now(UTC),
         )
-        path = self._store.save_manifest(manifest)
+        path = self._store.save_manifest(self._redact_manifest(manifest))
         await self._update_phase(
             record,
             TaskExecutionPhase.FAILED,
@@ -334,6 +336,14 @@ class TaskSupervisorService:
     def _remaining_seconds(deadline_at: datetime, *, minimum: float) -> float:
         remaining = (deadline_at - datetime.now(UTC)).total_seconds()
         return max(minimum, remaining)
+
+    def _redact_manifest(self, manifest: TaskResultManifest) -> TaskResultManifest:
+        key = self._process_env.get("OPENROUTER_API_KEY")
+        if not key:
+            return manifest
+        return TaskResultManifest.model_validate(
+            redact_secret(manifest.model_dump(mode="python"), key)
+        )
 
     @staticmethod
     def _check_outcome(capture: CommandCapture) -> CheckOutcome:

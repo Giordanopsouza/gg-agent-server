@@ -130,6 +130,39 @@ async def test_reuse_with_different_input_returns_conflict() -> None:
 
 
 @pytest.mark.anyio
+async def test_model_catalog_validation_and_idempotency() -> None:
+    app = _app(_settings())
+    transport = ASGITransport(app=app)
+    body = {**_payload(key="model-k1"), "model": "anthropic/claude-sonnet-4.5"}
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            catalog = await client.get("/tasks/models", headers=_AUTH)
+            first = await client.post("/tasks", headers=_AUTH, json=body)
+            replay = await client.post("/tasks", headers=_AUTH, json=body)
+            conflict = await client.post(
+                "/tasks",
+                headers=_AUTH,
+                json={**body, "model": "z-ai/glm-5.3-flashx"},
+            )
+            invalid = await client.post(
+                "/tasks",
+                headers=_AUTH,
+                json={**_payload(key="model-k2"), "model": "unlisted/model"},
+            )
+            stored = await client.get(f"/tasks/{first.json()['id']}", headers=_AUTH)
+
+    assert catalog.status_code == 200
+    assert "anthropic/claude-sonnet-4.5" in catalog.json()["models"]
+    assert first.status_code == 201
+    assert first.json()["model"] == stored.json()["model"] == body["model"]
+    assert replay.status_code == 200
+    assert conflict.status_code == 409
+    assert invalid.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_repository_admits_without_allowlist_or_profile_match() -> None:
     app = _app(_settings())
     transport = ASGITransport(app=app)

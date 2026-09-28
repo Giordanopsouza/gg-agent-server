@@ -42,6 +42,8 @@ record_path.with_suffix(".ready").write_text("ready", encoding="utf-8")
 
 if os.environ.get("FAKE_PI_MODE") == "edit":
     Path("README.md").write_text("changed\n", encoding="utf-8")
+if os.environ.get("FAKE_PI_MODE") == "leak_patch":
+    Path("README.md").write_text(os.environ["OPENROUTER_API_KEY"], encoding="utf-8")
 
 send({"type": "agent_settled"})
 record_path.write_text(json.dumps(state), encoding="utf-8")
@@ -150,6 +152,7 @@ def _start_payload(task_id: str = "task-1") -> dict:
         task_branch=f"gg/task/{task_id}",
         start_key=f"start-{task_id}",
         deadline_at=datetime.now(UTC) + timedelta(hours=1),
+        model="anthropic/claude-sonnet-4.5",
     ).model_dump(mode="json")
 
 
@@ -245,6 +248,44 @@ async def test_start_is_idempotent_and_runs_agent_once(
             assert manifest["base_sha"]
             assert manifest["changed_files"]
             assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
+            state = next(settings.conversations_dir.glob("*/base_state.json"))
+            assert '"model":"anthropic/claude-sonnet-4.5"' in state.read_text()
+
+
+@pytest.mark.anyio
+async def test_manifest_redacts_key_written_by_agent(
+    tmp_path: Path,
+    bare_repo: Path,
+    active_pi: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path, bare_repo)
+    monkeypatch.setenv("TEST_BARE_REPO", str(bare_repo))
+    monkeypatch.setenv("FAKE_PI_MODE", "leak_patch")
+    monkeypatch.setattr(
+        "gg.server.task_supervisor.service.clone_repository", _clone_from_bare
+    )
+    app = create_app(settings)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with app.router.lifespan_context(app):
+            started = await client.post(
+                "/api/task-executions/start", json=_start_payload()
+            )
+            assert started.status_code == 202
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                response = await client.get(
+                    f"/api/task-executions/{started.json()['execution_id']}/manifest"
+                )
+                if response.status_code == 200:
+                    break
+                await asyncio.sleep(0.05)
+            assert response.status_code == 200
+            assert "test-key" not in response.text
+            assert "[REDACTED]" in response.text
+            saved = next(settings.task_supervisor_dir.glob("manifests/*.json"))
+            assert "test-key" not in saved.read_text()
 
 
 @pytest.mark.anyio

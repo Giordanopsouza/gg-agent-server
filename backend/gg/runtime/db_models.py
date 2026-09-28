@@ -113,6 +113,9 @@ class Task(Base):
     base_ref: Mapped[str | None] = mapped_column(Text)
     base_sha: Mapped[str | None] = mapped_column(Text)
     retry_of: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'z-ai/glm-5.3-flashx'")
+    )
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     outcome_detail: Mapped[str | None] = mapped_column(Text)
@@ -142,6 +145,7 @@ class SandboxCreation(Base):
     sandbox_name: Mapped[str] = mapped_column(Text, nullable=False)
     tags_json: Mapped[str] = mapped_column(Text, nullable=False)
     session_api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    credential_version: Mapped[int | None] = mapped_column(BigInteger)
     provider_id: Mapped[str | None] = mapped_column(Text)
     provider_state: Mapped[str] = mapped_column(Text, nullable=False)
     detail: Mapped[str | None] = mapped_column(Text)
@@ -293,6 +297,9 @@ class RetentionTombstone(Base):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     base_ref: Mapped[str | None] = mapped_column(Text)
     retry_of: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'z-ai/glm-5.3-flashx'")
+    )
     terminal_state: Mapped[str] = mapped_column(Text, nullable=False)
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)

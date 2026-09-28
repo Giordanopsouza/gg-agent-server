@@ -49,6 +49,22 @@ class PostgresOpenRouterVault:
                 else {"configured": False, "mask": None, "version": None}
             )
 
+    def resolve(self, owner_id: str) -> tuple[str, int] | None:
+        """Read only the current owner's key at dispatch; never put it in a queue."""
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "select set_config('app.user_id', %s, true)", (owner_id,)
+            )
+            row = connection.exec_driver_sql(
+                "select ciphertext, credential_version from "
+                "vault_private.openrouter_credentials "
+                "where owner_id = %s and ciphertext is not null",
+                (UUID(owner_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.cipher.decrypt(row[0]).decode(), row[1]
+
     def replace(self, owner_id: str, api_key: str) -> dict[str, Any]:
         ciphertext = self.cipher.encrypt(api_key.encode())
         mask = f"••••{api_key[-4:]}"

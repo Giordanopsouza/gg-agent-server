@@ -86,11 +86,13 @@ def main() -> None:
             with psycopg.connect(test_url) as connection:
                 assert connection.execute(
                     "select version_num from runtime_private.alembic_version"
-                ).fetchone() == ("0001_application_baseline",)
+                ).fetchone() == ("0002_task_model",)
                 assert connection.execute(
                     "select value from runtime_private.schema_meta "
                     "where key = 'schema_version'"
-                ).fetchone() == ("7",)
+                ).fetchone() == ("8",)
+            alembic(test_url, "downgrade", "0001_application_baseline")
+            with psycopg.connect(test_url) as connection:
                 connection.execute(
                     "insert into runtime_private.tasks ("
                     "id, seq, state, idempotency_key, repository, prompt, "
@@ -114,7 +116,7 @@ def main() -> None:
             with psycopg.connect(test_url) as connection:
                 assert connection.execute(
                     "select version_num from runtime_private.alembic_version"
-                ).fetchone() == ("0001_application_baseline",)
+                ).fetchone() == ("0002_task_model",)
         finally:
             admin.execute(
                 sql.SQL("drop database {} with (force)").format(sql.Identifier(name))

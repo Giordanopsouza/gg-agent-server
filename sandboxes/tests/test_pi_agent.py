@@ -58,6 +58,16 @@ if mode == "rejected":
         "success": False,
         "error": "bad API_KEY=" + os.environ["OPENROUTER_API_KEY"],
     })
+elif mode in ("auth_error", "balance_error", "rate_error"):
+    reason = {
+        "auth_error": "401 unauthorized",
+        "balance_error": "402 insufficient credits",
+        "rate_error": "429 rate limit",
+    }[mode]
+    send({
+        "id": prompt["id"], "type": "response", "command": "prompt",
+        "success": False, "error": reason,
+    })
 elif mode == "malformed":
     sys.stdout.buffer.write(b'{"type":oops}\n')
     sys.stdout.buffer.flush()
@@ -172,21 +182,27 @@ else:
         "type": "message_end",
         "message": {
             "role": "assistant",
-            "content": [{"type": "text", "text": "done\u2028now"}],
+            "content": [{"type": "text", "text": (
+                os.environ["OPENROUTER_API_KEY"] if mode == "leak" else "done\u2028now"
+            )}],
         },
     })
     send({
         "type": "tool_execution_start",
         "toolCallId": "call-1",
         "toolName": "write",
-        "args": {"path": "PI_NOTES.md"},
+        "args": {"path": (
+            os.environ["OPENROUTER_API_KEY"] if mode == "leak" else "PI_NOTES.md"
+        )},
     })
     send({"type": "tool_execution_update", "partialResult": "ignored"})
     send({
         "type": "tool_execution_end",
         "toolCallId": "call-1",
         "toolName": "write",
-        "result": {"content": "ok"},
+        "result": {"content": (
+            os.environ["OPENROUTER_API_KEY"] if mode == "leak" else "ok"
+        )},
         "isError": False,
     })
     send({"type": "agent_end"})
@@ -301,6 +317,46 @@ def test_success_uses_expected_command_cwd_and_translates_final_events(
         "is_error": False,
     }
     assert events[-1].payload == {"status": ConversationStatus.FINISHED}
+
+
+def test_pi_output_redacts_key_before_event_persistence(
+    fake_pi: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_PI_MODE", "leak")
+    monkeypatch.setenv("FAKE_PI_RECORD", str(tmp_path / "record.json"))
+    conversation = _conversation(tmp_path)
+    conversation.send_message("respond")
+    conversation.run()
+    events = conversation.list_events()
+    assert "test-openrouter-secret" not in str(events)
+    assert "[REDACTED]" in str(events)
+    persisted = "".join(
+        path.read_text() for path in (tmp_path / "conversation").rglob("*.json")
+    )
+    assert "test-openrouter-secret" not in persisted
+
+
+@pytest.mark.parametrize(
+    ("mode", "detail"),
+    [
+        ("auth_error", "authentication failed"),
+        ("balance_error", "balance is insufficient"),
+        ("rate_error", "rate limit reached"),
+    ],
+)
+def test_provider_failures_remain_actionable(
+    fake_pi: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    detail: str,
+) -> None:
+    monkeypatch.setenv("FAKE_PI_MODE", mode)
+    monkeypatch.setenv("FAKE_PI_RECORD", str(tmp_path / "record.json"))
+    conversation = _conversation(tmp_path)
+    conversation.send_message("respond")
+    with pytest.raises(AgentPromptError, match=detail):
+        conversation.run()
 
 
 def test_missing_binary_fails_clearly(

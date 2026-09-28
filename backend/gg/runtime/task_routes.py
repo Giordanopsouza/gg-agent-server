@@ -29,6 +29,7 @@ from gg.runtime.task_service import (
     TaskValidationError,
 )
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
+from gg.sdk.agent_backend import DEFAULT_PI_MODEL, PI_MODEL_CATALOG
 from gg.sdk.domain import MessageReceipt
 from gg.sdk.task_supervision import (
     RetryTaskRequest,
@@ -53,6 +54,11 @@ def _get_scheduler(request: Request) -> TaskScheduler:
 
 def _get_supervision(request: Request) -> TaskSupervisionManager:
     return request.app.state.task_supervision
+
+
+@router.get("/models")
+def list_models() -> dict[str, object]:
+    return {"default": DEFAULT_PI_MODEL, "models": PI_MODEL_CATALOG}
 
 
 @router.post("", response_model=TaskRecord)

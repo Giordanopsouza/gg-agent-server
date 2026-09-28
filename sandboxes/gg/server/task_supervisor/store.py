@@ -9,6 +9,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
+from gg.sdk.agent_backend import DEFAULT_PI_MODEL
 from gg.sdk.task_execution import (
     TaskExecutionPhase,
     TaskExecutionRecord,
@@ -37,6 +38,7 @@ class ExecutionStore:
         task_branch: str | None,
         base_ref: str | None,
         deadline_at: datetime,
+        model: str = DEFAULT_PI_MODEL,
     ) -> tuple[TaskExecutionRecord, bool]:
         with self._lock:
             existing_id = self._read_start_key(start_key)
@@ -46,6 +48,7 @@ class ExecutionStore:
                     record.task_id != task_id
                     or record.task_branch != task_branch
                     or record.repository != repository
+                    or record.model != model
                 ):
                     raise StartKeyConflictError(
                         f"start_key {start_key!r} already bound to another execution"
@@ -61,6 +64,7 @@ class ExecutionStore:
                 task_branch=task_branch,
                 base_ref=base_ref,
                 deadline_at=deadline_at,
+                model=model,
                 created_at=now,
                 updated_at=now,
             )

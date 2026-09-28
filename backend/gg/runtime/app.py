@@ -73,9 +73,30 @@ def create_app(
     else:
         raise RuntimeError("GG_RUNTIME_DATABASE_URL is required for the runtime")
     ledger.open()
+    web_engine = None
+    if (
+        web_sessions is None
+        and settings.supabase_url
+        and os.getenv("GG_RUNTIME_DATABASE_URL")
+    ):
+        web_engine = ledger.engine
+        web_sessions = PostgresWebSessions(web_engine)
+    if (
+        openrouter_vault is None
+        and web_engine is not None
+        and settings.openrouter_vault_key
+    ):
+        openrouter_vault = PostgresOpenRouterVault(
+            web_engine, settings.openrouter_vault_key
+        )
+
+    openrouter_verifier = openrouter_verifier or OpenRouterKeyVerifier()
     task_service = TaskService(ledger=ledger, settings=settings)
     lifecycle = modal_lifecycle or lifecycle_from_settings(
-        ledger=ledger, settings=settings
+        ledger=ledger,
+        settings=settings,
+        credential_vault=openrouter_vault,
+        credential_verifier=openrouter_verifier,
     )
     publisher = None
     if settings.github_clone_token:
@@ -107,22 +128,6 @@ def create_app(
         supervision=supervision,
         storage_limits=storage_limits,
     )
-    web_engine = None
-    if (
-        web_sessions is None
-        and settings.supabase_url
-        and os.getenv("GG_RUNTIME_DATABASE_URL")
-    ):
-        web_engine = ledger.engine
-        web_sessions = PostgresWebSessions(web_engine)
-    if (
-        openrouter_vault is None
-        and web_engine is not None
-        and settings.openrouter_vault_key
-    ):
-        openrouter_vault = PostgresOpenRouterVault(
-            web_engine, settings.openrouter_vault_key
-        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -185,7 +190,7 @@ def create_app(
             app.state.web_auth,
             web_sessions,
             openrouter_vault,
-            openrouter_verifier or OpenRouterKeyVerifier(),
+            openrouter_verifier,
         )
     )
     app.include_router(event_socket_router)

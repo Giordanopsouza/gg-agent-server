@@ -14,6 +14,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gg.sdk.agent_backend import DEFAULT_PI_MODEL
+
 
 class TaskState(StrEnum):
     """Lifecycle of one background task, persisted in the ledger."""
@@ -41,6 +43,7 @@ class CreateTaskRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=256)
     base_ref: str | None = None
     retry_of: str | None = None
+    model: str = DEFAULT_PI_MODEL
 
 
 class TaskRecord(BaseModel):
@@ -59,6 +62,7 @@ class TaskRecord(BaseModel):
     base_ref: str | None = None
     base_sha: str | None = None
     retry_of: str | None = None
+    model: str = DEFAULT_PI_MODEL
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     # Outcome, check, and cleanup status are stored separately so that a failed

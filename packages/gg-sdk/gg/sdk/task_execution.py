@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gg.sdk.agent_backend import DEFAULT_PI_MODEL
+
 
 class TaskExecutionPhase(StrEnum):
     """High-level progress for one sandbox execution attempt."""
@@ -91,6 +93,7 @@ class StartTaskExecutionRequest(BaseModel):
     task_branch: str | None = Field(default=None, min_length=1, max_length=256)
     start_key: str = Field(min_length=1, max_length=256)
     deadline_at: datetime
+    model: str = DEFAULT_PI_MODEL
 
 
 class TaskExecutionRecord(BaseModel):
@@ -100,6 +103,7 @@ class TaskExecutionRecord(BaseModel):
 
     execution_id: str = Field(default_factory=lambda: str(uuid4()))
     task_id: str
+    model: str = DEFAULT_PI_MODEL
     repository: str | None = None
     start_key: str
     phase: TaskExecutionPhase = TaskExecutionPhase.ACCEPTED
