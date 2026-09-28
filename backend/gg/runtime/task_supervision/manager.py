@@ -14,6 +14,7 @@ from typing import Protocol
 import httpx
 
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.ledger import (
     ReservationPhase,
     SandboxProviderState,
@@ -22,7 +23,9 @@ from gg.runtime.ledger import (
     TaskResultArchive,
 )
 from gg.runtime.modal_sandbox import ModalLifecycleError, ModalSandboxLifecycle
+from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.repo_prep import prepare_repo_from_manifest
+from gg.runtime.repository_authorization import RepositoryAuthorization
 from gg.runtime.storage import (
     StorageLimits,
     measure_task_evidence,
@@ -74,6 +77,7 @@ class TaskSupervisionManager:
         settings: RuntimeSettings | object,
         publisher: PublicationPort | None = None,
         callbacks: SupervisionCallbacks | None = None,
+        repository_authorization: RepositoryAuthorization | None = None,
     ) -> None:
         self._ledger = ledger
         self._lifecycle = lifecycle
@@ -84,6 +88,7 @@ class TaskSupervisionManager:
             else None
         )
         self._publisher = publisher
+        self._repository_authorization = repository_authorization
         self._callbacks = callbacks or SupervisionCallbacks()
         self._loops: dict[str, asyncio.Task[None]] = {}
         self._live: dict[str, list[asyncio.Queue[TaskEventCopy]]] = defaultdict(list)
@@ -159,6 +164,18 @@ class TaskSupervisionManager:
         task = self._ledger.get(task_id)
         if task is None:
             raise KeyError(f"unknown task {task_id}")
+        if task.owner_id is not None and task.repository is not None:
+            if self._repository_authorization is None:
+                raise RuntimeError("GitHub repository authorization unavailable")
+            try:
+                await asyncio.to_thread(
+                    self._repository_authorization.resolve,
+                    task.owner_id,
+                    task.repository,
+                    task.base_ref or "",
+                )
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
         if task.state in {
             TaskState.COMPLETED,
             TaskState.FAILED,
@@ -303,10 +320,15 @@ class TaskSupervisionManager:
         self, task_id: str, task: TaskRecord, client: TaskSupervisorClient
     ) -> SupervisionRecord | None:
         reservation = self._ledger.get_reservation(task_id)
+        duration = (
+            timedelta(minutes=45)
+            if task.owner_id and task.repository
+            else DEFAULT_TASK_DEADLINE
+        )
         deadline_at = (
-            reservation.reserved_at + DEFAULT_TASK_DEADLINE
+            reservation.reserved_at + duration
             if reservation is not None
-            else datetime.now(UTC) + DEFAULT_TASK_DEADLINE
+            else datetime.now(UTC) + duration
         )
         task_branch = f"{TASK_BRANCH_PREFIX}/{task_id}"
         self._ledger.begin_supervision(
@@ -320,6 +342,7 @@ class TaskSupervisionManager:
             repository=task.repository,
             prompt=task.prompt,
             base_ref=task.base_ref,
+            base_sha=task.base_sha,
             task_branch=task_branch,
             start_key=task_id,
             deadline_at=deadline_at,
@@ -489,10 +512,13 @@ class TaskSupervisionManager:
             await self._maybe_publish(task_id, manifest, archive)
         except Exception as exc:
             terminal_state = TaskState.FAILED
-            detail = str(exc)
-            github_token = getattr(self._settings, "github_clone_token", None)
-            if github_token:
-                detail = detail.replace(github_token, "[REDACTED]")
+            if task.owner_id is not None and task.repository is not None:
+                detail = "GitHub publication unavailable"
+            else:
+                detail = str(exc)
+                github_token = getattr(self._settings, "github_clone_token", None)
+                if github_token:
+                    detail = detail.replace(github_token, "[REDACTED]")
             outcome_detail = f"publication failed: {detail}"
         self._ledger.finish_task(
             task_id,
@@ -543,9 +569,10 @@ class TaskSupervisionManager:
         manifest: TaskResultManifest | None,
         archive: TaskResultArchive,
     ) -> None:
+        task = self._ledger.get(task_id)
         if (
             manifest is None
-            or self._publisher is None
+            or (self._publisher is None and (task is None or task.owner_id is None))
             or manifest.repository is None
             or manifest.task_branch is None
             or manifest.base_ref is None
@@ -569,9 +596,39 @@ class TaskSupervisionManager:
         import os
 
         github_token = getattr(self._settings, "github_clone_token", None)
+        publisher = self._publisher
+        if task is not None and task.owner_id is not None:
+            if self._repository_authorization is None:
+                raise ValueError("GitHub repository authorization unavailable")
+            if (
+                manifest.repository != task.repository
+                or manifest.base_ref != task.base_ref
+                or manifest.base_sha != task.base_sha
+            ):
+                raise ValueError(
+                    "sandbox manifest does not match authorized repository and base"
+                )
+            credential = await asyncio.to_thread(
+                self._repository_authorization.credential,
+                task.owner_id,
+                task.repository,
+                task.base_ref or "",
+            )
+            github_token = credential.token
+            publisher = DraftPublisher(
+                ledger=self._ledger,
+                github=HttpGitHubGateway(token=github_token),
+                bot=BotIdentity(
+                    name="gg-bot",
+                    email="gg-bot@users.noreply.github.com",
+                    login="gg-bot",
+                ),
+                github_token=github_token,
+            )
         if github_token is None:
             return
-        if await self._publisher.adopt_existing(request) is not None:
+        assert publisher is not None
+        if await publisher.adopt_existing(request) is not None:
             return
         with tempfile.TemporaryDirectory(prefix="gg-finalize-") as tmp:
             repo_dir = Path(tmp) / "repo"
@@ -581,7 +638,7 @@ class TaskSupervisionManager:
                 github_token=github_token,
                 process_env=os.environ,
             )
-            result = self._publisher.publish(request, repo_dir=repo_dir)
+            result = publisher.publish(request, repo_dir=repo_dir)
             if isinstance(result, Awaitable):
                 await result
 

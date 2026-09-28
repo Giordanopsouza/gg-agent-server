@@ -35,6 +35,7 @@ from gg.runtime.openrouter_vault import (
 from gg.runtime.postgres import RuntimePostgres
 from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.readiness import readiness_from_scheduler
+from gg.runtime.repository_authorization import RepositoryAuthorization
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
 from gg.runtime.storage import StorageLimits
 from gg.runtime.task_auth import task_access
@@ -70,6 +71,7 @@ def create_app(
     openrouter_verifier: OpenRouterKeyVerifier | None = None,
     github_connections: PostgresGitHubConnections | None = None,
     github_client: GitHubClient | None = None,
+    repository_authorization: RepositoryAuthorization | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app."""
     database_url = os.getenv("GG_RUNTIME_DATABASE_URL")
@@ -106,13 +108,28 @@ def create_app(
             web_engine, settings.github_connection_key
         )
     github_client = github_client or GitHubClient(settings)
+    if (
+        repository_authorization is None
+        and github_connections is not None
+        and settings.github_app_client_id
+    ):
+        repository_authorization = RepositoryAuthorization(
+            github_connections,
+            client_id=settings.github_app_client_id,
+            private_key=settings.github_app_private_key,
+        )
     openrouter_verifier = openrouter_verifier or OpenRouterKeyVerifier()
-    task_service = TaskService(ledger=ledger, settings=settings)
+    task_service = TaskService(
+        ledger=ledger,
+        settings=settings,
+        repository_authorization=repository_authorization,
+    )
     lifecycle = modal_lifecycle or lifecycle_from_settings(
         ledger=ledger,
         settings=settings,
         credential_vault=openrouter_vault,
         credential_verifier=openrouter_verifier,
+        repository_authorization=repository_authorization,
     )
     publisher = None
     if settings.github_clone_token:
@@ -131,6 +148,7 @@ def create_app(
         lifecycle=lifecycle,
         settings=settings,
         publisher=publisher,
+        repository_authorization=repository_authorization,
     )
     storage_limits = StorageLimits.from_settings(settings)
     scheduler = task_scheduler or TaskScheduler(
@@ -170,6 +188,7 @@ def create_app(
     app.state.settings = settings
     app.state.task_ledger = ledger
     app.state.task_service = task_service
+    app.state.repository_authorization = repository_authorization
     app.state.task_scheduler = scheduler
     app.state.task_supervision = supervision
     app.state.storage_limits = storage_limits

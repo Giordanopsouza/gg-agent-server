@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import subprocess
 from pathlib import Path
 
@@ -43,14 +44,21 @@ def clone_repository(
     if destination.exists() and any(destination.iterdir()):
         raise GitPrepError(f"destination {destination} is not empty")
     completed = subprocess.run(
-        ["gh", "repo", "clone", repository, str(destination)],
+        [
+            "git",
+            "clone",
+            "--",
+            f"https://github.com/{repository}.git",
+            str(destination),
+        ],
         capture_output=True,
         text=True,
         env=_clone_env(process_env, github_token),
         check=False,
     )
     if completed.returncode != 0:
-        raise GitPrepError(f"clone failed for {repository}: {completed.stderr.strip()}")
+        # gh may echo an authorization header or credential in diagnostic output.
+        raise GitPrepError(f"clone failed for {repository}")
     _scrub_origin_credentials(destination)
 
 
@@ -134,8 +142,13 @@ def run_bootstrap(
 
 def _clone_env(process_env: dict[str, str], token: str) -> dict[str, str]:
     env = dict(process_env)
-    env["GH_TOKEN"] = token
+    credential = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    env.pop("GH_TOKEN", None)
     env.pop("GIT_ASKPASS", None)
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+    env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {credential}"
+    env["GIT_TERMINAL_PROMPT"] = "0"
     return env
 
 

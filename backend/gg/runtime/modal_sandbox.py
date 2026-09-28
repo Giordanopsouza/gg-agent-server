@@ -28,6 +28,10 @@ from gg.runtime.ledger import (
     TaskLedger,
 )
 from gg.runtime.openrouter_vault import OpenRouterKeyVerifier
+from gg.runtime.repository_authorization import (
+    RepositoryAccessError,
+    RepositoryAuthorization,
+)
 from gg.sdk.remote_workspace import SESSION_API_KEY_HEADER
 
 
@@ -267,6 +271,7 @@ class ModalSandboxLifecycle:
         sandbox_env: dict[str, str] | None = None,
         credential_vault: Any | None = None,
         credential_verifier: OpenRouterKeyVerifier | None = None,
+        repository_authorization: RepositoryAuthorization | None = None,
     ) -> None:
         self._ledger = ledger
         self._provider = provider
@@ -274,6 +279,7 @@ class ModalSandboxLifecycle:
         self._sandbox_env = sandbox_env or {}
         self._credential_vault = credential_vault
         self._credential_verifier = credential_verifier
+        self._repository_authorization = repository_authorization
         self._cpu = cpu
         self._memory = memory
         self._startup_timeout = startup_timeout
@@ -323,6 +329,22 @@ class ModalSandboxLifecycle:
                     else:
                         detail = "OpenRouter unavailable; retry later"
                     raise CredentialUnavailableError(detail) from None
+        github_credential = None
+        if task.owner_id is not None and task.repository is not None:
+            if self._repository_authorization is None:
+                raise CredentialUnavailableError(
+                    "GitHub repository authorization unavailable"
+                )
+            try:
+                github_credential = await asyncio.to_thread(
+                    self._repository_authorization.credential,
+                    task.owner_id,
+                    task.repository,
+                    task.base_ref or "",
+                )
+            except RepositoryAccessError as exc:
+                raise CredentialUnavailableError(str(exc)) from exc
+            self._ledger.record_base_sha(task_id, github_credential.base_sha)
         name, tags = _sandbox_identity(self._deployment, task_id)
         if existing is None:
             record, _ = self._ledger.begin_sandbox_creation(
@@ -342,8 +364,11 @@ class ModalSandboxLifecycle:
             env = dict(self._sandbox_env)
             if task.owner_id is not None:
                 env.pop("OPENROUTER_API_KEY", None)
+                env.pop("GG_GITHUB_CLONE_TOKEN", None)
                 assert personal_key is not None
                 env["OPENROUTER_API_KEY"] = personal_key
+                if github_credential is not None:
+                    env["GG_GITHUB_CLONE_TOKEN"] = github_credential.token
             env["GG_SESSION_API_KEYS"] = record.session_api_key
             handle = await self._provider.create(
                 name=record.sandbox_name,
@@ -588,6 +613,7 @@ def lifecycle_from_settings(
     provider: Provider | None = None,
     credential_vault: Any | None = None,
     credential_verifier: OpenRouterKeyVerifier | None = None,
+    repository_authorization: RepositoryAuthorization | None = None,
 ) -> ModalSandboxLifecycle:
     """Construct the single concrete production lifecycle from runtime settings."""
 
@@ -609,6 +635,7 @@ def lifecycle_from_settings(
         sandbox_env=sandbox_env_from_settings(settings),
         credential_vault=credential_vault,
         credential_verifier=credential_verifier,
+        repository_authorization=repository_authorization,
     )
 
 

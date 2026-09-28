@@ -90,6 +90,7 @@ class StartTaskExecutionRequest(BaseModel):
     repository: str | None = None
     prompt: str = Field(min_length=1)
     base_ref: str | None = None
+    base_sha: str | None = None
     task_branch: str | None = Field(default=None, min_length=1, max_length=256)
     start_key: str = Field(min_length=1, max_length=256)
     deadline_at: datetime

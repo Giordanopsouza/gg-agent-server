@@ -6,7 +6,7 @@ The browser session comes from Supabase Auth (Google). A separate GitHub App use
 
 Register a GitHub App with a callback URL at `GG_WEB_ORIGIN/auth/github/callback` and a webhook URL at the public runtime origin `/webhooks/github`. Route `/auth/*` to the runtime from the same browser origin in production; Vite proxies it locally. Set `GG_GITHUB_APP_CLIENT_ID`, `GG_GITHUB_APP_CLIENT_SECRET`, `GG_GITHUB_WEBHOOK_SECRET`, and a separate Fernet `GG_GITHUB_CONNECTION_KEY` on the runtime only. The app secret, webhook secret, cipher key, user token, and installation tokens never belong in the frontend. Keep `GG_WEB_COOKIE_KEY` and Supabase session settings configured as well. The App's **client ID** differs from its App ID. Keep “Request user authorization during installation” off: the connection begins at `/auth/github/start` with a session-bound state and PKCE verifier. The app's public install page can be offered after connection; installation callbacks by themselves grant no access.
 
-For task 065, the GitHub App user authorization needs no extra account permission to call [`GET /user/installations`](https://docs.github.com/en/rest/apps/installations#list-app-installations-accessible-to-the-user-access-token). GitHub grants repository Metadata read automatically; task 066's repository read/write and PR flow will require Contents read/write and Pull requests read/write. Add permissions only when that flow is implemented and verify against [GitHub's permission guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app). An installation token acts as the **App**, so GitHub may attribute its Git and API operations to the App rather than the connecting user.
+For task 065, the GitHub App user authorization needs no extra account permission to call [`GET /user/installations`](https://docs.github.com/en/rest/apps/installations#list-app-installations-accessible-to-the-user-access-token). GitHub grants repository Metadata read automatically. Repository execution also requires Contents write and Pull requests write, as described below. An installation token acts as the **App**, so GitHub may attribute its Git and API operations to the App rather than the connecting user.
 
 ## HTTP contract
 
@@ -17,6 +17,16 @@ For task 065, the GitHub App user authorization needs no extra account permissio
 - `POST /webhooks/github`: validates `X-Hub-Signature-256` over the original bytes, stores `X-GitHub-Delivery` for deduplication, and invalidates on `installation.deleted`, `installation.suspend`, and `github_app_authorization.revoked`. The webhook does not grant access. A late invalidation may temporarily remove a snapshot; the next status read verifies against GitHub and restores an accessible installation. A late authorization revocation requires an explicit reconnect. Unknown events are only deduplicated.
 
 GitHub user access tokens can expire. This implementation returns `revoked` on an expired or revoked token and asks the user to reconnect. In-flight operations that already received an installation token are outside task 065. Webhook receipts and expired flow rows need periodic retention cleanup after the task's retention policy is established.
+
+## Repository authorization (task 066)
+
+Give the GitHub App Contents write and Pull requests write permissions. Set `GG_GITHUB_APP_PRIVATE_KEY` to its PEM private key on the runtime only. The runtime signs an App JWT and asks GitHub for an installation token limited to one repository ID and those two permissions. Neither the private key nor the user's GitHub token enters the sandbox.
+
+`GET /tasks/repositories` returns the live intersection of repositories the connected user can push to and active installations with those App permissions. Private repositories are included. `GET /tasks/repositories/{owner}/{repo}/branches` lists branches only after that check. These routes require a browser session; an operator API key cannot enumerate a user's repositories.
+
+Submission resolves the branch SHA on the server. Retry runs the same check. Dispatch checks access again before minting the one-repository token, and the sandbox checks out the resolved SHA. Continuation checks authorization again. The execution deadline is 45 minutes from reservation, within the installation token's one-hour lifetime. Publication checks access and requests a fresh token after execution, including after a runtime restart. Removed repositories, revoked authorization, and failed clones do not use the global operator token. Public task evidence omits clone diagnostics and browser publication failures use a generic message.
+
+Operator-key repository tasks retain the older operator configuration path; browser-owned tasks never fall back to `GG_GITHUB_CLONE_TOKEN`. GitHub documents the [installation token scope and expiry](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app) and [App JWT requirements](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
 
 ## Validation
 
