@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import TaskLedger
+from gg.runtime.openrouter_vault import OpenRouterKeyVerifier
 from gg.runtime.web_auth import SupabaseAuth
 
 
@@ -33,6 +34,7 @@ def auth_app(tmp_path):
         web_cookie_key=Fernet.generate_key().decode(),
         web_origin="https://app.example",
         task_dispatch_enabled=False,
+        dispatch_lock_path=str(tmp_path / "auth-dispatch.lock"),
     )
     key = jwk.ECKey.generate_key("P-256", auto_kid=True)
     state: dict[str, object] = {
@@ -43,6 +45,8 @@ def auth_app(tmp_path):
         "logout_first_401": False,
         "revoked": False,
         "session_store_error": False,
+        "vault": {},
+        "openrouter_status": 200,
     }
 
     class FakeSessions:
@@ -108,6 +112,38 @@ def auth_app(tmp_path):
         raise AssertionError(f"unexpected provider request: {request.url}")
 
     provider = SupabaseAuth(settings, transport=httpx.MockTransport(provider_response))
+
+    class FakeVault:
+        def status(self, owner_id: str) -> dict[str, object]:
+            return state["vault"].get(
+                owner_id, {"configured": False, "mask": None, "version": None}
+            )
+
+        def replace(self, owner_id: str, api_key: str) -> dict[str, object]:
+            old = self.status(owner_id)
+            result = {
+                "configured": True,
+                "mask": f"••••{api_key[-4:]}",
+                "version": (old["version"] or 0) + 1,
+            }
+            state["vault"][owner_id] = result
+            return result
+
+        def remove(self, owner_id: str) -> dict[str, object]:
+            old = self.status(owner_id)
+            result = {
+                "configured": False,
+                "mask": None,
+                "version": old["version"] + 1 if old["version"] else None,
+            }
+            state["vault"][owner_id] = result
+            return result
+
+    def openrouter_response(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://openrouter.ai/api/v1/key"
+        assert request.headers["Authorization"].startswith("Bearer sk-or-")
+        return httpx.Response(state["openrouter_status"], text="provider-secret-error")
+
     state["provider"] = provider
     state["access_token"] = access_token
     app = create_app(
@@ -115,6 +151,10 @@ def auth_app(tmp_path):
         task_ledger=TaskLedger(db_path=str(tmp_path / "auth-tasks.sqlite")),
         web_auth=provider,
         web_sessions=FakeSessions(),
+        openrouter_vault=FakeVault(),
+        openrouter_verifier=OpenRouterKeyVerifier(
+            httpx.MockTransport(openrouter_response)
+        ),
     )
     with TestClient(app, base_url="https://app.example") as client:
         yield client, settings, state
@@ -142,6 +182,57 @@ def _callback(client: TestClient, state: str) -> httpx.Response:
         params={"state": state, "code": "auth-code"},
         follow_redirects=False,
     )
+
+
+def test_openrouter_vault_replacement_errors_removal_and_redaction(auth_app):
+    client, _, state = auth_app
+    path = "/auth/openrouter-credential"
+    key = "sk-or-v1-secret-1234"
+    assert client.get(path).status_code == 401
+    assert client.put(path, json={"api_key": key}).status_code == 403
+    _callback(client, _start(client))
+    assert client.get(path).json() == {
+        "configured": False,
+        "mask": None,
+        "version": None,
+    }
+    assert client.put(path, json={"api_key": key}).status_code == 403
+    origin = {"Origin": "https://app.example"}
+    saved = client.put(path, headers=origin, json={"api_key": key})
+    assert saved.status_code == 200
+    assert saved.json() == {"configured": True, "mask": "••••1234", "version": 1}
+    assert key not in saved.text
+    assert key not in client.get(path).text
+    assert saved.headers["cache-control"] == "no-store"
+    for status, expected in ((401, 400), (429, 429), (500, 503)):
+        state["openrouter_status"] = status
+        failure = client.put(
+            path, headers=origin, json={"api_key": "sk-or-v1-other-9876"}
+        )
+        assert failure.status_code == expected
+        assert "provider-secret-error" not in failure.text
+        assert client.get(path).json()["version"] == 1
+    state["openrouter_status"] = 200
+    replaced = client.put(path, headers=origin, json={"api_key": "sk-or-v1-other-9876"})
+    assert replaced.json() == {"configured": True, "mask": "••••9876", "version": 2}
+    state["revoked"] = True
+    assert client.get(path).status_code == 401
+    assert client.delete(path, headers=origin).status_code == 401
+    state["revoked"] = False
+    assert client.delete(path).status_code == 403
+    assert client.delete(path, headers=origin).json() == {
+        "configured": False,
+        "mask": None,
+        "version": 3,
+    }
+    assert client.get(path).json() == {"configured": False, "mask": None, "version": 3}
+    assert (
+        client.put(path, headers=origin, json={"api_key": key}).json()["version"] == 4
+    )
+    malformed = client.put(path, headers=origin, json={"api_key": key + "\n"})
+    assert malformed.status_code == 400
+    assert key not in malformed.text
+    assert client.get(path).json()["version"] == 4
 
 
 def test_login_session_and_operator_boundary(auth_app):
