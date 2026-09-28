@@ -16,6 +16,10 @@ from typing import Any, Protocol
 
 import httpx
 import modal
+import psycopg
+from cryptography.fernet import InvalidToken
+from fastapi import HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import (
@@ -23,6 +27,7 @@ from gg.runtime.ledger import (
     SandboxProviderState,
     TaskLedger,
 )
+from gg.runtime.openrouter_vault import OpenRouterKeyVerifier
 from gg.sdk.remote_workspace import SESSION_API_KEY_HEADER
 
 
@@ -38,6 +43,10 @@ TASK_TAG = "gg_task_id"
 
 class ModalLifecycleError(RuntimeError):
     """Base error for lifecycle operations."""
+
+
+class CredentialUnavailableError(ModalLifecycleError):
+    """A web task has no usable personal credential at dispatch."""
 
 
 class AmbiguousProviderStateError(ModalLifecycleError):
@@ -256,40 +265,85 @@ class ModalSandboxLifecycle:
         startup_timeout: int = DEFAULT_STARTUP_TIMEOUT_SECONDS,
         provider_timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
         sandbox_env: dict[str, str] | None = None,
+        credential_vault: Any | None = None,
+        credential_verifier: OpenRouterKeyVerifier | None = None,
     ) -> None:
         self._ledger = ledger
         self._provider = provider
         self._deployment = deployment
         self._sandbox_env = sandbox_env or {}
+        self._credential_vault = credential_vault
+        self._credential_verifier = credential_verifier
         self._cpu = cpu
         self._memory = memory
         self._startup_timeout = startup_timeout
         self._provider_timeout = provider_timeout
 
     async def create(self, task_id: str) -> SandboxSnapshot:
-        name, tags = _sandbox_identity(self._deployment, task_id)
-        record, created = self._ledger.begin_sandbox_creation(
-            task_id=task_id,
-            deployment=self._deployment,
-            sandbox_name=name,
-            tags_json=json.dumps(tags, sort_keys=True, separators=(",", ":")),
-            session_api_key=secrets.token_urlsafe(32),
-        )
-        if not created:
-            snapshot, handle = await self._reconnect(record)
+        task = self._ledger.get(task_id)
+        if task is None:
+            raise ModalLifecycleError("task not found")
+        existing = self._ledger.get_sandbox_creation(task_id)
+        if existing is not None:
+            snapshot, _ = await self._reconnect(existing)
             if snapshot.state is SandboxProviderState.RUNNING:
                 return snapshot
             if snapshot.state is not SandboxProviderState.STOPPED:
                 raise AmbiguousProviderStateError(
                     f"sandbox creation for task {task_id} is unresolved"
                 )
-            if record.provider_id is not None:
+            if existing.provider_id is not None:
                 return snapshot
-            # A successful identity lookup confirmed that the pre-network-call
-            # intent has no provider resource, so retrying creation is safe.
+        personal_key: str | None = None
+        credential_version: int | None = None
+        if task.owner_id is not None:
+            if self._credential_vault is None:
+                raise CredentialUnavailableError(
+                    "personal credential vault unavailable"
+                )
+            try:
+                resolved = await asyncio.to_thread(
+                    self._credential_vault.resolve, str(task.owner_id)
+                )
+            except (InvalidToken, psycopg.Error, SQLAlchemyError):
+                raise CredentialUnavailableError(
+                    "personal credential vault unavailable"
+                ) from None
+            if resolved is None:
+                raise CredentialUnavailableError("personal OpenRouter key required")
+            personal_key, credential_version = resolved
+            if self._credential_verifier is not None:
+                try:
+                    await self._credential_verifier.verify(personal_key)
+                except HTTPException as exc:
+                    if exc.status_code == 400:
+                        detail = "personal OpenRouter key invalid; update and retry"
+                    elif exc.status_code == 429:
+                        detail = "OpenRouter limit reached; retry later"
+                    else:
+                        detail = "OpenRouter unavailable; retry later"
+                    raise CredentialUnavailableError(detail) from None
+        name, tags = _sandbox_identity(self._deployment, task_id)
+        if existing is None:
+            record, _ = self._ledger.begin_sandbox_creation(
+                task_id=task_id,
+                deployment=self._deployment,
+                sandbox_name=name,
+                tags_json=json.dumps(tags, sort_keys=True, separators=(",", ":")),
+                session_api_key=secrets.token_urlsafe(32),
+                credential_version=credential_version,
+            )
+        else:
+            record = self._ledger.set_sandbox_credential_version(
+                task_id, credential_version
+            )
 
         try:
             env = dict(self._sandbox_env)
+            if task.owner_id is not None:
+                env.pop("OPENROUTER_API_KEY", None)
+                assert personal_key is not None
+                env["OPENROUTER_API_KEY"] = personal_key
             env["GG_SESSION_API_KEYS"] = record.session_api_key
             handle = await self._provider.create(
                 name=record.sandbox_name,
@@ -532,6 +586,8 @@ def lifecycle_from_settings(
     ledger: TaskLedger,
     settings: RuntimeSettings,
     provider: Provider | None = None,
+    credential_vault: Any | None = None,
+    credential_verifier: OpenRouterKeyVerifier | None = None,
 ) -> ModalSandboxLifecycle:
     """Construct the single concrete production lifecycle from runtime settings."""
 
@@ -551,6 +607,8 @@ def lifecycle_from_settings(
         startup_timeout=settings.modal_startup_timeout_seconds,
         provider_timeout=settings.modal_provider_timeout_seconds,
         sandbox_env=sandbox_env_from_settings(settings),
+        credential_vault=credential_vault,
+        credential_verifier=credential_verifier,
     )
 
 

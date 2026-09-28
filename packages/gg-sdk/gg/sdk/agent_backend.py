@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveFloat
 
 
 DEFAULT_PI_MODEL = "z-ai/glm-5.3-flashx"
+PI_MODEL_CATALOG = (
+    DEFAULT_PI_MODEL,
+    "anthropic/claude-sonnet-4.5",
+)
 
 
 class PiAgentConfig(BaseModel):

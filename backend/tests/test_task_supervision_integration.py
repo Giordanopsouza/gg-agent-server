@@ -41,6 +41,7 @@ class FakeAgentState:
     phase: TaskExecutionPhase = TaskExecutionPhase.COMPLETED
     conversation_on_start: bool = True
     distinct_execution_id: bool = False
+    start_models: list[str] = field(default_factory=list)
 
 
 def _build_fake_agent(state: FakeAgentState) -> FastAPI:
@@ -48,6 +49,7 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
 
     @app.post("/api/task-executions/start")
     async def start(body: StartTaskExecutionRequest) -> TaskExecutionRecord:
+        state.start_models.append(body.model)
         existing = next(
             (
                 item
@@ -67,6 +69,7 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
             ),
             task_id=body.task_id,
             repository=body.repository,
+            model=body.model,
             start_key=body.start_key,
             phase=(
                 TaskExecutionPhase.PREPARING
@@ -254,6 +257,7 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
                 json={
                     "prompt": "do work",
                     "idempotency_key": "k1",
+                    "model": "anthropic/claude-sonnet-4.5",
                 },
             )
             task_id = created.json()["id"]
@@ -275,6 +279,7 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
     assert result.json()["publication"] is None
     assert result.json()["evidence_complete"] is True
     assert lifecycle.terminate_calls == [task_id]
+    assert state.start_models == ["anthropic/claude-sonnet-4.5"]
 
 
 @pytest.mark.anyio

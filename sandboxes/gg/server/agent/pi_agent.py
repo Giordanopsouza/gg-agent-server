@@ -28,6 +28,7 @@ from gg.server.agent.exceptions import (
     AgentTimeoutError,
 )
 from gg.server.agent.local_workspace import LocalWorkspace
+from gg.server.secret_redaction import redact_secret
 
 
 _STDERR_LIMIT = 16 * 1024
@@ -273,7 +274,7 @@ class PiRpcAgent:
                 message = f"Pi exited before agent_settled (exit code {return_code})"
                 if detail:
                     message = f"{message}: {detail}"
-                raise AgentProcessError(message)
+                raise AgentProcessError(self._provider_error(detail) or message)
             if isinstance(item, AgentProtocolError):
                 raise item
             if not isinstance(item, dict):
@@ -289,7 +290,10 @@ class PiRpcAgent:
                     )
                 if item.get("success") is not True:
                     detail = self._response_error(item, api_key)
-                    raise AgentPromptError(f"Pi rejected the prompt{detail}")
+                    raise AgentPromptError(
+                        self._provider_error(detail)
+                        or f"Pi rejected the prompt{detail}"
+                    )
                 prompt_accepted = True
                 continue
 
@@ -312,6 +316,9 @@ class PiRpcAgent:
         emit: EventEmitter,
         api_key: str,
     ) -> None:
+        # Pi can echo its environment in tool arguments, results, or prose.
+        # Scrub the entire JSON frame before any event reaches disk or a client.
+        message = redact_secret(message, api_key)
         message_type = message.get("type")
         if message_type == "message_end":
             completed = self._mapping_field(message, "message")
@@ -320,7 +327,9 @@ class PiRpcAgent:
             if completed.get("stopReason") == "error":
                 detail = self._sanitize(str(completed.get("errorMessage", "")), api_key)
                 suffix = f": {detail}" if detail else ""
-                raise AgentProcessError(f"Pi assistant failed{suffix}")
+                raise AgentProcessError(
+                    self._provider_error(detail) or f"Pi assistant failed{suffix}"
+                )
             emit(
                 EventKind.MESSAGE,
                 {"role": "assistant", "text": self._assistant_text(completed)},
@@ -575,6 +584,19 @@ class PiRpcAgent:
             return ""
         detail = cls._sanitize(raw, api_key)
         return f": {detail}" if detail else ""
+
+    @staticmethod
+    def _provider_error(detail: str) -> str | None:
+        lowered = detail.lower()
+        if any(word in lowered for word in ("unauthorized", "invalid api key", "401")):
+            return "OpenRouter authentication failed; update the personal key and retry"
+        if any(
+            word in lowered for word in ("insufficient", "credits", "balance", "402")
+        ):
+            return "OpenRouter balance is insufficient; add credit and retry"
+        if any(word in lowered for word in ("rate limit", "too many requests", "429")):
+            return "OpenRouter rate limit reached; retry later"
+        return None
 
     @staticmethod
     def _sanitize(value: str, api_key: str) -> str:

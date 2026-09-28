@@ -15,6 +15,7 @@ from uuid import UUID
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.storage import StorageLimits, admission_pressure
+from gg.sdk.agent_backend import PI_MODEL_CATALOG
 from gg.sdk.task_supervision import RetryTaskRequest, TaskResultRecord
 from gg.sdk.tasks import CreateTaskRequest, TaskRecord, TaskState
 
@@ -57,6 +58,8 @@ class TaskService:
 
     # Validate one submission request against the configured limits.
     def validate(self, request: CreateTaskRequest) -> None:
+        if request.model not in PI_MODEL_CATALOG:
+            raise TaskValidationError("unsupported model")
         if request.repository is not None and not _REPOSITORY_RE.match(
             request.repository
         ):
@@ -116,6 +119,7 @@ class TaskService:
             prompt=request.prompt,
             base_ref=request.base_ref,
             retry_of=request.retry_of,
+            model=request.model,
             owner_id=owner_id,
         )
         if not created and not self._matches_existing(record, request):
@@ -174,6 +178,7 @@ class TaskService:
             idempotency_key=request.idempotency_key,
             base_ref=base_ref,
             retry_of=task_id,
+            model=predecessor.model,
         )
         return self.submit(create, owner_id=owner_id)
 
@@ -211,6 +216,7 @@ class TaskService:
             and existing.prompt == request.prompt
             and existing.base_ref == request.base_ref
             and existing.retry_of == request.retry_of
+            and existing.model == request.model
         )
 
 

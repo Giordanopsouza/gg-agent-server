@@ -16,6 +16,7 @@ from psycopg.rows import dict_row
 from sqlalchemy import Engine
 
 from gg.runtime.postgres import RuntimePostgres
+from gg.sdk.agent_backend import DEFAULT_PI_MODEL
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.publication import PublicationRecord, PublicationState
 from gg.sdk.task_execution import AgentOutcome, CheckOutcome, TaskResultManifest
@@ -25,7 +26,7 @@ from gg.sdk.tasks import TaskRecord, TaskState
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 7
+SUPPORTED_SCHEMA_VERSION = 8
 
 # Outcomes recorded only after the agent finished successfully. A later sandbox
 # reconcile must not replace these with a failure.
@@ -101,6 +102,7 @@ class SandboxCreationRecord:
     sandbox_name: str
     tags_json: str
     session_api_key: str
+    credential_version: int | None
     provider_id: str | None
     provider_state: SandboxProviderState
     detail: str | None
@@ -115,6 +117,7 @@ def _row_to_sandbox_record(row: dict[str, Any]) -> SandboxCreationRecord:
         sandbox_name=row["sandbox_name"],
         tags_json=row["tags_json"],
         session_api_key=row["session_api_key"],
+        credential_version=row["credential_version"],
         provider_id=row["provider_id"],
         provider_state=SandboxProviderState(row["provider_state"]),
         detail=row["detail"],
@@ -172,6 +175,7 @@ def _row_to_record(row: dict[str, Any]) -> TaskRecord:
         base_ref=row["base_ref"],
         base_sha=row["base_sha"],
         retry_of=row["retry_of"],
+        model=row["model"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         outcome_detail=row["outcome_detail"],
@@ -250,6 +254,7 @@ class TaskLedger:
         prompt: str,
         base_ref: str | None,
         retry_of: str | None,
+        model: str = DEFAULT_PI_MODEL,
         owner_id: UUID | None = None,
     ) -> tuple[TaskRecord, bool]:
         assert self._conn is not None
@@ -283,11 +288,12 @@ class TaskLedger:
                     """
                     INSERT INTO tasks (
                         id, seq, state, idempotency_key, owner_id, repository,
-                        prompt, base_ref, base_sha, retry_of, created_at, updated_at,
+                        prompt, base_ref, base_sha, retry_of, model,
+                        created_at, updated_at,
                         outcome_detail, check_status, sandbox_cleanup_status
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, NULL,
-                        %s, %s, %s, NULL, NULL, NULL
+                        %s, %s, %s, %s, NULL, NULL, NULL
                     )
                     """,
                     (
@@ -300,6 +306,7 @@ class TaskLedger:
                         prompt,
                         base_ref,
                         retry_of,
+                        model,
                         now,
                         now,
                     ),
@@ -319,6 +326,7 @@ class TaskLedger:
                 prompt=prompt,
                 base_ref=base_ref,
                 retry_of=retry_of,
+                model=model,
                 created_at=datetime.fromisoformat(now),
                 updated_at=datetime.fromisoformat(now),
             ),
@@ -621,6 +629,7 @@ class TaskLedger:
         sandbox_name: str,
         tags_json: str,
         session_api_key: str,
+        credential_version: int | None = None,
     ) -> tuple[SandboxCreationRecord, bool]:
         """Persist creation intent before any provider call."""
 
@@ -639,9 +648,10 @@ class TaskLedger:
                     """
                     INSERT INTO sandbox_creations (
                         task_id, deployment, sandbox_name, tags_json,
-                        session_api_key, provider_id, provider_state, detail,
+                        session_api_key, credential_version, provider_id,
+                        provider_state, detail,
                         created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, NULL, %s, NULL, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, NULL, %s, %s)
                     """,
                     (
                         task_id,
@@ -649,6 +659,7 @@ class TaskLedger:
                         sandbox_name,
                         tags_json,
                         session_api_key,
+                        credential_version,
                         SandboxProviderState.CREATING.value,
                         now,
                         now,
@@ -671,6 +682,21 @@ class TaskLedger:
                 "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_sandbox_record(row) if row is not None else None
+
+    def set_sandbox_credential_version(
+        self, task_id: str, version: int | None
+    ) -> SandboxCreationRecord:
+        """Record the newly resolved version before retrying an absent provider."""
+        assert self._conn is not None
+        with self._lock:
+            row = self._conn.execute(
+                "UPDATE sandbox_creations SET credential_version = %s "
+                "WHERE task_id = %s RETURNING *",
+                (version, task_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return _row_to_sandbox_record(row)
 
     def update_sandbox_creation(
         self,
@@ -1454,9 +1480,13 @@ class TaskLedger:
                     """
                     INSERT INTO retention_tombstones (
                         idempotency_key, owner_id, task_id, repository, prompt,
-                        base_ref, retry_of, terminal_state, seq, created_at, updated_at,
+                        base_ref, retry_of, model, terminal_state, seq,
+                        created_at, updated_at,
                         remote_effect_json, payload_expired_at, expires_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s
+                    )
                     ON CONFLICT(task_id) DO UPDATE SET
                         remote_effect_json = excluded.remote_effect_json,
                         payload_expired_at = excluded.payload_expired_at,
@@ -1470,6 +1500,7 @@ class TaskLedger:
                         record["prompt"],
                         record["base_ref"],
                         record["retry_of"],
+                        record["model"],
                         record["state"],
                         record["seq"],
                         record["created_at"],
@@ -1520,6 +1551,7 @@ class TaskLedger:
             prompt=row["prompt"],
             base_ref=row["base_ref"],
             retry_of=row["retry_of"],
+            model=row["model"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             payload_expired=True,

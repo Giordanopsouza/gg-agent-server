@@ -323,6 +323,7 @@ class TaskSupervisionManager:
             task_branch=task_branch,
             start_key=task_id,
             deadline_at=deadline_at,
+            model=task.model,
         )
         try:
             record, _ = await client.start(request)

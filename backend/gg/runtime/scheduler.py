@@ -25,6 +25,7 @@ from gg.runtime.ledger import (
 from gg.runtime.modal_sandbox import (
     AmbiguousProviderStateError,
     ConflictingSandboxesError,
+    CredentialUnavailableError,
     ModalLifecycleError,
     ModalSandboxLifecycle,
 )
@@ -303,6 +304,12 @@ class TaskScheduler:
     async def _provision(self, task_id: str) -> None:
         try:
             snapshot = await self._lifecycle.create(task_id)
+        except CredentialUnavailableError as exc:
+            self._ledger.finish_task(
+                task_id, state=TaskState.FAILED, outcome_detail=str(exc)
+            )
+            self._ledger.release_reservation(task_id)
+            return
         except AmbiguousProviderStateError as exc:
             self._ledger.update_reservation(
                 task_id,

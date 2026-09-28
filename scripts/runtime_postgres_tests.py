@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from gg.runtime.db_models import Base
+from gg.runtime.ledger import SUPPORTED_SCHEMA_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,7 +43,7 @@ def create_runtime_schema(admin_url: str, schema: str) -> None:
             translated.execute(
                 Base.metadata.tables["runtime_private.schema_meta"]
                 .insert()
-                .values(key="schema_version", value="7")
+                .values(key="schema_version", value=str(SUPPORTED_SCHEMA_VERSION))
             )
             quoted_schema = connection.dialect.identifier_preparer.quote(schema)
             connection.execute(
@@ -102,6 +103,7 @@ def main() -> int:
                             (
                                 str(ROOT / "backend"),
                                 str(ROOT / "packages/gg-sdk"),
+                                str(ROOT / "sandboxes"),
                                 str(ROOT),
                             )
                         ),
