@@ -13,6 +13,7 @@ from gg.runtime.ledger import (
 from gg.runtime.modal_sandbox import SandboxSnapshot
 from gg.runtime.scheduler import DeploymentLock, DispatchLockError, TaskScheduler
 from gg.sdk.tasks import TaskState
+from test_support.postgres_ledger import new_ledger
 
 
 def _submit(ledger: TaskLedger, key: str):
@@ -100,7 +101,7 @@ def test_deployment_lock_rejects_second_local_owner(tmp_path) -> None:
 
 
 def test_concurrent_claims_are_fifo_unique_and_bounded_to_ten(tmp_path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         tasks = [_submit(ledger, f"task-{number}") for number in range(12)]
 
         with ThreadPoolExecutor(max_workers=16) as pool:
@@ -123,7 +124,7 @@ def test_concurrent_claims_are_fifo_unique_and_bounded_to_ten(tmp_path) -> None:
 
 @pytest.mark.anyio
 async def test_recovery_after_crash_before_creation_provisions_once(tmp_path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "before-create")
         ledger.reserve_next(capacity=1)
         lifecycle = FakeLifecycle(ledger)
@@ -143,7 +144,7 @@ async def test_recovery_after_crash_before_creation_provisions_once(tmp_path) ->
 
 @pytest.mark.anyio
 async def test_recovery_adopts_create_lost_before_id_persistence(tmp_path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "after-provider-create")
         ledger.reserve_next(capacity=1)
         _record_creation(ledger, task.id, provider_id=None)
@@ -168,7 +169,7 @@ async def test_recovery_adopts_create_lost_before_id_persistence(tmp_path) -> No
 
 @pytest.mark.anyio
 async def test_recovery_during_running_reconnects_without_reprovision(tmp_path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "during-running")
         ledger.reserve_next(capacity=1)
         _record_creation(ledger, task.id, provider_id="running-provider")
@@ -192,7 +193,7 @@ async def test_recovery_during_running_reconnects_without_reprovision(tmp_path) 
 async def test_recovery_during_termination_confirms_absence_before_release(
     tmp_path,
 ) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "during-termination")
         ledger.reserve_next(capacity=1)
         _record_creation(ledger, task.id, provider_id="stopping-provider")
@@ -215,7 +216,7 @@ async def test_recovery_during_termination_confirms_absence_before_release(
 
 @pytest.mark.anyio
 async def test_unknown_reconciliation_blocks_capacity_and_is_visible(tmp_path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         first = _submit(ledger, "unknown")
         second = _submit(ledger, "waiting")
         ledger.reserve_next(capacity=1)
@@ -240,13 +241,13 @@ async def test_unknown_reconciliation_blocks_capacity_and_is_visible(tmp_path) -
 
 @pytest.mark.anyio
 async def test_confirmed_sandbox_loss_fails_without_erasing_evidence(tmp_path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "lost")
         ledger.reserve_next(capacity=1)
         _record_creation(ledger, task.id, provider_id="lost-provider")
         assert ledger._conn is not None  # noqa: SLF001
         ledger._conn.execute(  # noqa: SLF001
-            "UPDATE tasks SET outcome_detail = ?, check_status = ? WHERE id = ?",
+            "UPDATE tasks SET outcome_detail = %s, check_status = %s WHERE id = %s",
             ("captured output", "not_run", task.id),
         )
         lifecycle = FakeLifecycle(ledger, state=SandboxProviderState.STOPPED)
@@ -271,7 +272,7 @@ async def test_confirmed_sandbox_loss_fails_without_erasing_evidence(tmp_path) -
 async def test_reconcile_keeps_published_task_completed_when_sandbox_stops(
     tmp_path,
 ) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "published-then-stopped")
         ledger.reserve_next(capacity=1)
         _record_creation(ledger, task.id, provider_id="published-provider")
@@ -298,7 +299,7 @@ async def test_reconcile_keeps_published_task_completed_when_sandbox_stops(
 async def test_reconcile_does_not_demote_completed_task_while_sandbox_runs(
     tmp_path,
 ) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "published-still-running")
         ledger.reserve_next(capacity=1)
         _record_creation(ledger, task.id, provider_id="running-provider")
@@ -325,7 +326,7 @@ async def test_reconcile_does_not_demote_completed_task_while_sandbox_runs(
 async def test_reconcile_completes_published_task_stuck_after_cleanup(
     tmp_path,
 ) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         task = _submit(ledger, "stuck-finalizing")
         ledger.reserve_next(capacity=1)
         ledger.finish_task(

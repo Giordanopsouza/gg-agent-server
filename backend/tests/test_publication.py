@@ -24,6 +24,7 @@ from gg.runtime.publication import (
 )
 from gg.sdk.publication import PublicationRequest, PublicationState
 from gg.sdk.task_execution import AgentOutcome, CheckOutcome, CommandCapture
+from test_support.postgres_ledger import new_ledger
 
 
 TOKEN = "super-secret-github-token-do-not-leak"
@@ -75,11 +76,13 @@ def _edit(work: Path, branch: str) -> None:
     (work / "README.md").write_text("changed by task\n", encoding="utf-8")
 
 
-def _ledger_with_task(repository: str = "owner/repo") -> tuple[TaskLedger, str]:
-    ledger = TaskLedger(db_path=":memory:")
+def _ledger_with_task(
+    repository: str = "owner/repo", *, key: str = "pub-1"
+) -> tuple[TaskLedger, str]:
+    ledger = new_ledger()
     ledger.open()
     record, _ = ledger.submit(
-        idempotency_key="pub-1",
+        idempotency_key=key,
         repository=repository,
         prompt="edit readme",
         base_ref="main",
@@ -447,7 +450,7 @@ async def test_no_changes_and_agent_failure_do_not_create_a_pr(
     assert skipped.pr_number is None
     assert skipped.detail == "no_changes"
 
-    ledger2, failed_id = _ledger_with_task()
+    ledger2, failed_id = _ledger_with_task(key="pub-2")
     github2 = FakeGitHub(ledger=ledger2, task_id=failed_id)
     failed = await _publisher(ledger2, github2).publish(
         _request(

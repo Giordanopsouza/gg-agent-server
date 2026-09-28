@@ -16,6 +16,7 @@ from gg.runtime.modal_sandbox import (
     SandboxConnection,
     lifecycle_from_settings,
 )
+from test_support.postgres_ledger import new_ledger
 
 
 @dataclass
@@ -80,7 +81,7 @@ class FakeProvider:
 
 
 def _ledger() -> TaskLedger:
-    ledger = TaskLedger(db_path=":memory:")
+    ledger = new_ledger()
     ledger.open()
     record, _ = ledger.submit(
         idempotency_key="submission-1",
@@ -92,7 +93,7 @@ def _ledger() -> TaskLedger:
     # Stable id keeps fake-provider assertions clear while preserving the FK.
     assert ledger._conn is not None  # noqa: SLF001
     ledger._conn.execute(  # noqa: SLF001
-        "UPDATE tasks SET id = 'task-1' WHERE id = ?", (record.id,)
+        "UPDATE tasks SET id = 'task-1' WHERE id = %s", (record.id,)
     )
     return ledger
 

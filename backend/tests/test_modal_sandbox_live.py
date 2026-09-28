@@ -9,8 +9,9 @@ from gg.runtime.config import (
     DEFAULT_MODAL_DEPLOYMENT,
     DEFAULT_MODAL_IMAGE_NAME,
 )
-from gg.runtime.ledger import SandboxProviderState, TaskLedger
+from gg.runtime.ledger import SandboxProviderState
 from gg.runtime.modal_sandbox import ModalProvider, ModalSandboxLifecycle
+from test_support.postgres_ledger import new_ledger
 
 
 @pytest.mark.modal
@@ -19,7 +20,7 @@ async def test_live_modal_create_health_reconnect_and_terminate(tmp_path) -> Non
     if os.getenv("GG_RUN_MODAL_TESTS") != "1":
         pytest.skip("set GG_RUN_MODAL_TESTS=1 to run the live Modal smoke")
 
-    ledger = TaskLedger(db_path=str(tmp_path / "modal-live.sqlite"))
+    ledger = new_ledger()
     ledger.open()
     task, _ = ledger.submit(
         idempotency_key="modal-live-smoke",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sqlite3
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -9,6 +9,7 @@ from starlette.testclient import TestClient, WebSocketDenialResponse
 
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.ledger import TaskLedger
+from test_support.postgres_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -18,14 +19,13 @@ def _settings(**overrides) -> RuntimeSettings:
     base = {
         "api_key": "control-secret",
         "image": "test-image:dev",
-        "task_db_path": ":memory:",
     }
     base.update(overrides)
     return RuntimeSettings(**base)
 
 
 def _app(settings: RuntimeSettings, *, ledger: TaskLedger | None = None):
-    return create_app(settings, task_ledger=ledger or TaskLedger(db_path=":memory:"))
+    return create_app(settings, task_ledger=ledger or new_ledger())
 
 
 def _payload(
@@ -296,10 +296,9 @@ def test_task_event_socket_requires_control_plane_key() -> None:
 
 @pytest.mark.anyio
 async def test_tasks_persist_across_app_restart(tmp_path) -> None:
-    db_path = str(tmp_path / "tasks.sqlite")
-    settings = _settings(task_db_path=db_path)
+    settings = _settings()
 
-    app1 = _app(settings, ledger=TaskLedger(db_path=db_path))
+    app1 = _app(settings, ledger=new_ledger())
     transport1 = ASGITransport(app=app1)
     async with httpx.AsyncClient(
         transport=transport1, base_url="http://runtime"
@@ -308,8 +307,8 @@ async def test_tasks_persist_across_app_restart(tmp_path) -> None:
             await client.post("/tasks", headers=_AUTH, json=_payload(key="k1"))
             await client.post("/tasks", headers=_AUTH, json=_payload(key="k2"))
 
-    # A second app instance over the same on-disk ledger must see prior work.
-    app2 = _app(settings, ledger=TaskLedger(db_path=db_path))
+    # A second app instance sees the same Postgres records.
+    app2 = _app(settings, ledger=new_ledger())
     transport2 = ASGITransport(app=app2)
     async with httpx.AsyncClient(
         transport=transport2, base_url="http://runtime"
@@ -325,28 +324,14 @@ async def test_tasks_persist_across_app_restart(tmp_path) -> None:
     assert new_task.json()["seq"] == 3
 
 
-def test_unsupported_future_schema_fails_startup(tmp_path) -> None:
-    db_path = str(tmp_path / "tasks.sqlite")
+def test_unsupported_future_schema_fails_startup() -> None:
     from gg.runtime.ledger import SUPPORTED_SCHEMA_VERSION
 
-    ledger = TaskLedger(db_path=db_path)
-    ledger.open()
-    ledger.submit(
-        idempotency_key="k1",
-        repository="owner/name",
-        prompt="p",
-        base_ref=None,
-        retry_of=None,
-    )
-    ledger.close()
-
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
-        (str(SUPPORTED_SCHEMA_VERSION + 1),),
-    )
-    conn.commit()
-    conn.close()
-
-    with pytest.raises(RuntimeError, match="unsupported task ledger schema version"):
-        TaskLedger(db_path=db_path).open()
+    ledger = new_ledger()
+    with patch.object(
+        TaskLedger, "_schema_version", return_value=SUPPORTED_SCHEMA_VERSION + 1
+    ):
+        with pytest.raises(
+            RuntimeError, match="unsupported Postgres ledger schema version"
+        ):
+            ledger.open()

@@ -1,7 +1,7 @@
 """Concrete Modal sandbox lifecycle for durable background tasks.
 
 This is deliberately one provider integration, not a provider registry.  The
-legacy Docker runtime remains a separate demo surface in ``gg.runtime.app``.
+The control plane runs sandbox tasks through the Modal lifecycle.
 """
 
 from __future__ import annotations
