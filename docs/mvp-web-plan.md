@@ -177,7 +177,7 @@ Na implementação, executar a sequência de QA do AGENTS.md, testes/build web, 
 
 ## Testes orientados à produção
 
-A [matriz de testes e liberação](mvp-production-tests.md) define quatro níveis e seus bloqueios. Antecipar a configuração HTTPS na 074; a 075 depende também de UI, integrações e limites completos. A entrega exige URL pública HTTPS (domínio apontando para o IP do servidor), não apenas localhost/IP:porta. Provar login real, isolamento, persistência após redeploy, PR correta, restore e limpeza; não aceitar apenas status succeeded.
+Antecipar a configuração HTTPS na 074; a 075 depende também de UI, integrações e limites completos. A entrega exige URL pública HTTPS (domínio apontando para o IP do servidor), não apenas localhost/IP:porta. Provar login real, isolamento, persistência após redeploy, PR correta, restore e limpeza; não aceitar apenas status succeeded.
 
 ## Depois do MVP
 

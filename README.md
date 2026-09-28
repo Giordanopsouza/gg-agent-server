@@ -73,9 +73,8 @@ baseline.
 
 ## Docs
 
-- [Architecture](docs/architecture.md)
 - [Component layout decision](docs/adr/0004-component-layout.md)
 - [SQLAlchemy and Alembic decision](docs/adr/0006-sqlalchemy-alembic.md)
+- [MVP web plan](docs/mvp-web-plan.md)
 - [Task web UI](frontend/README.md)
 - [Task tracker](docs/tasks/README.md)
-- [Modal sandboxes](docs/modal-sandboxes.md)
