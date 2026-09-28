@@ -20,7 +20,7 @@ from psycopg import sql
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "node_modules/.bin/supabase"
+CLI = Path(os.environ.get("SUPABASE_CLI", ROOT / "node_modules/.bin/supabase"))
 
 
 def cli(*args: str) -> str:

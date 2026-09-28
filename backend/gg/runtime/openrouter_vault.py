@@ -11,7 +11,8 @@ import httpx
 import psycopg
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, HTTPException, Request, Response
-from psycopg_pool import ConnectionPool
+from sqlalchemy import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.web_auth import (
@@ -28,16 +29,16 @@ NO_STORE = {"Cache-Control": "no-store"}
 
 
 class PostgresOpenRouterVault:
-    def __init__(self, pool: ConnectionPool, encryption_key: str) -> None:
-        self.pool = pool
+    def __init__(self, engine: Engine, encryption_key: str) -> None:
+        self.engine = engine
         self.cipher = Fernet(encryption_key)
 
     def status(self, owner_id: str) -> dict[str, Any]:
-        with self.pool.connection() as connection, connection.transaction():
-            connection.execute(
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(
                 "select set_config('app.user_id', %s, true)", (owner_id,)
             )
-            row = connection.execute(
+            row = connection.exec_driver_sql(
                 "select mask, credential_version "
                 "from vault_private.openrouter_credentials where owner_id = %s",
                 (UUID(owner_id),),
@@ -51,11 +52,11 @@ class PostgresOpenRouterVault:
     def replace(self, owner_id: str, api_key: str) -> dict[str, Any]:
         ciphertext = self.cipher.encrypt(api_key.encode())
         mask = f"••••{api_key[-4:]}"
-        with self.pool.connection() as connection, connection.transaction():
-            connection.execute(
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(
                 "select set_config('app.user_id', %s, true)", (owner_id,)
             )
-            row = connection.execute(
+            row = connection.exec_driver_sql(
                 "insert into vault_private.openrouter_credentials "
                 "(owner_id, ciphertext, mask) values (%s, %s, %s) "
                 "on conflict (owner_id) do update set "
@@ -69,11 +70,11 @@ class PostgresOpenRouterVault:
             return {"configured": True, "mask": mask, "version": row[0]}
 
     def remove(self, owner_id: str) -> dict[str, Any]:
-        with self.pool.connection() as connection, connection.transaction():
-            connection.execute(
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(
                 "select set_config('app.user_id', %s, true)", (owner_id,)
             )
-            row = connection.execute(
+            row = connection.exec_driver_sql(
                 "update vault_private.openrouter_credentials set "
                 "ciphertext = null, mask = null, "
                 "credential_version = credential_version + 1, "
@@ -145,7 +146,7 @@ def openrouter_vault_router(
         assert vault is not None
         try:
             return await asyncio.to_thread(vault.status, user_id)
-        except psycopg.Error:
+        except (SQLAlchemyError, psycopg.Error):
             raise HTTPException(
                 status_code=503, detail="credential vault unavailable", headers=NO_STORE
             ) from None
@@ -186,7 +187,7 @@ def openrouter_vault_router(
         assert vault is not None
         try:
             return await asyncio.to_thread(vault.replace, user_id, api_key)
-        except psycopg.Error:
+        except (SQLAlchemyError, psycopg.Error):
             raise HTTPException(
                 status_code=503, detail="credential vault unavailable", headers=NO_STORE
             ) from None
@@ -198,7 +199,7 @@ def openrouter_vault_router(
         assert vault is not None
         try:
             return await asyncio.to_thread(vault.remove, user_id)
-        except psycopg.Error:
+        except (SQLAlchemyError, psycopg.Error):
             raise HTTPException(
                 status_code=503, detail="credential vault unavailable", headers=NO_STORE
             ) from None

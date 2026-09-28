@@ -18,6 +18,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from joserfc import jwk, jwt
+from sqlalchemy.exc import SQLAlchemyError
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.web_sessions import PostgresWebSessions
@@ -235,7 +236,7 @@ async def authenticated_web_user(
         active = await asyncio.to_thread(
             sessions.active, user["id"], user["session_id"]
         )
-    except psycopg.Error:
+    except (SQLAlchemyError, psycopg.Error):
         raise HTTPException(
             status_code=503, detail="session store unavailable"
         ) from None
@@ -308,7 +309,7 @@ def web_auth_router(
                 profile_ready = await asyncio.to_thread(
                     sessions.ensure_profile, user["id"], user["session_id"]
                 )
-            except psycopg.Error:
+            except (SQLAlchemyError, psycopg.Error):
                 raise HTTPException(
                     status_code=503, detail="session store unavailable"
                 ) from None

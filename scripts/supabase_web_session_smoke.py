@@ -18,7 +18,7 @@ from gg.runtime.web_sessions import PostgresWebSessions
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "node_modules/.bin/supabase"
+CLI = Path(os.environ.get("SUPABASE_CLI", ROOT / "node_modules/.bin/supabase"))
 
 
 def main() -> None:
@@ -62,8 +62,9 @@ def main() -> None:
                 f"postgresql://gg_runtime:{quote(password, safe='')}"
                 "@127.0.0.1:54322/postgres?sslmode=disable"
             )
-            with RuntimePostgres.from_env().pool() as pool:
-                sessions = PostgresWebSessions(pool)
+            engine = RuntimePostgres.from_env().engine()
+            try:
+                sessions = PostgresWebSessions(engine)
                 assert sessions.active(user_id, session_id)
                 assert not sessions.ensure_profile(user_id, str(uuid.uuid4()))
                 assert sessions.ensure_profile(user_id, session_id)
@@ -83,6 +84,8 @@ def main() -> None:
                 with urlopen(logout, timeout=10):
                     pass
                 assert not sessions.active(user_id, session_id)
+            finally:
+                engine.dispose()
         finally:
             os.environ.pop("GG_RUNTIME_DATABASE_URL", None)
             admin.execute("alter role gg_runtime password null")

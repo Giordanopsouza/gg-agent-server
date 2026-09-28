@@ -1,14 +1,12 @@
-"""Bounded Postgres pool configuration for the runtime.
-
-Only server code imports this module. The caller owns pool startup/shutdown.
-"""
+"""Bounded SQLAlchemy/Postgres engine configuration for the runtime."""
 
 import os
 from dataclasses import dataclass
 from importlib.resources import files
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from psycopg_pool import ConnectionPool
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.engine import make_url
 
 
 PRODUCTION_POOLER_HOST = "aws-0-us-west-2.pooler.supabase.com"
@@ -58,20 +56,24 @@ class RuntimePostgres:
             raise ValueError("GG_DB_POOL_MAX must be between 1 and 8")
         return cls(url=url, max_size=max_size)
 
-    def pool(self) -> ConnectionPool:
-        # Keep prepared statements disabled across local and hosted pool modes.
-        kwargs = self.connection_kwargs()
-        return ConnectionPool(
-            conninfo=self.url,
-            min_size=0,
-            max_size=self.max_size,
-            timeout=5,
-            kwargs=kwargs,
-            open=False,
+    def engine(self) -> Engine:
+        """Build the process engine; its QueuePool is opened lazily."""
+        url = make_url(self.url).set(drivername="postgresql+psycopg")
+        return create_engine(
+            url,
+            connect_args=self.connection_kwargs(),
+            pool_size=self.max_size,
+            max_overflow=0,
+            pool_timeout=5,
+            pool_pre_ping=True,
         )
 
     def connection_kwargs(self) -> dict[str, object]:
-        kwargs: dict[str, object] = {"prepare_threshold": None, "connect_timeout": 5}
+        # Keep prepared statements disabled across local and hosted pool modes.
+        kwargs: dict[str, object] = {
+            "prepare_threshold": None,
+            "connect_timeout": 5,
+        }
         if urlsplit(self.url).hostname not in {"127.0.0.1", "localhost", "::1"}:
             kwargs["sslrootcert"] = str(
                 files("gg.runtime").joinpath("certs/supabase-prod-ca-2021.crt")
