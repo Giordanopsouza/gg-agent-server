@@ -1,26 +1,20 @@
-"""Legacy SQLite fixture and shared task-ledger operations.
-
-The production runtime instantiates ``PostgresTaskLedger``. This module keeps
-the old SQLite implementation for deterministic fixture tests while the
-Postgres subclass reuses its task operations against a Postgres connection.
-Neither implementation imports ``gg.server``.
-
-SQLite fixtures use ``BEGIN IMMEDIATE``; the Postgres connection adapter uses
-a transaction-scoped advisory lock for the same multi-step decisions.
-"""
+"""Postgres-backed durable task ledger for the control plane."""
 
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+import psycopg
+from psycopg import sql
+from psycopg.rows import dict_row
+
+from gg.runtime.postgres import RuntimePostgres
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.publication import PublicationRecord, PublicationState
 from gg.sdk.task_execution import AgentOutcome, CheckOutcome, TaskResultManifest
@@ -113,7 +107,7 @@ class SandboxCreationRecord:
     updated_at: datetime
 
 
-def _row_to_sandbox_record(row: sqlite3.Row) -> SandboxCreationRecord:
+def _row_to_sandbox_record(row: dict[str, Any]) -> SandboxCreationRecord:
     return SandboxCreationRecord(
         task_id=row["task_id"],
         deployment=row["deployment"],
@@ -128,7 +122,7 @@ def _row_to_sandbox_record(row: sqlite3.Row) -> SandboxCreationRecord:
     )
 
 
-def _row_to_reservation(row: sqlite3.Row) -> ReservationRecord:
+def _row_to_reservation(row: dict[str, Any]) -> ReservationRecord:
     return ReservationRecord(
         task_id=row["task_id"],
         phase=ReservationPhase(row["phase"]),
@@ -142,7 +136,7 @@ def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _row_to_publication(row: sqlite3.Row) -> PublicationRecord:
+def _row_to_publication(row: dict[str, Any]) -> PublicationRecord:
     draft = row["pr_draft"]
     return PublicationRecord(
         task_id=row["task_id"],
@@ -165,7 +159,7 @@ def _row_to_publication(row: sqlite3.Row) -> PublicationRecord:
     )
 
 
-def _row_to_record(row: sqlite3.Row) -> TaskRecord:
+def _row_to_record(row: dict[str, Any]) -> TaskRecord:
     return TaskRecord(
         id=row["id"],
         seq=row["seq"],
@@ -188,48 +182,46 @@ def _row_to_record(row: sqlite3.Row) -> TaskRecord:
 
 
 class TaskLedger:
-    """Legacy SQLite fixture whose task methods back the Postgres subclass."""
+    """Durable runtime ledger stored in the private Postgres schema."""
 
-    def __init__(
-        self, *, db_path: str, schema_version: int = SUPPORTED_SCHEMA_VERSION
-    ) -> None:
-        self._db_path = db_path
-        self._expected_schema_version = schema_version
+    def __init__(self, database: RuntimePostgres) -> None:
+        self._database = database
         self._lock = threading.Lock()
-        self._conn: sqlite3.Connection | None = None
+        self._conn: psycopg.Connection[Any] | None = None
 
-    # Open the database, initialize schema, and verify the schema version.
     def open(self) -> None:
         if self._conn is not None:
             return
-        if self._db_path != ":memory:":
-            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(
-            self._db_path, isolation_level=None, check_same_thread=False
+        connection = psycopg.connect(
+            self._database.url,
+            autocommit=True,
+            row_factory=dict_row,
+            **self._database.connection_kwargs(),
         )
-        if self._db_path != ":memory:":
-            # The v2 ledger contains sandbox session credentials; keep the
-            # control-plane database private even under a permissive umask.
-            os.chmod(self._db_path, 0o600)
-        conn.row_factory = sqlite3.Row
-        # WAL improves crash safety and allows readers during writes.
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.OperationalError:
-            # :memory: databases do not support WAL; fall back silently.
-            pass
-        conn.execute("PRAGMA foreign_keys=ON")
-        self._conn = conn
-        self._ensure_schema()
+            connection.execute(
+                sql.SQL("SET search_path TO {}").format(
+                    sql.Identifier(self._database.schema)
+                )
+            )
+            self._conn = connection
+            version = self._schema_version()
+            if version != SUPPORTED_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"unsupported Postgres ledger schema version {version}; "
+                    f"expected {SUPPORTED_SCHEMA_VERSION}"
+                )
+        except Exception:
+            connection.close()
+            self._conn = None
+            raise
 
-    # Close the database connection; safe to call once.
     def close(self) -> None:
         with self._lock:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
 
-    # Context-manager support for tests and lifespan wiring.
     def __enter__(self) -> TaskLedger:
         self.open()
         return self
@@ -237,381 +229,12 @@ class TaskLedger:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    # Create the schema if absent and verify the recorded schema version.
-    def _ensure_schema(self) -> None:
+    def _begin_write(self) -> None:
         assert self._conn is not None
-        with self._lock:
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schema_meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
-            row = self._conn.execute(
-                "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-            ).fetchone()
-            if row is None:
-                self._conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS tasks (
-                        id TEXT PRIMARY KEY,
-                        seq INTEGER NOT NULL UNIQUE,
-                        state TEXT NOT NULL,
-                        idempotency_key TEXT NOT NULL UNIQUE,
-                        repository TEXT NOT NULL,
-                        prompt TEXT NOT NULL,
-                        base_ref TEXT,
-                        base_sha TEXT,
-                        retry_of TEXT,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        outcome_detail TEXT,
-                        check_status TEXT,
-                        sandbox_cleanup_status TEXT
-                    )
-                    """
-                )
-                self._conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_tasks_seq ON tasks(seq)"
-                )
-                self._conn.execute(
-                    "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
-                    ("schema_version", str(self._expected_schema_version)),
-                )
-            else:
-                actual = int(row["value"])
-                if actual > self._expected_schema_version:
-                    raise RuntimeError(
-                        f"unsupported task ledger schema version {actual}; "
-                        f"this runtime supports {self._expected_schema_version}"
-                    )
-                if actual < 1:
-                    raise RuntimeError(
-                        f"unsupported task ledger schema version {actual}"
-                    )
+        self._conn.execute("BEGIN")
+        # Serialize sequence, capacity, and publication decisions across workers.
+        self._conn.execute("SELECT pg_advisory_xact_lock(780078)")
 
-            actual = int(
-                self._conn.execute(
-                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-                ).fetchone()["value"]
-            )
-            if actual < 2 <= self._expected_schema_version:
-                self._conn.execute("BEGIN IMMEDIATE")
-                try:
-                    self._create_sandbox_schema()
-                    self._conn.execute(
-                        "UPDATE schema_meta SET value = '2' "
-                        "WHERE key = 'schema_version'"
-                    )
-                    self._conn.execute("COMMIT")
-                except Exception:
-                    self._conn.execute("ROLLBACK")
-                    raise
-
-            actual = int(
-                self._conn.execute(
-                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-                ).fetchone()["value"]
-            )
-            if actual < 3 <= self._expected_schema_version:
-                self._conn.execute("BEGIN IMMEDIATE")
-                try:
-                    self._create_reservation_schema()
-                    self._conn.execute(
-                        "UPDATE schema_meta SET value = '3' "
-                        "WHERE key = 'schema_version'"
-                    )
-                    self._conn.execute("COMMIT")
-                except Exception:
-                    self._conn.execute("ROLLBACK")
-                    raise
-
-            actual = int(
-                self._conn.execute(
-                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-                ).fetchone()["value"]
-            )
-            if actual < 4 <= self._expected_schema_version:
-                self._conn.execute("BEGIN IMMEDIATE")
-                try:
-                    self._create_publication_schema()
-                    self._conn.execute(
-                        "UPDATE schema_meta SET value = '4' "
-                        "WHERE key = 'schema_version'"
-                    )
-                    self._conn.execute("COMMIT")
-                except Exception:
-                    self._conn.execute("ROLLBACK")
-                    raise
-
-            actual = int(
-                self._conn.execute(
-                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-                ).fetchone()["value"]
-            )
-            if actual < 5 <= self._expected_schema_version:
-                self._conn.execute("BEGIN IMMEDIATE")
-                try:
-                    self._create_supervision_schema()
-                    self._conn.execute(
-                        "UPDATE schema_meta SET value = '5' "
-                        "WHERE key = 'schema_version'"
-                    )
-                    self._conn.execute("COMMIT")
-                except Exception:
-                    self._conn.execute("ROLLBACK")
-                    raise
-
-            actual = int(
-                self._conn.execute(
-                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-                ).fetchone()["value"]
-            )
-            if actual < 6 <= self._expected_schema_version:
-                self._conn.execute("BEGIN IMMEDIATE")
-                try:
-                    self._create_retention_schema()
-                    self._conn.execute(
-                        "UPDATE schema_meta SET value = '6' "
-                        "WHERE key = 'schema_version'"
-                    )
-                    self._conn.execute("COMMIT")
-                except Exception:
-                    self._conn.execute("ROLLBACK")
-                    raise
-
-            if self._expected_schema_version >= 2:
-                self._create_sandbox_schema()
-            if self._expected_schema_version >= 3:
-                self._create_reservation_schema()
-            if self._expected_schema_version >= 4:
-                self._create_publication_schema()
-            if self._expected_schema_version >= 5:
-                self._create_supervision_schema()
-            if self._expected_schema_version >= 6:
-                self._create_retention_schema()
-
-    def _create_sandbox_schema(self) -> None:
-        assert self._conn is not None
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sandbox_creations (
-                task_id TEXT PRIMARY KEY,
-                deployment TEXT NOT NULL,
-                sandbox_name TEXT NOT NULL,
-                tags_json TEXT NOT NULL,
-                session_api_key TEXT NOT NULL,
-                provider_id TEXT,
-                provider_state TEXT NOT NULL,
-                detail TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            )
-            """
-        )
-        self._conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sandbox_name "
-            "ON sandbox_creations(deployment, sandbox_name)"
-        )
-
-    def _create_reservation_schema(self) -> None:
-        assert self._conn is not None
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_reservations (
-                task_id TEXT PRIMARY KEY,
-                phase TEXT NOT NULL,
-                condition TEXT,
-                reserved_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            )
-            """
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_reservations_reserved_at "
-            "ON task_reservations(reserved_at)"
-        )
-        # A v2 ledger could contain lifecycle intents created before durable
-        # reservations existed. Recover all non-stopped ownership so migration
-        # cannot accidentally make that provider capacity available twice.
-        self._conn.execute(
-            """
-            INSERT OR IGNORE INTO task_reservations (
-                task_id, phase, condition, reserved_at, updated_at
-            )
-            SELECT
-                task_id,
-                CASE provider_state
-                    WHEN 'running' THEN ?
-                    WHEN 'unknown' THEN ?
-                    ELSE ?
-                END,
-                CASE WHEN provider_state = 'unknown' THEN detail ELSE NULL END,
-                created_at,
-                updated_at
-            FROM sandbox_creations
-            WHERE provider_state != 'stopped'
-            """,
-            (
-                ReservationPhase.RUNNING.value,
-                ReservationPhase.UNRESOLVED_CREATION.value,
-                ReservationPhase.STARTING.value,
-            ),
-        )
-        self._conn.execute(
-            """
-            UPDATE tasks
-            SET state = CASE
-                WHEN (SELECT phase FROM task_reservations
-                      WHERE task_id = tasks.id) = ? THEN ?
-                ELSE ?
-            END
-            WHERE state = ?
-              AND id IN (SELECT task_id FROM task_reservations)
-            """,
-            (
-                ReservationPhase.RUNNING.value,
-                TaskState.RUNNING.value,
-                TaskState.STARTING.value,
-                TaskState.QUEUED.value,
-            ),
-        )
-
-    def _create_supervision_schema(self) -> None:
-        assert self._conn is not None
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_supervisions (
-                task_id TEXT PRIMARY KEY,
-                execution_id TEXT NOT NULL,
-                task_branch TEXT NOT NULL,
-                start_key TEXT NOT NULL UNIQUE,
-                conversation_id TEXT,
-                cancel_requested INTEGER NOT NULL DEFAULT 0,
-                tail_gap_possible INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_event_copies (
-                task_id TEXT NOT NULL,
-                cursor_seq INTEGER NOT NULL,
-                source_id TEXT NOT NULL,
-                source_seq INTEGER NOT NULL,
-                event_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (task_id, cursor_seq),
-                UNIQUE (task_id, source_id, source_seq),
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_task_event_copies_task
-            ON task_event_copies(task_id, cursor_seq)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_message_receipts (
-                task_id TEXT NOT NULL,
-                message_id TEXT NOT NULL,
-                content TEXT NOT NULL,
-                status TEXT NOT NULL,
-                detail TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (task_id, message_id),
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_results (
-                task_id TEXT PRIMARY KEY,
-                execution_id TEXT,
-                manifest_json TEXT,
-                evidence_complete INTEGER NOT NULL DEFAULT 0,
-                evidence_detail TEXT,
-                archived_at TEXT,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            )
-            """
-        )
-
-    def _create_retention_schema(self) -> None:
-        assert self._conn is not None
-        columns = {
-            row["name"]
-            for row in self._conn.execute("PRAGMA table_info(tasks)").fetchall()
-        }
-        if "payload_expired" not in columns:
-            self._conn.execute(
-                """
-                ALTER TABLE tasks
-                ADD COLUMN payload_expired INTEGER NOT NULL DEFAULT 0
-                """
-            )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS retention_tombstones (
-                idempotency_key TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL,
-                repository TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                base_ref TEXT,
-                retry_of TEXT,
-                terminal_state TEXT NOT NULL,
-                seq INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                remote_effect_json TEXT,
-                payload_expired_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )
-            """
-        )
-
-    def _create_publication_schema(self) -> None:
-        assert self._conn is not None
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS publication_intents (
-                task_id TEXT PRIMARY KEY,
-                repository TEXT NOT NULL,
-                task_branch TEXT NOT NULL,
-                base_ref TEXT NOT NULL,
-                task_marker TEXT NOT NULL,
-                commit_sha TEXT,
-                state TEXT NOT NULL,
-                check_outcome TEXT NOT NULL,
-                agent_outcome TEXT NOT NULL,
-                pr_number INTEGER,
-                pr_url TEXT,
-                pr_draft INTEGER,
-                pr_author TEXT,
-                pr_state TEXT,
-                detail TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            )
-            """
-        )
-
-    # Atomically insert a new queued task or return an existing one by
-    # idempotency key. Returns (record, created) where created is False when
-    # the idempotency key already existed.
     def submit(
         self,
         *,
@@ -623,23 +246,22 @@ class TaskLedger:
     ) -> tuple[TaskRecord, bool]:
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 existing = self._conn.execute(
-                    "SELECT * FROM tasks WHERE idempotency_key = ?",
+                    "SELECT * FROM tasks WHERE idempotency_key = %s",
                     (idempotency_key,),
                 ).fetchone()
                 if existing is not None:
                     self._conn.execute("COMMIT")
                     return _row_to_record(existing), False
-                if self._schema_version() >= 6:
-                    tombstone = self._conn.execute(
-                        "SELECT * FROM retention_tombstones WHERE idempotency_key = ?",
-                        (idempotency_key,),
-                    ).fetchone()
-                    if tombstone is not None:
-                        self._conn.execute("COMMIT")
-                        return self._record_from_tombstone(tombstone), False
+                tombstone = self._conn.execute(
+                    "SELECT * FROM retention_tombstones WHERE idempotency_key = %s",
+                    (idempotency_key,),
+                ).fetchone()
+                if tombstone is not None:
+                    self._conn.execute("COMMIT")
+                    return self._record_from_tombstone(tombstone), False
 
                 seq_row = self._conn.execute(
                     "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM tasks"
@@ -653,7 +275,10 @@ class TaskLedger:
                         id, seq, state, idempotency_key, repository, prompt,
                         base_ref, base_sha, retry_of, created_at, updated_at,
                         outcome_detail, check_status, sandbox_cleanup_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL)
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, NULL,
+                        %s, %s, %s, NULL, NULL, NULL
+                    )
                     """,
                     (
                         task_id,
@@ -694,17 +319,17 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
-                self._conn.execute(
-                    "UPDATE tasks SET base_sha = ?, updated_at = ? WHERE id = ?",
+                updated = self._conn.execute(
+                    "UPDATE tasks SET base_sha = %s, updated_at = %s WHERE id = %s",
                     (base_sha, now, task_id),
                 )
-                if self._conn.execute("SELECT changes()").fetchone()[0] != 1:
+                if updated.rowcount != 1:
                     raise KeyError(f"no task {task_id}")
                 row = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except Exception:
@@ -717,7 +342,7 @@ class TaskLedger:
         assert self._conn is not None
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                "SELECT * FROM tasks WHERE id = %s", (task_id,)
             ).fetchone()
         return _row_to_record(row) if row is not None else None
 
@@ -735,7 +360,7 @@ class TaskLedger:
             raise ValueError("reservation capacity must be between 1 and 10")
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 active = int(
                     self._conn.execute(
@@ -750,7 +375,7 @@ class TaskLedger:
                     SELECT tasks.* FROM tasks
                     LEFT JOIN task_reservations
                         ON task_reservations.task_id = tasks.id
-                    WHERE tasks.state = ? AND task_reservations.task_id IS NULL
+                    WHERE tasks.state = %s AND task_reservations.task_id IS NULL
                     ORDER BY tasks.seq ASC
                     LIMIT 1
                     """,
@@ -764,16 +389,16 @@ class TaskLedger:
                     """
                     INSERT INTO task_reservations (
                         task_id, phase, condition, reserved_at, updated_at
-                    ) VALUES (?, ?, NULL, ?, ?)
+                    ) VALUES (%s, %s, NULL, %s, %s)
                     """,
                     (row["id"], ReservationPhase.STARTING.value, now, now),
                 )
                 self._conn.execute(
-                    "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE tasks SET state = %s, updated_at = %s WHERE id = %s",
                     (TaskState.STARTING.value, now, row["id"]),
                 )
                 claimed = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = ?", (row["id"],)
+                    "SELECT * FROM tasks WHERE id = %s", (row["id"],)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except Exception:
@@ -794,7 +419,7 @@ class TaskLedger:
         assert self._conn is not None
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM task_reservations WHERE task_id = ?", (task_id,)
+                "SELECT * FROM task_reservations WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_reservation(row) if row is not None else None
 
@@ -810,26 +435,26 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
-                self._conn.execute(
+                updated = self._conn.execute(
                     """
                     UPDATE task_reservations
-                    SET phase = ?, condition = ?, updated_at = ?
-                    WHERE task_id = ?
+                    SET phase = %s, condition = %s, updated_at = %s
+                    WHERE task_id = %s
                     """,
                     (phase.value, condition, now, task_id),
                 )
-                if self._conn.execute("SELECT changes()").fetchone()[0] != 1:
+                if updated.rowcount != 1:
                     raise KeyError(f"no reservation for task {task_id}")
                 if task_state is not None and not self._task_state_is_terminal(task_id):
                     self._conn.execute(
-                        "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                        "UPDATE tasks SET state = %s, updated_at = %s WHERE id = %s",
                         (task_state.value, now, task_id),
                     )
                 row = self._conn.execute(
-                    "SELECT * FROM task_reservations WHERE task_id = ?", (task_id,)
+                    "SELECT * FROM task_reservations WHERE task_id = %s", (task_id,)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except Exception:
@@ -845,17 +470,17 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
                 self._conn.execute(
-                    "DELETE FROM task_reservations WHERE task_id = ?", (task_id,)
+                    "DELETE FROM task_reservations WHERE task_id = %s", (task_id,)
                 )
                 self._conn.execute(
                     """
                     UPDATE tasks
-                    SET sandbox_cleanup_status = ?, updated_at = ?
-                    WHERE id = ?
+                    SET sandbox_cleanup_status = %s, updated_at = %s
+                    WHERE id = %s
                     """,
                     (cleanup_status, now, task_id),
                 )
@@ -873,11 +498,11 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
                 row = self._conn.execute(
-                    "SELECT state, outcome_detail FROM tasks WHERE id = ?",
+                    "SELECT state, outcome_detail FROM tasks WHERE id = %s",
                     (task_id,),
                 ).fetchone()
                 if row is None:
@@ -897,9 +522,9 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     UPDATE tasks
-                    SET state = ?, outcome_detail = COALESCE(outcome_detail, ?),
-                        sandbox_cleanup_status = ?, updated_at = ?
-                    WHERE id = ?
+                    SET state = %s, outcome_detail = COALESCE(outcome_detail, %s),
+                        sandbox_cleanup_status = %s, updated_at = %s
+                    WHERE id = %s
                     """,
                     (
                         next_state.value,
@@ -910,7 +535,7 @@ class TaskLedger:
                     ),
                 )
                 self._conn.execute(
-                    "DELETE FROM task_reservations WHERE task_id = ?", (task_id,)
+                    "DELETE FROM task_reservations WHERE task_id = %s", (task_id,)
                 )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -922,17 +547,17 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
-                placeholders = ",".join("?" for _ in _SETTLED_SUCCESS_OUTCOMES)
+                placeholders = ",".join("%s" for _ in _SETTLED_SUCCESS_OUTCOMES)
                 self._conn.execute(
                     f"""
                     UPDATE tasks
-                    SET state = ?, updated_at = ?
+                    SET state = %s, updated_at = %s
                     WHERE sandbox_cleanup_status = 'confirmed_absent'
                       AND outcome_detail IN ({placeholders})
-                      AND state NOT IN (?, ?)
+                      AND state NOT IN (%s, %s)
                     """,
                     (
                         TaskState.COMPLETED.value,
@@ -950,7 +575,7 @@ class TaskLedger:
     def _task_state_is_terminal(self, task_id: str) -> bool:
         assert self._conn is not None
         row = self._conn.execute(
-            "SELECT state FROM tasks WHERE id = ?", (task_id,)
+            "SELECT state FROM tasks WHERE id = %s", (task_id,)
         ).fetchone()
         if row is None:
             return False
@@ -969,10 +594,10 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 existing = self._conn.execute(
-                    "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+                    "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
                 ).fetchone()
                 if existing is not None:
                     self._conn.execute("COMMIT")
@@ -984,7 +609,7 @@ class TaskLedger:
                         task_id, deployment, sandbox_name, tags_json,
                         session_api_key, provider_id, provider_state, detail,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, NULL, %s, NULL, %s, %s)
                     """,
                     (
                         task_id,
@@ -998,7 +623,7 @@ class TaskLedger:
                     ),
                 )
                 row = self._conn.execute(
-                    "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+                    "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except Exception:
@@ -1011,7 +636,7 @@ class TaskLedger:
         assert self._conn is not None
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+                "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_sandbox_record(row) if row is not None else None
 
@@ -1032,8 +657,8 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     UPDATE sandbox_creations
-                    SET provider_state = ?, detail = ?, updated_at = ?
-                    WHERE task_id = ?
+                    SET provider_state = %s, detail = %s, updated_at = %s
+                    WHERE task_id = %s
                     """,
                     (provider_state.value, detail, now, task_id),
                 )
@@ -1041,13 +666,14 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     UPDATE sandbox_creations
-                    SET provider_id = ?, provider_state = ?, detail = ?, updated_at = ?
-                    WHERE task_id = ?
+                    SET provider_id = %s, provider_state = %s,
+                        detail = %s, updated_at = %s
+                    WHERE task_id = %s
                     """,
                     (provider_id, provider_state.value, detail, now, task_id),
                 )
             row = self._conn.execute(
-                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+                "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
             ).fetchone()
         if row is None:
             raise KeyError(f"no sandbox creation intent for task {task_id}")
@@ -1071,10 +697,10 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 existing = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    "SELECT * FROM publication_intents WHERE task_id = %s",
                     (task_id,),
                 ).fetchone()
                 if existing is not None:
@@ -1109,8 +735,10 @@ class TaskLedger:
                         commit_sha, state, check_outcome, agent_outcome,
                         pr_number, pr_url, pr_draft, pr_author, pr_state,
                         detail, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL,
-                              NULL, ?, ?, ?)
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        NULL, NULL, NULL, NULL, NULL, %s, %s, %s
+                    )
                     """,
                     (
                         task_id,
@@ -1128,7 +756,7 @@ class TaskLedger:
                     ),
                 )
                 row = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    "SELECT * FROM publication_intents WHERE task_id = %s",
                     (task_id,),
                 ).fetchone()
                 self._conn.execute("COMMIT")
@@ -1144,7 +772,7 @@ class TaskLedger:
         assert self._conn is not None
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM publication_intents WHERE task_id = ?",
+                "SELECT * FROM publication_intents WHERE task_id = %s",
                 (task_id,),
             ).fetchone()
         return _row_to_publication(row) if row is not None else None
@@ -1168,11 +796,11 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
                 current = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    "SELECT * FROM publication_intents WHERE task_id = %s",
                     (task_id,),
                 ).fetchone()
                 if current is None:
@@ -1181,16 +809,16 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     UPDATE publication_intents
-                    SET state = ?,
-                        commit_sha = COALESCE(?, commit_sha),
-                        pr_number = COALESCE(?, pr_number),
-                        pr_url = COALESCE(?, pr_url),
-                        pr_draft = ?,
-                        pr_author = COALESCE(?, pr_author),
-                        pr_state = COALESCE(?, pr_state),
-                        detail = ?,
-                        updated_at = ?
-                    WHERE task_id = ?
+                    SET state = %s,
+                        commit_sha = COALESCE(%s, commit_sha),
+                        pr_number = COALESCE(%s, pr_number),
+                        pr_url = COALESCE(%s, pr_url),
+                        pr_draft = %s,
+                        pr_author = COALESCE(%s, pr_author),
+                        pr_state = COALESCE(%s, pr_state),
+                        detail = %s,
+                        updated_at = %s
+                    WHERE task_id = %s
                     """,
                     (
                         state.value,
@@ -1209,15 +837,15 @@ class TaskLedger:
                     self._conn.execute(
                         """
                         UPDATE tasks
-                        SET check_status = COALESCE(?, check_status),
-                            outcome_detail = COALESCE(?, outcome_detail),
-                            updated_at = ?
-                        WHERE id = ?
+                        SET check_status = COALESCE(%s, check_status),
+                            outcome_detail = COALESCE(%s, outcome_detail),
+                            updated_at = %s
+                        WHERE id = %s
                         """,
                         (check_status, outcome_detail, now, task_id),
                     )
                 row = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = ?",
+                    "SELECT * FROM publication_intents WHERE task_id = %s",
                     (task_id,),
                 ).fetchone()
                 self._conn.execute("COMMIT")
@@ -1240,12 +868,12 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 existing = self._conn.execute(
                     """
                     SELECT * FROM task_supervisions
-                    WHERE task_id = ? OR start_key = ?
+                    WHERE task_id = %s OR start_key = %s
                     """,
                     (task_id, start_key),
                 ).fetchone()
@@ -1265,7 +893,7 @@ class TaskLedger:
                         task_id, execution_id, task_branch, start_key,
                         conversation_id, cancel_requested, tail_gap_possible,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, 0, 0, %s, %s)
                     """,
                     (
                         task_id,
@@ -1278,7 +906,7 @@ class TaskLedger:
                     ),
                 )
                 row = self._conn.execute(
-                    "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+                    "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except SupervisionIdentityError:
@@ -1293,7 +921,7 @@ class TaskLedger:
         assert self._conn is not None
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+                "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_supervision(row) if row is not None else None
 
@@ -1310,7 +938,7 @@ class TaskLedger:
         with self._lock:
             now = _utcnow_iso()
             current = self._conn.execute(
-                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+                "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
             ).fetchone()
             if current is None:
                 raise KeyError(f"no supervision record for task {task_id}")
@@ -1333,14 +961,14 @@ class TaskLedger:
             self._conn.execute(
                 """
                 UPDATE task_supervisions
-                SET execution_id = ?, conversation_id = ?,
-                    cancel_requested = ?, tail_gap_possible = ?, updated_at = ?
-                WHERE task_id = ?
+                SET execution_id = %s, conversation_id = %s,
+                    cancel_requested = %s, tail_gap_possible = %s, updated_at = %s
+                WHERE task_id = %s
                 """,
                 (execution, conversation, int(cancel), int(tail), now, task_id),
             )
             row = self._conn.execute(
-                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+                "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
             ).fetchone()
         assert row is not None
         return _row_to_supervision(row)
@@ -1359,12 +987,12 @@ class TaskLedger:
         assert self._conn is not None
         payload = event_json if event_json is not None else event.model_dump_json()
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 existing = self._conn.execute(
                     """
                     SELECT cursor_seq FROM task_event_copies
-                    WHERE task_id = ? AND source_id = ? AND source_seq = ?
+                    WHERE task_id = %s AND source_id = %s AND source_seq = %s
                     """,
                     (task_id, source_id, source_seq),
                 ).fetchone()
@@ -1374,7 +1002,7 @@ class TaskLedger:
                 next_row = self._conn.execute(
                     """
                     SELECT COALESCE(MAX(cursor_seq), 0) + 1 AS next_cursor
-                    FROM task_event_copies WHERE task_id = ?
+                    FROM task_event_copies WHERE task_id = %s
                     """,
                     (task_id,),
                 ).fetchone()
@@ -1385,7 +1013,7 @@ class TaskLedger:
                     INSERT INTO task_event_copies (
                         task_id, cursor_seq, source_id, source_seq,
                         event_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
                         task_id,
@@ -1411,7 +1039,7 @@ class TaskLedger:
                 """
                 SELECT cursor_seq, source_id, source_seq, event_json
                 FROM task_event_copies
-                WHERE task_id = ? AND cursor_seq > ?
+                WHERE task_id = %s AND cursor_seq > %s
                 ORDER BY cursor_seq ASC
                 """,
                 (task_id, after_cursor),
@@ -1431,14 +1059,14 @@ class TaskLedger:
     def save_task_message_receipt(self, task_id: str, receipt: MessageReceipt) -> None:
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 self._conn.execute(
                     """
                     INSERT INTO task_message_receipts (
                         task_id, message_id, content, status, detail,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT(task_id, message_id) DO UPDATE SET
                         content = excluded.content,
                         status = excluded.status,
@@ -1468,7 +1096,7 @@ class TaskLedger:
             row = self._conn.execute(
                 """
                 SELECT * FROM task_message_receipts
-                WHERE task_id = ? AND message_id = ?
+                WHERE task_id = %s AND message_id = %s
                 """,
                 (task_id, message_id),
             ).fetchone()
@@ -1480,7 +1108,7 @@ class TaskLedger:
             rows = self._conn.execute(
                 """
                 SELECT * FROM task_message_receipts
-                WHERE task_id = ? ORDER BY created_at, message_id
+                WHERE task_id = %s ORDER BY created_at, message_id
                 """,
                 (task_id,),
             ).fetchall()
@@ -1509,7 +1137,7 @@ class TaskLedger:
     ) -> TaskResultArchive:
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
                 manifest_json = None if manifest is None else manifest.model_dump_json()
@@ -1518,7 +1146,7 @@ class TaskLedger:
                     INSERT INTO task_results (
                         task_id, execution_id, manifest_json,
                         evidence_complete, evidence_detail, archived_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT(task_id) DO UPDATE SET
                         execution_id = excluded.execution_id,
                         manifest_json = excluded.manifest_json,
@@ -1536,7 +1164,7 @@ class TaskLedger:
                     ),
                 )
                 row = self._conn.execute(
-                    "SELECT * FROM task_results WHERE task_id = ?", (task_id,)
+                    "SELECT * FROM task_results WHERE task_id = %s", (task_id,)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except Exception:
@@ -1549,7 +1177,7 @@ class TaskLedger:
         assert self._conn is not None
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM task_results WHERE task_id = ?", (task_id,)
+                "SELECT * FROM task_results WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_task_result(row) if row is not None else None
 
@@ -1558,10 +1186,10 @@ class TaskLedger:
 
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 row = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
                 ).fetchone()
                 if row is None:
                     self._conn.execute("COMMIT")
@@ -1573,8 +1201,8 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     UPDATE tasks
-                    SET state = ?, outcome_detail = ?, updated_at = ?
-                    WHERE id = ?
+                    SET state = %s, outcome_detail = %s, updated_at = %s
+                    WHERE id = %s
                     """,
                     (
                         TaskState.CANCELLED.value,
@@ -1584,7 +1212,7 @@ class TaskLedger:
                     ),
                 )
                 updated = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except Exception:
@@ -1611,22 +1239,22 @@ class TaskLedger:
     ) -> TaskRecord:
         assert self._conn is not None
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 now = _utcnow_iso()
                 self._conn.execute(
                     """
                     UPDATE tasks
-                    SET state = ?,
-                        outcome_detail = COALESCE(?, outcome_detail),
-                        check_status = COALESCE(?, check_status),
-                        updated_at = ?
-                    WHERE id = ?
+                    SET state = %s,
+                        outcome_detail = COALESCE(%s, outcome_detail),
+                        check_status = COALESCE(%s, check_status),
+                        updated_at = %s
+                    WHERE id = %s
                     """,
                     (state.value, outcome_detail, check_status, now, task_id),
                 )
                 row = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
                 ).fetchone()
                 self._conn.execute("COMMIT")
             except Exception:
@@ -1644,24 +1272,13 @@ class TaskLedger:
         return int(row["value"]) if row is not None else 0
 
     def ping_database(self) -> bool:
-        assert self._conn is not None
         try:
+            assert self._conn is not None
             with self._lock:
-                self._conn.execute("SELECT 1").fetchone()
-        except sqlite3.Error:
+                self._conn.execute("SELECT 1")
+        except (psycopg.Error, AssertionError):
             return False
         return True
-
-    def online_backup(self, destination: Path | str) -> None:
-        """Copy the open database using SQLite's online backup API."""
-
-        assert self._conn is not None
-        destination = Path(destination)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            with sqlite3.connect(destination) as dest:
-                self._conn.backup(dest)
-        os.chmod(destination, 0o600)
 
     def count_task_log_bytes(self, task_id: str) -> int:
         assert self._conn is not None
@@ -1671,11 +1288,11 @@ class TaskLedger:
                 SELECT
                     COALESCE((
                         SELECT SUM(LENGTH(event_json))
-                        FROM task_event_copies WHERE task_id = ?
+                        FROM task_event_copies WHERE task_id = %s
                     ), 0)
                     + COALESCE((
                         SELECT SUM(LENGTH(content) + LENGTH(COALESCE(detail, '')))
-                        FROM task_message_receipts WHERE task_id = ?
+                        FROM task_message_receipts WHERE task_id = %s
                     ), 0) AS total
                 """,
                 (task_id, task_id),
@@ -1688,7 +1305,7 @@ class TaskLedger:
             row = self._conn.execute(
                 """
                 SELECT COALESCE(LENGTH(manifest_json), 0) AS total
-                FROM task_results WHERE task_id = ?
+                FROM task_results WHERE task_id = %s
                 """,
                 (task_id,),
             ).fetchone()
@@ -1734,9 +1351,9 @@ class TaskLedger:
             rows = self._conn.execute(
                 """
                 SELECT * FROM tasks
-                WHERE state IN (?, ?, ?)
+                WHERE state IN (%s, %s, %s)
                   AND payload_expired = 0
-                  AND updated_at < ?
+                  AND updated_at < %s
                 ORDER BY updated_at ASC
                 """,
                 (*terminal, before.isoformat()),
@@ -1760,13 +1377,13 @@ class TaskLedger:
             rows = self._conn.execute(
                 """
                 SELECT idempotency_key FROM retention_tombstones
-                WHERE expires_at < ?
+                WHERE expires_at < %s
                 """,
                 (before.isoformat(),),
             ).fetchall()
             for row in rows:
                 self._conn.execute(
-                    "DELETE FROM retention_tombstones WHERE idempotency_key = ?",
+                    "DELETE FROM retention_tombstones WHERE idempotency_key = %s",
                     (row["idempotency_key"],),
                 )
         return len(rows)
@@ -1775,14 +1392,14 @@ class TaskLedger:
         self,
         task_id: str,
         *,
-        record: sqlite3.Row,
+        record: dict[str, Any],
         tombstone_retention: timedelta,
     ) -> None:
         assert self._conn is not None
         now = _utcnow_iso()
         with self._lock:
             publication_row = self._conn.execute(
-                "SELECT * FROM publication_intents WHERE task_id = ?",
+                "SELECT * FROM publication_intents WHERE task_id = %s",
                 (task_id,),
             ).fetchone()
         remote_effect = None
@@ -1799,7 +1416,7 @@ class TaskLedger:
             )
         expires_at = (datetime.fromisoformat(now) + tombstone_retention).isoformat()
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._begin_write()
             try:
                 self._conn.execute(
                     """
@@ -1807,7 +1424,7 @@ class TaskLedger:
                         idempotency_key, task_id, repository, prompt, base_ref,
                         retry_of, terminal_state, seq, created_at, updated_at,
                         remote_effect_json, payload_expired_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT(idempotency_key) DO UPDATE SET
                         remote_effect_json = excluded.remote_effect_json,
                         payload_expired_at = excluded.payload_expired_at,
@@ -1830,10 +1447,10 @@ class TaskLedger:
                     ),
                 )
                 self._conn.execute(
-                    "DELETE FROM task_event_copies WHERE task_id = ?", (task_id,)
+                    "DELETE FROM task_event_copies WHERE task_id = %s", (task_id,)
                 )
                 self._conn.execute(
-                    "DELETE FROM task_message_receipts WHERE task_id = ?",
+                    "DELETE FROM task_message_receipts WHERE task_id = %s",
                     (task_id,),
                 )
                 self._conn.execute(
@@ -1842,14 +1459,14 @@ class TaskLedger:
                     SET manifest_json = NULL,
                         evidence_complete = 0,
                         evidence_detail = 'payload expired by retention policy'
-                    WHERE task_id = ?
+                    WHERE task_id = %s
                     """,
                     (task_id,),
                 )
                 self._conn.execute(
                     """
-                    UPDATE tasks SET payload_expired = 1, updated_at = ?
-                    WHERE id = ?
+                    UPDATE tasks SET payload_expired = 1, updated_at = %s
+                    WHERE id = %s
                     """,
                     (now, task_id),
                 )
@@ -1859,7 +1476,7 @@ class TaskLedger:
                 raise
 
     @staticmethod
-    def _record_from_tombstone(row: sqlite3.Row) -> TaskRecord:
+    def _record_from_tombstone(row: dict[str, Any]) -> TaskRecord:
         return TaskRecord(
             id=row["task_id"],
             seq=row["seq"],
@@ -1875,7 +1492,7 @@ class TaskLedger:
         )
 
 
-def _row_to_supervision(row: sqlite3.Row) -> SupervisionRecord:
+def _row_to_supervision(row: dict[str, Any]) -> SupervisionRecord:
     return SupervisionRecord(
         task_id=row["task_id"],
         execution_id=row["execution_id"],
@@ -1889,7 +1506,7 @@ def _row_to_supervision(row: sqlite3.Row) -> SupervisionRecord:
     )
 
 
-def _row_to_message_receipt(row: sqlite3.Row) -> MessageReceipt:
+def _row_to_message_receipt(row: dict[str, Any]) -> MessageReceipt:
     return MessageReceipt(
         id=row["message_id"],
         content=row["content"],
@@ -1900,7 +1517,7 @@ def _row_to_message_receipt(row: sqlite3.Row) -> MessageReceipt:
     )
 
 
-def _row_to_task_result(row: sqlite3.Row) -> TaskResultArchive:
+def _row_to_task_result(row: dict[str, Any]) -> TaskResultArchive:
     manifest = (
         None
         if row["manifest_json"] is None

@@ -5,8 +5,9 @@ import pytest
 from httpx import ASGITransport
 
 from gg.runtime import RuntimeSettings, create_app
-from gg.runtime.ledger import SandboxProviderState, TaskLedger
+from gg.runtime.ledger import SandboxProviderState
 from gg.runtime.modal_sandbox import SandboxSnapshot
+from test_support.postgres_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -31,8 +32,8 @@ class FakeModalLifecycle:
 @pytest.mark.anyio
 async def test_control_plane_rejects_missing_or_wrong_api_key() -> None:
     app = create_app(
-        RuntimeSettings(api_key="control-secret", task_db_path=":memory:"),
-        task_ledger=TaskLedger(db_path=":memory:"),
+        RuntimeSettings(api_key="control-secret"),
+        task_ledger=new_ledger(),
     )
     transport = ASGITransport(app=app)
 
@@ -51,10 +52,9 @@ async def test_configured_web_origin_can_preflight_api_key() -> None:
     app = create_app(
         RuntimeSettings(
             api_key="control-secret",
-            task_db_path=":memory:",
             cors_origins=("http://localhost:5173",),
         ),
-        task_ledger=TaskLedger(db_path=":memory:"),
+        task_ledger=new_ledger(),
     )
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -84,7 +84,7 @@ async def test_configured_web_origin_can_preflight_api_key() -> None:
 
 @pytest.mark.anyio
 async def test_shutdown_detaches_durable_modal(tmp_path) -> None:
-    ledger = TaskLedger(db_path=":memory:")
+    ledger = new_ledger()
     ledger.open()
     task, _ = ledger.submit(
         idempotency_key="durable-modal",
@@ -110,7 +110,6 @@ async def test_shutdown_detaches_durable_modal(tmp_path) -> None:
     app = create_app(
         RuntimeSettings(
             api_key="control-secret",
-            task_db_path=":memory:",
             dispatch_lock_path=str(tmp_path / "dispatch.lock"),
         ),
         task_ledger=ledger,
