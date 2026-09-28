@@ -7,6 +7,8 @@ new tasks and ``200`` for identical idempotent replays.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -19,6 +21,7 @@ from fastapi import (
     status,
 )
 
+from gg.runtime.repository_authorization import RepositoryAccessError
 from gg.runtime.scheduler import DispatchStatus, TaskScheduler
 from gg.runtime.task_auth import operator_only, socket_owner
 from gg.runtime.task_service import (
@@ -59,6 +62,40 @@ def _get_supervision(request: Request) -> TaskSupervisionManager:
 @router.get("/models")
 def list_models() -> dict[str, object]:
     return {"default": DEFAULT_PI_MODEL, "models": PI_MODEL_CATALOG}
+
+
+def _repository_owner(request: Request) -> tuple[object, UUID]:
+    owner_id = request.state.owner_id
+    authorization = request.app.state.repository_authorization
+    if owner_id is None:
+        raise HTTPException(status_code=403, detail="browser account required")
+    if authorization is None:
+        raise HTTPException(
+            status_code=503, detail="GitHub repository authorization unavailable"
+        )
+    return authorization, owner_id
+
+
+@router.get("/repositories")
+def list_repositories(request: Request, response: Response) -> list[dict[str, object]]:
+    response.headers["Cache-Control"] = "no-store"
+    authorization, owner_id = _repository_owner(request)
+    try:
+        return [item.__dict__ for item in authorization.list_repositories(owner_id)]
+    except RepositoryAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get("/repositories/{repository:path}/branches")
+def list_repository_branches(
+    repository: str, request: Request, response: Response
+) -> list[dict[str, str]]:
+    response.headers["Cache-Control"] = "no-store"
+    authorization, owner_id = _repository_owner(request)
+    try:
+        return authorization.branches(owner_id, repository)
+    except RepositoryAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("", response_model=TaskRecord)

@@ -97,12 +97,17 @@ def _load_settings() -> Settings:
 
     process_env = dict(os.environ)
     process_env.pop("GH_TOKEN", None)
+    process_env.pop("GG_GITHUB_CLONE_TOKEN", None)
     data["process_env"] = process_env
 
     try:
-        return Settings.model_validate(data)
+        settings = Settings.model_validate(data)
     except ValidationError as exc:
         raise ValueError(f"Invalid server settings: {exc}") from exc
+    # The supervisor retains the token explicitly for clone. Child agent
+    # processes must not inherit it from the server environment.
+    os.environ.pop("GG_GITHUB_CLONE_TOKEN", None)
+    return settings
 
 
 _settings: Settings | None = None

@@ -58,6 +58,7 @@ class RuntimeSettings(BaseModel):
     github_clone_token: str | None = None
     github_app_client_id: str | None = None
     github_app_client_secret: str | None = None
+    github_app_private_key: str | None = None
     github_webhook_secret: str | None = None
     github_connection_key: str | None = None
     openrouter_api_key: str | None = None
@@ -276,6 +277,7 @@ def load_settings() -> RuntimeSettings:
         github_app_client_secret=_optional_secret(
             os.getenv("GG_GITHUB_APP_CLIENT_SECRET")
         ),
+        github_app_private_key=_optional_secret(os.getenv("GG_GITHUB_APP_PRIVATE_KEY")),
         github_webhook_secret=_optional_secret(os.getenv("GG_GITHUB_WEBHOOK_SECRET")),
         github_connection_key=_optional_secret(os.getenv("GG_GITHUB_CONNECTION_KEY")),
         openrouter_api_key=_optional_secret(os.getenv("OPENROUTER_API_KEY")),

@@ -50,7 +50,8 @@ class TaskSupervisorService:
         self._conversation_service = conversation_service
         self._store = store or ExecutionStore(settings.task_supervisor_dir)
         self._github_token = settings.github_clone_token
-        self._process_env = settings.process_env
+        self._process_env = dict(settings.process_env)
+        self._process_env.pop("GG_GITHUB_CLONE_TOKEN", None)
         self._active: dict[str, asyncio.Task[None]] = {}
         self._started = False
 
@@ -139,7 +140,9 @@ class TaskSupervisorService:
                     github_token=self._github_token,
                     process_env=self._process_env,
                 )
-                base_sha = resolve_base_sha(repo_dir=repo_dir, base_ref=base_ref)
+                base_sha = request.base_sha or resolve_base_sha(
+                    repo_dir=repo_dir, base_ref=base_ref
+                )
                 checkout_task_branch(
                     repo_dir=repo_dir, branch=request.task_branch, base_sha=base_sha
                 )

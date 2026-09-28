@@ -14,6 +14,10 @@ from uuid import UUID
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import TaskLedger
+from gg.runtime.repository_authorization import (
+    RepositoryAccessError,
+    RepositoryAuthorization,
+)
 from gg.runtime.storage import StorageLimits, admission_pressure
 from gg.sdk.agent_backend import PI_MODEL_CATALOG
 from gg.sdk.task_supervision import RetryTaskRequest, TaskResultRecord
@@ -52,9 +56,16 @@ class StoragePressureError(RuntimeError):
 class TaskService:
     """Validate and durably admit background tasks."""
 
-    def __init__(self, *, ledger: TaskLedger, settings: RuntimeSettings) -> None:
+    def __init__(
+        self,
+        *,
+        ledger: TaskLedger,
+        settings: RuntimeSettings,
+        repository_authorization: RepositoryAuthorization | None = None,
+    ) -> None:
         self._ledger = ledger
         self._settings = settings
+        self._repository_authorization = repository_authorization
 
     # Validate one submission request against the configured limits.
     def validate(self, request: CreateTaskRequest) -> None:
@@ -104,6 +115,18 @@ class TaskService:
         self, request: CreateTaskRequest, *, owner_id: UUID | None = None
     ) -> tuple[TaskRecord, bool]:
         self.validate(request)
+        base_sha = None
+        if request.repository is not None and owner_id is not None:
+            if self._repository_authorization is None:
+                raise TaskValidationError("GitHub repository authorization unavailable")
+            if getattr(self._repository_authorization, "private_key", None) is None:
+                raise TaskValidationError("GitHub App private key is not configured")
+            try:
+                _, base_sha = self._repository_authorization.resolve(
+                    owner_id, request.repository, request.base_ref or ""
+                )
+            except RepositoryAccessError as exc:
+                raise TaskValidationError(str(exc)) from exc
         if (
             request.retry_of is not None
             and self.get(request.retry_of, owner_id=owner_id) is None
@@ -124,6 +147,8 @@ class TaskService:
         )
         if not created and not self._matches_existing(record, request):
             raise TaskConflictError(record)
+        if created and base_sha is not None:
+            record = self._ledger.record_base_sha(record.id, base_sha)
         return record, created
 
     # Return all tasks in FIFO order.
