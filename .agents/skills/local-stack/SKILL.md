@@ -17,7 +17,8 @@ on port 8000, which is a different service. Work from the repository root.
    `http://127.0.0.1:5173/` already respond. Reuse a working process; start
    only what is down. Install missing dependencies with `uv sync --no-editable`
    at the root or `npm ci` in `frontend/`. Local Postgres must already be up
-   (`make supabase-local-start`). `.env` must set `GG_RUNTIME_DATABASE_URL`
+   (`npm ci` at the root if needed, then `make supabase-local-start`). `.env`
+   must set `GG_RUNTIME_DATABASE_URL`
    and `GG_RUNTIME_API_KEY`. Do not print those values.
 2. For an end-to-end run, load the local credentials without printing them and
    start the control plane with dispatch enabled. The runtime reads the local
