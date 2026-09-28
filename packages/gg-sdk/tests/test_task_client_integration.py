@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from starlette.testclient import TestClient
 
 from gg.runtime import RuntimeSettings, create_app
-from gg.runtime.ledger import TaskLedger
 from gg.sdk.task_client import TaskClient
 from gg.sdk.task_settings import TaskClientSettings
 from gg.sdk.tasks import CreateTaskRequest, TaskState
+from test_support.postgres_ledger import new_ledger
 
 
 def _settings(tmp_path) -> RuntimeSettings:
@@ -26,9 +24,7 @@ def _client_settings() -> TaskClientSettings:
 
 def test_client_workflow_submit_list_show_cancel(tmp_path) -> None:
     settings = _settings(tmp_path)
-    app = create_app(
-        settings, task_ledger=TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
-    )
+    app = create_app(settings, task_ledger=new_ledger())
 
     with TestClient(app, headers={"X-API-Key": "control-secret"}) as http:
         with TaskClient(_client_settings(), client=http) as client:
@@ -63,7 +59,7 @@ def test_follow_up_submit_uses_prior_branch_without_mutating_original(
     tmp_path,
 ) -> None:
     settings = _settings(tmp_path)
-    ledger = TaskLedger(db_path=str(tmp_path / "tasks.sqlite"))
+    ledger = new_ledger()
     ledger.open()
     app = create_app(settings, task_ledger=ledger)
     prior_branch = "gg/task/task-original"
@@ -78,11 +74,11 @@ def test_follow_up_submit_uses_prior_branch_without_mutating_original(
                     idempotency_key="k-original",
                 )
             )
-            with sqlite3.connect(tmp_path / "tasks.sqlite") as conn:
-                conn.execute(
-                    "UPDATE tasks SET state = ? WHERE id = ?",
-                    (TaskState.COMPLETED.value, original.record.id),
-                )
+            assert ledger._conn is not None
+            ledger._conn.execute(
+                "UPDATE tasks SET state = %s WHERE id = %s",
+                (TaskState.COMPLETED.value, original.record.id),
+            )
             ledger.record_base_sha(original.record.id, "deadbeef")
             follow_up = client.submit(
                 CreateTaskRequest(

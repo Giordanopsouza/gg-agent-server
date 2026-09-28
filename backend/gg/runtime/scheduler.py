@@ -12,6 +12,7 @@ import asyncio
 import fcntl
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -56,13 +57,11 @@ class DispatchStatus(BaseModel):
     conditions: tuple[DispatchCondition, ...] = ()
 
 
-def default_lock_path(*, db_path: str, deployment: str) -> str:
+def default_lock_path(*, deployment: str) -> str:
     """Return a stable lock path for the local deployment."""
 
-    if db_path != ":memory:":
-        return f"{db_path}.dispatch.lock"
     digest = hashlib.sha256(deployment.encode()).hexdigest()[:16]
-    return f"/tmp/gg-dispatch-{digest}.lock"
+    return str(Path(tempfile.gettempdir()) / f"gg-dispatch-{digest}.lock")
 
 
 class DeploymentLock:

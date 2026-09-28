@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import secrets
-import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -14,7 +13,6 @@ from fastapi import (
     HTTPException,
     Request,
     Response,
-    WebSocket,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,11 +28,11 @@ from gg.runtime.openrouter_vault import (
     openrouter_vault_router,
 )
 from gg.runtime.postgres import RuntimePostgres
-from gg.runtime.postgres_ledger import PostgresTaskLedger
 from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.readiness import readiness_from_scheduler
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
 from gg.runtime.storage import StorageLimits
+from gg.runtime.task_auth import task_access
 from gg.runtime.task_routes import event_socket_router, router as task_router
 from gg.runtime.task_service import TaskService
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
@@ -51,15 +49,6 @@ def _check_api_key(
 ) -> None:
     settings: RuntimeSettings = request.app.state.settings
     if not secrets.compare_digest(api_key or "", settings.api_key):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-
-
-def _check_socket_api_key(websocket: WebSocket) -> None:
-    """Authenticate a task event socket from handshake headers, not Request."""
-
-    settings: RuntimeSettings = websocket.app.state.settings
-    provided = websocket.headers.get("x-api-key") or ""
-    if not secrets.compare_digest(provided, settings.api_key):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 
@@ -80,7 +69,7 @@ def create_app(
     if task_ledger is not None:
         ledger = task_ledger
     elif database_url:
-        ledger = PostgresTaskLedger(RuntimePostgres.from_env())
+        ledger = TaskLedger(RuntimePostgres.from_env())
     else:
         raise RuntimeError("GG_RUNTIME_DATABASE_URL is required for the runtime")
     ledger.open()
@@ -112,10 +101,7 @@ def create_app(
         lifecycle=lifecycle,
         capacity=settings.task_capacity,
         lock_path=settings.dispatch_lock_path
-        or default_lock_path(
-            db_path=os.path.join(tempfile.gettempdir(), "gg-runtime"),
-            deployment=settings.modal_deployment,
-        ),
+        or default_lock_path(deployment=settings.modal_deployment),
         admission_enabled=settings.task_dispatch_enabled,
         poll_seconds=settings.dispatch_poll_seconds,
         supervision=supervision,
@@ -170,6 +156,8 @@ def create_app(
     app.state.task_scheduler = scheduler
     app.state.task_supervision = supervision
     app.state.storage_limits = storage_limits
+    app.state.web_auth = web_auth or SupabaseAuth(settings)
+    app.state.web_sessions = web_sessions
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -193,20 +181,17 @@ def create_app(
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return report.model_dump(mode="json")
 
-    app.include_router(task_router, dependencies=[Depends(_check_api_key)])
-    auth = web_auth or SupabaseAuth(settings)
-    app.include_router(web_auth_router(settings, auth, web_sessions))
+    app.include_router(task_router, dependencies=[Depends(task_access)])
+    app.include_router(web_auth_router(settings, app.state.web_auth, web_sessions))
     app.include_router(
         openrouter_vault_router(
             settings,
-            auth,
+            app.state.web_auth,
             web_sessions,
             openrouter_vault,
             openrouter_verifier or OpenRouterKeyVerifier(),
         )
     )
-    app.include_router(
-        event_socket_router, dependencies=[Depends(_check_socket_api_key)]
-    )
+    app.include_router(event_socket_router)
 
     return app

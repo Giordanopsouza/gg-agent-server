@@ -15,10 +15,11 @@ from psycopg_pool import ConnectionPool
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.web_auth import (
+    SESSION_COOKIE,
     PostgresWebSessions,
     SupabaseAuth,
     _require_origin,
-    require_web_user,
+    authenticated_web_user,
 )
 
 
@@ -128,7 +129,10 @@ def openrouter_vault_router(
     router = APIRouter(prefix="/auth/openrouter-credential")
 
     async def owner(request: Request, response: Response) -> str:
-        user = await require_web_user(request, response, settings, auth, sessions)
+        response.headers["Cache-Control"] = "no-store"
+        user = await authenticated_web_user(
+            auth, sessions, request.cookies.get(SESSION_COOKIE, ""), response
+        )
         if vault is None:
             raise HTTPException(
                 status_code=503, detail="credential vault unavailable", headers=NO_STORE

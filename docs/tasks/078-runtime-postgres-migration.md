@@ -16,7 +16,7 @@ Mover a fonte de verdade do runtime de SQLite para Supabase Postgres antes de ab
 - [x] Inventariar tarefas, eventos/mensagens/recibos, resultados/evidências duráveis, reservas, idempotência, publicação e continuação no schema Postgres. O usuário dispensou a importação dos dados SQLite anteriores; o arquivo antigo fica offline e não aparece no novo runtime.
 - [x] Usar transações/constraints Postgres para admissão, claim, quotas e publicação; testar disputa entre conexões, queda entre etapas e recuperação sem duplicar tarefa, sandbox ou PR.
 - [ ] Ensaiar backup, pausa de admissões/dispatch, drenagem ou reconciliação de runs e corte sem escritores simultâneos. Não criar importador SQLite.
-- [x] Produção exige Postgres e falha de configuração não cai silenciosamente em SQLite. SQLite permanece só como fixture legada, removendo caminho operacional após corte. JSON dentro do sandbox pode continuar como estado de execução; não é banco de usuários nem fonte durável do produto.
+- [x] Produção exige Postgres e falha de configuração não cai silenciosamente em SQLite. A fixture SQLite foi removida na tarefa 082. JSON dentro do sandbox pode continuar como estado de execução; não é banco de usuários nem fonte durável do produto.
 - [ ] Antes do corte, rollback pode reabrir o SQLite preservado sem novas escritas Postgres. Depois do corte, usar correção progressiva ou migração reversa ensaiada, nunca reabrir cópia antiga e perder dados.
 - [ ] Revalidar backup/retenção e recuperação de reservas no Postgres; atualizar runbook e documentação operacional antes de remover a ponte. Implementação deve registrar a substituição das premissas SQLite nos ADRs/instruções vigentes.
 

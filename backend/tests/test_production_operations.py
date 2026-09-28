@@ -8,12 +8,12 @@ import pytest
 from httpx import ASGITransport
 
 from gg.runtime import RuntimeSettings, create_app
-from gg.runtime.ledger import TaskLedger
 from gg.runtime.scheduler import DeploymentLock, DispatchLockError
 from gg.runtime.storage import StorageLimits, admission_pressure, run_retention_pass
 from gg.runtime.task_service import StoragePressureError, TaskService
 from gg.sdk.domain import Event, EventKind
 from gg.sdk.tasks import CreateTaskRequest, TaskState
+from test_support.postgres_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -23,7 +23,6 @@ def _settings(tmp_path: Path, **overrides) -> RuntimeSettings:
     base = {
         "api_key": "control-secret",
         "image": "test-image:dev",
-        "task_db_path": str(tmp_path / "tasks.sqlite"),
         "max_total_evidence_bytes": 4096,
         "min_free_disk_bytes": 0,
     }
@@ -35,7 +34,7 @@ def _settings(tmp_path: Path, **overrides) -> RuntimeSettings:
 async def test_runtime_ready_reports_scheduler_ownership(tmp_path: Path) -> None:
     app = create_app(
         _settings(tmp_path),
-        task_ledger=TaskLedger(db_path=str(tmp_path / "tasks.sqlite")),
+        task_ledger=new_ledger(),
     )
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -55,7 +54,7 @@ async def test_runtime_ready_reports_scheduler_ownership(tmp_path: Path) -> None
 async def test_health_is_public_and_tasks_require_auth(tmp_path: Path) -> None:
     app = create_app(
         _settings(tmp_path),
-        task_ledger=TaskLedger(db_path=str(tmp_path / "tasks.sqlite")),
+        task_ledger=new_ledger(),
     )
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -70,7 +69,7 @@ async def test_health_is_public_and_tasks_require_auth(tmp_path: Path) -> None:
 
 
 def test_storage_pressure_blocks_submission(tmp_path: Path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         ledger.submit(
             idempotency_key="big",
             repository="owner/allowed",
@@ -100,7 +99,7 @@ def test_storage_pressure_blocks_submission(tmp_path: Path) -> None:
 def test_retention_expires_terminal_payload_but_keeps_idempotency(
     tmp_path: Path,
 ) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         record, _ = ledger.submit(
             idempotency_key="keep-me",
             repository="owner/allowed",
@@ -119,7 +118,7 @@ def test_retention_expires_terminal_payload_but_keeps_idempotency(
         assert ledger._conn is not None
         with ledger._lock:
             ledger._conn.execute(
-                "UPDATE tasks SET updated_at = ? WHERE id = ?",
+                "UPDATE tasks SET updated_at = %s WHERE id = %s",
                 (old.isoformat(), record.id),
             )
         limits = StorageLimits(
@@ -158,7 +157,7 @@ def test_second_process_cannot_take_dispatch_lock(tmp_path: Path) -> None:
 
 
 def test_admission_pressure_uses_configured_free_disk_floor(tmp_path: Path) -> None:
-    with TaskLedger(db_path=str(tmp_path / "tasks.sqlite")) as ledger:
+    with new_ledger() as ledger:
         limits = StorageLimits(
             terminal_retention=timedelta(days=7),
             tombstone_retention=timedelta(days=90),

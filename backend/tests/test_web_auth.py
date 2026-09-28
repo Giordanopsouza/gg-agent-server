@@ -16,9 +16,9 @@ from pydantic import ValidationError
 
 from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
-from gg.runtime.ledger import TaskLedger
 from gg.runtime.openrouter_vault import OpenRouterKeyVerifier
 from gg.runtime.web_auth import SupabaseAuth
+from test_support.postgres_ledger import new_ledger
 
 
 USER_ID = "d23bfe09-a12b-49c5-845f-315fc9ec10d6"
@@ -28,7 +28,6 @@ USER_ID = "d23bfe09-a12b-49c5-845f-315fc9ec10d6"
 def auth_app(tmp_path):
     settings = RuntimeSettings(
         api_key="operator-secret",
-        task_db_path=str(tmp_path / "tasks.sqlite"),
         supabase_url="https://project.supabase.co",
         supabase_publishable_key="publishable-key",
         web_cookie_key=Fernet.generate_key().decode(),
@@ -148,7 +147,7 @@ def auth_app(tmp_path):
     state["access_token"] = access_token
     app = create_app(
         settings,
-        task_ledger=TaskLedger(db_path=str(tmp_path / "auth-tasks.sqlite")),
+        task_ledger=new_ledger(),
         web_auth=provider,
         web_sessions=FakeSessions(),
         openrouter_vault=FakeVault(),
@@ -247,8 +246,8 @@ def test_login_session_and_operator_boundary(auth_app):
     session = client.get("/auth/session")
     assert session.status_code == 200
     assert session.json() == {"user": {"id": USER_ID, "email": "person@example.com"}}
-    assert client.get("/tasks").status_code == 401
-    assert client.post("/tasks", json={"prompt": "example"}).status_code == 401
+    assert client.get("/tasks").status_code == 200
+    assert client.post("/tasks", json={"prompt": "example"}).status_code == 403
 
 
 @pytest.mark.parametrize(
