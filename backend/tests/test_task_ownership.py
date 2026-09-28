@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import timedelta
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -12,12 +13,13 @@ import psycopg
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from psycopg import sql
 from starlette.websockets import WebSocketDisconnect
 
 from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.ledger import TaskLedger
 from gg.runtime.postgres import RuntimePostgres
-from gg.runtime.postgres_ledger import PostgresTaskLedger
 from gg.runtime.web_auth import SESSION_COOKIE, SupabaseAuth
 from gg.sdk.tasks import TaskState
 
@@ -41,7 +43,10 @@ def owned_app(tmp_path):
     url = os.getenv("GG_RUNTIME_DATABASE_URL", "")
     if urlsplit(url).hostname not in {"localhost", "127.0.0.1"}:
         pytest.skip("requires local Supabase Postgres")
-    database = RuntimePostgres.from_env()
+    database = replace(
+        RuntimePostgres.from_env(),
+        schema=os.getenv("GG_RUNTIME_TEST_SCHEMA", "runtime_private"),
+    )
     settings = RuntimeSettings(
         api_key="operator-secret",
         supabase_url="https://local.supabase.test",
@@ -52,7 +57,7 @@ def owned_app(tmp_path):
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
     provider = FakeValidatedAuth(settings)
-    ledger = PostgresTaskLedger(database)
+    ledger = TaskLedger(database)
     app = create_app(
         settings,
         task_ledger=ledger,
@@ -76,11 +81,15 @@ def owned_app(tmp_path):
                 "retention_tombstones",
             ):
                 conn.execute(
-                    f"DELETE FROM runtime_private.{table} WHERE task_id = ANY(%s)",
+                    sql.SQL("DELETE FROM {}.{} WHERE task_id = ANY(%s)").format(
+                        sql.Identifier(database.schema), sql.Identifier(table)
+                    ),
                     (list(task_ids),),
                 )
             conn.execute(
-                "DELETE FROM runtime_private.tasks WHERE id = ANY(%s)",
+                sql.SQL("DELETE FROM {}.tasks WHERE id = ANY(%s)").format(
+                    sql.Identifier(database.schema)
+                ),
                 (list(task_ids),),
             )
 
@@ -209,7 +218,7 @@ def test_expired_payload_keeps_owner_scoped_deduplication(owned_app) -> None:
     ledger.finish_task(task_id, state=TaskState.COMPLETED)
     assert ledger._conn is not None
     row = ledger._conn.execute(
-        "SELECT * FROM tasks WHERE id = ?", (task_id,)
+        "SELECT * FROM tasks WHERE id = %s", (task_id,)
     ).fetchone()
     ledger._expire_task_payload(
         task_id, record=row, tombstone_retention=timedelta(days=90)
@@ -229,7 +238,7 @@ def test_concurrent_same_key_uses_one_task_per_owner(owned_app) -> None:
     key = f"concurrent-{uuid4()}"
 
     def admit(owner: UUID, prompt: str):
-        with PostgresTaskLedger(database) as connection:
+        with TaskLedger(database) as connection:
             return connection.submit(
                 idempotency_key=key,
                 repository=None,
@@ -246,7 +255,7 @@ def test_concurrent_same_key_uses_one_task_per_owner(owned_app) -> None:
     task_ids.update(record.id for record, _ in submissions)
     assert len(task_ids) == 2
     assert sum(created for _, created in submissions) == 2
-    with PostgresTaskLedger(database) as connection:
+    with TaskLedger(database) as connection:
         assert {row.id for row in connection.list(owner_id=alice)} & task_ids == {
             submissions[0][0].id
         }

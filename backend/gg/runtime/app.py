@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import secrets
-import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -24,7 +23,6 @@ from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
 from gg.runtime.postgres import RuntimePostgres
-from gg.runtime.postgres_ledger import PostgresTaskLedger
 from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.readiness import readiness_from_scheduler
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
@@ -64,7 +62,7 @@ def create_app(
     if task_ledger is not None:
         ledger = task_ledger
     elif database_url:
-        ledger = PostgresTaskLedger(RuntimePostgres.from_env())
+        ledger = TaskLedger(RuntimePostgres.from_env())
     else:
         raise RuntimeError("GG_RUNTIME_DATABASE_URL is required for the runtime")
     ledger.open()
@@ -96,10 +94,7 @@ def create_app(
         lifecycle=lifecycle,
         capacity=settings.task_capacity,
         lock_path=settings.dispatch_lock_path
-        or default_lock_path(
-            db_path=os.path.join(tempfile.gettempdir(), "gg-runtime"),
-            deployment=settings.modal_deployment,
-        ),
+        or default_lock_path(deployment=settings.modal_deployment),
         admission_enabled=settings.task_dispatch_enabled,
         poll_seconds=settings.dispatch_poll_seconds,
         supervision=supervision,

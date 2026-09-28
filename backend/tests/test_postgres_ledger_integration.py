@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 import psycopg
 import pytest
+from psycopg import sql
 
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.postgres import RuntimePostgres
-from gg.runtime.postgres_ledger import PostgresTaskLedger
 from gg.runtime.storage import StorageLimits, run_retention_pass
 from gg.sdk.domain import Event, EventKind, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.task_execution import AgentOutcome, CheckOutcome
@@ -25,11 +26,18 @@ def local_database():
     url = os.getenv("GG_RUNTIME_DATABASE_URL", "")
     if urlsplit(url).hostname not in {"127.0.0.1", "localhost"}:
         pytest.skip("requires a local Postgres URL")
-    database = RuntimePostgres.from_env()
+    database = replace(
+        RuntimePostgres.from_env(),
+        schema=os.getenv("GG_RUNTIME_TEST_SCHEMA", "runtime_private"),
+    )
     with psycopg.connect(database.url, **database.connection_kwargs()) as conn:
-        existing = conn.execute("SELECT count(*) FROM runtime_private.tasks").fetchone()
+        existing = conn.execute(
+            sql.SQL("SELECT count(*) FROM {}.tasks").format(
+                sql.Identifier(database.schema)
+            )
+        ).fetchone()
         if existing and existing[0]:
-            pytest.skip("requires an empty local runtime_private.tasks table")
+            pytest.skip("requires an empty local runtime tasks table")
     owned: set[str] = set()
     yield database, owned
     if owned:
@@ -46,11 +54,15 @@ def local_database():
             )
             for table in tables:
                 conn.execute(
-                    f"DELETE FROM runtime_private.{table} WHERE task_id = ANY(%s)",
+                    sql.SQL("DELETE FROM {}.{} WHERE task_id = ANY(%s)").format(
+                        sql.Identifier(database.schema), sql.Identifier(table)
+                    ),
                     (list(owned),),
                 )
             conn.execute(
-                "DELETE FROM runtime_private.tasks WHERE id = ANY(%s)",
+                sql.SQL("DELETE FROM {}.tasks WHERE id = ANY(%s)").format(
+                    sql.Identifier(database.schema)
+                ),
                 (list(owned),),
             )
 
@@ -70,7 +82,7 @@ def test_cross_connection_admission_claim_and_restart(local_database) -> None:
     prefix = str(uuid4())
 
     def submit(index: int):
-        with PostgresTaskLedger(database) as ledger:
+        with TaskLedger(database) as ledger:
             return _submit(ledger, f"{prefix}-{index % 3}")
 
     with ThreadPoolExecutor(max_workers=6) as workers:
@@ -81,28 +93,28 @@ def test_cross_connection_admission_claim_and_restart(local_database) -> None:
     assert len({record.seq for record, _ in submissions}) == 3
 
     def claim(_: int):
-        with PostgresTaskLedger(database) as ledger:
+        with TaskLedger(database) as ledger:
             return ledger.reserve_next(capacity=2)
 
     with ThreadPoolExecutor(max_workers=4) as workers:
         claimed = list(workers.map(claim, range(4)))
     ids = [record.id for record in claimed if record is not None]
     assert len(ids) == len(set(ids)) == 2
-    with PostgresTaskLedger(database) as restarted:
+    with TaskLedger(database) as restarted:
         assert owned <= {record.id for record in restarted.list()}
         assert {record.task_id for record in restarted.list_reservations()} == set(ids)
 
 
 def test_crash_rollback_and_durable_evidence(local_database) -> None:
     database, owned = local_database
-    with PostgresTaskLedger(database) as ledger:
+    with TaskLedger(database) as ledger:
         task, _ = _submit(ledger, str(uuid4()))
         owned.add(task.id)
         assert ledger._conn is not None
-        ledger._conn.execute("BEGIN IMMEDIATE")
+        ledger._begin_write()
         ledger._conn.execute(
             "INSERT INTO task_reservations "
-            "(task_id, phase, reserved_at, updated_at) VALUES (?, ?, ?, ?)",
+            "(task_id, phase, reserved_at, updated_at) VALUES (%s, %s, %s, %s)",
             (
                 task.id,
                 "starting",
@@ -111,7 +123,7 @@ def test_crash_rollback_and_durable_evidence(local_database) -> None:
             ),
         )
         # A connection drop rolls back the uncommitted reservation and lock.
-    with PostgresTaskLedger(database) as recovered:
+    with TaskLedger(database) as recovered:
         assert recovered.get_reservation(task.id) is None
         assert recovered.reserve_next(capacity=1).id == task.id
         assert (
@@ -141,7 +153,7 @@ def test_crash_rollback_and_durable_evidence(local_database) -> None:
             agent_outcome=AgentOutcome.SUCCEEDED,
         )
         assert created
-    with PostgresTaskLedger(database) as restarted:
+    with TaskLedger(database) as restarted:
         assert len(restarted.list_task_events(task.id)) == 1
         assert restarted.get_task_result(task.id).evidence_complete
         assert restarted.get_publication(task.id) is not None
@@ -161,7 +173,7 @@ def test_crash_rollback_and_durable_evidence(local_database) -> None:
 def test_receipts_and_retention_preserve_idempotency(local_database) -> None:
     database, owned = local_database
     key = str(uuid4())
-    with PostgresTaskLedger(database) as ledger:
+    with TaskLedger(database) as ledger:
         task, _ = _submit(ledger, key)
         owned.add(task.id)
         receipt = MessageReceipt(
@@ -179,7 +191,7 @@ def test_receipts_and_retention_preserve_idempotency(local_database) -> None:
         ledger.finish_task(task.id, state=TaskState.COMPLETED)
         assert ledger._conn is not None
         ledger._conn.execute(
-            "UPDATE tasks SET updated_at = ? WHERE id = ?",
+            "UPDATE tasks SET updated_at = %s WHERE id = %s",
             ((datetime.now(UTC) - timedelta(days=8)).isoformat(), task.id),
         )
         limits = StorageLimits(

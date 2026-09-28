@@ -1,4 +1,4 @@
-"""Bounded Postgres pool configuration for the future runtime migration.
+"""Bounded Postgres pool configuration for the runtime.
 
 Only server code imports this module. The caller owns pool startup/shutdown.
 """
@@ -18,6 +18,7 @@ PRODUCTION_POOLER_HOST = "aws-0-us-west-2.pooler.supabase.com"
 class RuntimePostgres:
     url: str
     max_size: int = 4
+    schema: str = "runtime_private"
 
     @classmethod
     def from_env(cls) -> "RuntimePostgres":

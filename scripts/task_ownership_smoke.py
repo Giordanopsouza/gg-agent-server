@@ -22,8 +22,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.ledger import TaskLedger
 from gg.runtime.postgres import RuntimePostgres
-from gg.runtime.postgres_ledger import PostgresTaskLedger
 from gg.runtime.web_auth import SESSION_COOKIE, SupabaseAuth
 from gg.runtime.web_sessions import PostgresWebSessions
 
@@ -94,7 +94,7 @@ def main() -> None:
         pool.open()
         app = create_app(
             settings,
-            task_ledger=PostgresTaskLedger(database),
+            task_ledger=TaskLedger(database),
             web_auth=provider,
             web_sessions=PostgresWebSessions(pool),
         )
