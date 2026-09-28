@@ -107,29 +107,27 @@ def create_app(
         supervision=supervision,
         storage_limits=storage_limits,
     )
-    web_pool = None
+    web_engine = None
     if (
         web_sessions is None
         and settings.supabase_url
         and os.getenv("GG_RUNTIME_DATABASE_URL")
     ):
-        web_pool = RuntimePostgres.from_env().pool()
-        web_sessions = PostgresWebSessions(web_pool)
+        web_engine = ledger.engine
+        web_sessions = PostgresWebSessions(web_engine)
     if (
         openrouter_vault is None
-        and web_pool is not None
+        and web_engine is not None
         and settings.openrouter_vault_key
     ):
         openrouter_vault = PostgresOpenRouterVault(
-            web_pool, settings.openrouter_vault_key
+            web_engine, settings.openrouter_vault_key
         )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         scheduler_started = False
         try:
-            if web_pool is not None:
-                web_pool.open()
             await supervision.startup()
             await scheduler.start()
             scheduler_started = True
@@ -138,8 +136,6 @@ def create_app(
             if scheduler_started:
                 await scheduler.stop()
             await supervision.shutdown()
-            if web_pool is not None:
-                web_pool.close()
             ledger.close()
 
     app = FastAPI(title="gg-runtime", lifespan=lifespan)

@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
+from sqlalchemy import Engine
 
 from gg.runtime.postgres import RuntimePostgres
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
@@ -187,18 +188,21 @@ class TaskLedger:
 
     def __init__(self, database: RuntimePostgres) -> None:
         self._database = database
+        self._engine: Engine = database.engine()
         self._lock = threading.Lock()
-        self._conn: psycopg.Connection[Any] | None = None
+        self._conn: Any | None = None
+
+    @property
+    def engine(self) -> Engine:
+        """The shared process engine used by other database-backed services."""
+        return self._engine
 
     def open(self) -> None:
         if self._conn is not None:
             return
-        connection = psycopg.connect(
-            self._database.url,
-            autocommit=True,
-            row_factory=dict_row,
-            **self._database.connection_kwargs(),
-        )
+        connection = self._engine.raw_connection()
+        connection.driver_connection.row_factory = dict_row
+        connection.autocommit = True
         try:
             connection.execute(
                 sql.SQL("SET search_path TO {}").format(
@@ -214,6 +218,7 @@ class TaskLedger:
                 )
         except Exception:
             connection.close()
+            self._engine.dispose()
             self._conn = None
             raise
 
@@ -222,6 +227,7 @@ class TaskLedger:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
+            self._engine.dispose()
 
     def __enter__(self) -> TaskLedger:
         self.open()

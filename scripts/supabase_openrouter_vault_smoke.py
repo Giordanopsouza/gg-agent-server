@@ -5,7 +5,6 @@ import os
 import secrets
 import subprocess
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
@@ -14,6 +13,8 @@ from urllib.request import Request, urlopen
 import psycopg
 from cryptography.fernet import Fernet
 from psycopg import sql
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
 
 from gg.runtime.openrouter_vault import PostgresOpenRouterVault
 
@@ -22,15 +23,14 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = Path(os.environ.get("SUPABASE_CLI", ROOT / "node_modules/.bin/supabase"))
 
 
-class LocalRuntimePool:
-    def __init__(self, db_url: str) -> None:
-        self.db_url = db_url
+def runtime_engine(db_url: str):
+    engine = create_engine(make_url(db_url).set(drivername="postgresql+psycopg"))
 
-    @contextmanager
-    def connection(self):
-        with psycopg.connect(self.db_url, autocommit=True) as connection:
-            connection.execute("set role gg_runtime")
-            yield connection
+    @event.listens_for(engine, "connect")
+    def set_runtime_role(dbapi_connection, _connection_record) -> None:
+        dbapi_connection.execute("set role gg_runtime")
+
+    return engine
 
 
 def main() -> None:
@@ -72,6 +72,7 @@ def main() -> None:
         with urlopen(request, timeout=10) as response:
             users.append(json.load(response)["user"]["id"])
     secret = "sk-or-v1-" + secrets.token_urlsafe(30)
+    engine = None
     with psycopg.connect(db_url, autocommit=True) as admin:
         already_member = admin.execute(
             "select pg_has_role('postgres', 'gg_runtime', 'member')"
@@ -86,9 +87,8 @@ def main() -> None:
                 admin.execute(
                     "insert into app_private.profiles (id) values (%s)", (user_id,)
                 )
-            vault = PostgresOpenRouterVault(
-                LocalRuntimePool(db_url), Fernet.generate_key().decode()
-            )
+            engine = runtime_engine(db_url)
+            vault = PostgresOpenRouterVault(engine, Fernet.generate_key().decode())
             assert vault.status(users[0])["configured"] is False
             assert vault.replace(users[0], secret)["version"] == 1
             assert vault.status(users[1])["configured"] is False
@@ -133,6 +133,8 @@ def main() -> None:
             except HTTPError as error:
                 assert error.code in (401, 403, 404, 406)
         finally:
+            if engine is not None:
+                engine.dispose()
             if not can_set_role:
                 if already_member:
                     admin.execute("grant gg_runtime to postgres with set false")

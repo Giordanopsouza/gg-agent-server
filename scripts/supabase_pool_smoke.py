@@ -11,7 +11,7 @@ from gg.runtime.postgres import RuntimePostgres
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "node_modules/.bin/supabase"
+CLI = Path(os.environ.get("SUPABASE_CLI", ROOT / "node_modules/.bin/supabase"))
 WORKDIR = os.environ.get("SUPABASE_LOCAL_WORKDIR", str(ROOT))
 
 
@@ -40,15 +40,21 @@ def main() -> None:
             "?sslmode=disable"
         )
         config = RuntimePostgres.from_env()
-        with config.pool() as pool, pool.connection() as connection:
-            role, timeout = connection.execute(
-                "select current_user, current_setting('statement_timeout')"
-            ).fetchone()
-            if role != "gg_runtime" or timeout != "15s":
-                raise AssertionError(
-                    f"Unexpected runtime role or timeout: {role}, {timeout}"
-                )
-            connection.execute("select count(*) from app_private.profiles").fetchone()
+        engine = config.engine()
+        try:
+            with engine.connect() as connection:
+                role, timeout = connection.exec_driver_sql(
+                    "select current_user, current_setting('statement_timeout')"
+                ).fetchone()
+                if role != "gg_runtime" or timeout != "15s":
+                    raise AssertionError(
+                        f"Unexpected runtime role or timeout: {role}, {timeout}"
+                    )
+                connection.exec_driver_sql(
+                    "select count(*) from app_private.profiles"
+                ).fetchone()
+        finally:
+            engine.dispose()
     finally:
         cli("db", "query", "--local", "alter role gg_runtime password null")
         os.environ.pop("GG_RUNTIME_DATABASE_URL", None)

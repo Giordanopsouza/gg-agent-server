@@ -51,7 +51,7 @@ def main() -> None:
     users: list[str] = []
     tasks: list[str] = []
     direct_statuses: list[int] = []
-    pool = database.pool()
+    ledger = TaskLedger(database)
     try:
         tokens = []
         with httpx.Client(base_url=api_url, timeout=10) as auth_client:
@@ -91,12 +91,11 @@ def main() -> None:
             ),
         )
         provider = SupabaseAuth(settings)
-        pool.open()
         app = create_app(
             settings,
-            task_ledger=TaskLedger(database),
+            task_ledger=ledger,
             web_auth=provider,
-            web_sessions=PostgresWebSessions(pool),
+            web_sessions=PostgresWebSessions(ledger.engine),
         )
         key = f"task062-{uuid4()}"
         with TestClient(app, base_url="https://app.example") as client:
@@ -165,7 +164,7 @@ def main() -> None:
             f"(anon/user HTTP {direct_statuses})"
         )
     finally:
-        pool.close()
+        ledger.close()
         with psycopg.connect(status["DB_URL"]) as connection:
             for table in (
                 "sandbox_creations",

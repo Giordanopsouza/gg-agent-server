@@ -72,14 +72,21 @@ def test_runtime_pool_size_is_bounded(
         RuntimePostgres.from_env()
 
 
-def test_hosted_pool_uses_bundled_ca() -> None:
+def test_hosted_engine_uses_bounded_pool_and_bundled_ca() -> None:
     config = RuntimePostgres(
         "postgresql://gg_runtime.xmqpgubedtjirohntdwg:secret@"
         "aws-0-us-west-2.pooler.supabase.com:5432/postgres?sslmode=verify-full"
     )
-    with config.pool() as pool:
-        assert pool.kwargs["sslrootcert"].endswith("supabase-prod-ca-2021.crt")
-        assert pool.kwargs["prepare_threshold"] is None
+    kwargs = config.connection_kwargs()
+    assert str(kwargs["sslrootcert"]).endswith("supabase-prod-ca-2021.crt")
+    assert kwargs["prepare_threshold"] is None
+    engine = config.engine()
+    try:
+        assert engine.url.drivername == "postgresql+psycopg"
+        assert engine.pool.size() == 4
+        assert engine.pool._max_overflow == 0
+    finally:
+        engine.dispose()
 
 
 def test_runtime_refuses_missing_postgres_without_test_ledger(
