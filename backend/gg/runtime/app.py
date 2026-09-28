@@ -20,6 +20,11 @@ from fastapi.security import APIKeyHeader
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.github import HttpGitHubGateway
+from gg.runtime.github_connection import (
+    GitHubClient,
+    PostgresGitHubConnections,
+    github_connection_router,
+)
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
 from gg.runtime.openrouter_vault import (
@@ -63,6 +68,8 @@ def create_app(
     web_sessions: PostgresWebSessions | None = None,
     openrouter_vault: PostgresOpenRouterVault | None = None,
     openrouter_verifier: OpenRouterKeyVerifier | None = None,
+    github_connections: PostgresGitHubConnections | None = None,
+    github_client: GitHubClient | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app."""
     database_url = os.getenv("GG_RUNTIME_DATABASE_URL")
@@ -90,6 +97,15 @@ def create_app(
             web_engine, settings.openrouter_vault_key
         )
 
+    if (
+        github_connections is None
+        and web_engine is not None
+        and settings.github_connection_key
+    ):
+        github_connections = PostgresGitHubConnections(
+            web_engine, settings.github_connection_key
+        )
+    github_client = github_client or GitHubClient(settings)
     openrouter_verifier = openrouter_verifier or OpenRouterKeyVerifier()
     task_service = TaskService(ledger=ledger, settings=settings)
     lifecycle = modal_lifecycle or lifecycle_from_settings(
@@ -191,6 +207,15 @@ def create_app(
             web_sessions,
             openrouter_vault,
             openrouter_verifier,
+        )
+    )
+    app.include_router(
+        github_connection_router(
+            settings,
+            app.state.web_auth,
+            web_sessions,
+            github_connections,
+            github_client,
         )
     )
     app.include_router(event_socket_router)
