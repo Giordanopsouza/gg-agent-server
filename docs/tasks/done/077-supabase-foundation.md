@@ -1,7 +1,7 @@
 ---
 id: 077-supabase-foundation
 feature: mvp-web
-status: in-progress
+status: done
 depends_on: []
 ---
 
@@ -22,7 +22,7 @@ Preparar Supabase local e o projeto de produção existente como ambientes separ
 
 ## Validation
 
-Integração local real de Auth/Postgres, migração vazia/upgrade e consultas sob cada papel; readiness de produção autenticado e somente leitura, sem publicar dados de teste. Seguir QA do [índice](README.md#validação-e-conclusão).
+Integração local real de Auth/Postgres, migração vazia/upgrade e consultas sob cada papel; readiness de produção autenticado e somente leitura, sem publicar dados de teste. Seguir QA do [índice](../README.md#validação-e-conclusão).
 
 ## Out of scope
 
@@ -49,3 +49,7 @@ Dashboard confirmou `aws-0-us-west-2.pooler.supabase.com:5432` para Session pool
 ### [SWE] 2026-09-25 21:39 -03 — Login autenticado de produção aprovado
 
 Usuário aprovou explicitamente senha do papel `gg_runtime`, URL server-only no Railway e teste autenticado. Senha aleatória aplicada fora das migrações; `GG_RUNTIME_DATABASE_URL` e `GG_DB_POOL_MAX=4` salvos no serviço `gg-runtime` com redeploy desativado. Smoke somente leitura da máquina de desenvolvimento passou com Session pooler, `verify-full`, CA empacotada, papel/timeout e isolamento RLS. Não houve fixture nem reset na produção. Teste a partir do host Railway e enforcement global de SSL ficam para o cutover da task 078.
+
+### [SWE] 2026-09-28 09:16 -03 — Task archived
+
+Todos os critérios de aceite estão marcados. Entrada movida para `docs/tasks/done/`.
