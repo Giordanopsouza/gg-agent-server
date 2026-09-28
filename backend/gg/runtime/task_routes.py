@@ -1,8 +1,8 @@
 """HTTP routes for the durable background task API.
 
-Thin routes over ``TaskService``. All routes require the runtime control-plane
-``X-API-Key``. Submission returns ``201 Created`` for new tasks and ``200 OK``
-for idempotent replays of identical input.
+Thin routes over ``TaskService``. Routes accept an operator credential or a
+validated browser session scoped to its owner. Submission returns ``201`` for
+new tasks and ``200`` for identical idempotent replays.
 """
 
 from __future__ import annotations
@@ -13,13 +13,14 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import JSONResponse
 
 from gg.runtime.scheduler import DispatchStatus, TaskScheduler
+from gg.runtime.task_auth import operator_only, socket_owner
 from gg.runtime.task_service import (
     StoragePressureError,
     TaskConflictError,
@@ -58,10 +59,11 @@ def _get_supervision(request: Request) -> TaskSupervisionManager:
 def submit_task(
     body: CreateTaskRequest,
     request: Request,
+    response: Response,
     service: TaskService = Depends(_get_service),
-) -> TaskRecord | JSONResponse:
+) -> TaskRecord:
     try:
-        record, created = service.submit(body)
+        record, created = service.submit(body, owner_id=request.state.owner_id)
     except TaskConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -79,21 +81,23 @@ def submit_task(
         ) from exc
     if created:
         request.app.state.task_scheduler.wake()
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content=record.model_dump(mode="json"),
-        )
+        response.status_code = status.HTTP_201_CREATED
     return record
 
 
 @router.get("", response_model=list[TaskRecord])
 def list_tasks(
+    request: Request,
     service: TaskService = Depends(_get_service),
 ) -> list[TaskRecord]:
-    return service.list()
+    return service.list(owner_id=request.state.owner_id)
 
 
-@router.get("/dispatch/status", response_model=DispatchStatus)
+@router.get(
+    "/dispatch/status",
+    response_model=DispatchStatus,
+    dependencies=[Depends(operator_only)],
+)
 def get_dispatch_status(
     scheduler: TaskScheduler = Depends(_get_scheduler),
 ) -> DispatchStatus:
@@ -103,11 +107,12 @@ def get_dispatch_status(
 @router.get("/{task_id}/events", response_model=list[TaskEventCopy])
 def list_task_events(
     task_id: str,
+    request: Request,
     after: int = Query(default=0, ge=0),
     service: TaskService = Depends(_get_service),
     supervision: TaskSupervisionManager = Depends(_get_supervision),
 ) -> list[TaskEventCopy]:
-    if service.get(task_id) is None:
+    if service.get(task_id, owner_id=request.state.owner_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return supervision.list_event_copies(task_id, after_cursor=after)
 
@@ -116,10 +121,11 @@ def list_task_events(
 async def send_task_message(
     task_id: str,
     body: TaskMessageRequest,
+    request: Request,
     service: TaskService = Depends(_get_service),
     supervision: TaskSupervisionManager = Depends(_get_supervision),
 ) -> MessageReceipt:
-    if service.get(task_id) is None:
+    if service.get(task_id, owner_id=request.state.owner_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     try:
         return await supervision.send_message(
@@ -133,10 +139,11 @@ async def send_task_message(
 def get_task_message_receipt(
     task_id: str,
     message_id: str,
+    request: Request,
     service: TaskService = Depends(_get_service),
     supervision: TaskSupervisionManager = Depends(_get_supervision),
 ) -> MessageReceipt:
-    if service.get(task_id) is None:
+    if service.get(task_id, owner_id=request.state.owner_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     receipt = supervision.get_message_receipt(task_id, message_id)
     if receipt is None:
@@ -151,7 +158,7 @@ def cancel_task(
     service: TaskService = Depends(_get_service),
 ) -> TaskRecord:
     try:
-        record = service.cancel(task_id)
+        record = service.cancel(task_id, owner_id=request.state.owner_id)
     except TaskControlError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     request.app.state.task_scheduler.wake()
@@ -161,10 +168,11 @@ def cancel_task(
 @router.get("/{task_id}/result", response_model=TaskResultRecord)
 def get_task_result(
     task_id: str,
+    request: Request,
     service: TaskService = Depends(_get_service),
 ) -> TaskResultRecord:
     try:
-        return service.result(task_id)
+        return service.result(task_id, owner_id=request.state.owner_id)
     except TaskControlError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -174,10 +182,11 @@ def retry_task(
     task_id: str,
     body: RetryTaskRequest,
     request: Request,
+    response: Response,
     service: TaskService = Depends(_get_service),
-) -> TaskRecord | JSONResponse:
+) -> TaskRecord:
     try:
-        record, created = service.retry(task_id, body)
+        record, created = service.retry(task_id, body, owner_id=request.state.owner_id)
     except TaskConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except TaskControlError as exc:
@@ -188,19 +197,17 @@ def retry_task(
         ) from exc
     if created:
         request.app.state.task_scheduler.wake()
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content=record.model_dump(mode="json"),
-        )
+        response.status_code = status.HTTP_201_CREATED
     return record
 
 
 @router.get("/{task_id}", response_model=TaskRecord)
 def get_task(
     task_id: str,
+    request: Request,
     service: TaskService = Depends(_get_service),
 ) -> TaskRecord:
-    record = service.get(task_id)
+    record = service.get(task_id, owner_id=request.state.owner_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return record
@@ -212,14 +219,23 @@ async def stream_task_events(
     task_id: str,
     after: int = Query(default=0, ge=0),
 ) -> None:
-    await websocket.accept()
+    try:
+        owner_id = await socket_owner(websocket)
+    except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     supervision: TaskSupervisionManager | None = getattr(
         websocket.app.state, "task_supervision", None
     )
     service: TaskService | None = getattr(websocket.app.state, "task_service", None)
-    if supervision is None or service is None or service.get(task_id) is None:
+    if (
+        supervision is None
+        or service is None
+        or service.get(task_id, owner_id=owner_id) is None
+    ):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
+    await websocket.accept()
     for copy in supervision.list_event_copies(task_id, after_cursor=after):
         await websocket.send_json(copy.model_dump(mode="json"))
         after = copy.cursor

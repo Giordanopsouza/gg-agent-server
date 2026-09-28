@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,6 +47,8 @@ class TaskRecord(BaseModel):
     """Durable snapshot of one background task returned by the API."""
 
     model_config = ConfigDict(frozen=True)
+
+    owner_id: UUID | None = None
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     seq: int

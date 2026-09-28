@@ -14,7 +14,10 @@ from psycopg import sql
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "supabase/migrations/20260927000000_runtime_ledger.sql"
+MIGRATIONS = (
+    ROOT / "supabase/migrations/20260927000000_runtime_ledger.sql",
+    ROOT / "supabase/migrations/20260928003641_task_ownership_and_idempotency.sql",
+)
 DEFAULT_ADMIN_URL = (
     "postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
 )
@@ -35,7 +38,8 @@ def main() -> int:
             raise SystemExit("Local gg_runtime role is missing")
         admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
         try:
-            admin.execute(MIGRATION.read_text().replace("runtime_private", schema))
+            for migration in MIGRATIONS:
+                admin.execute(migration.read_text().replace("runtime_private", schema))
             admin.execute(
                 sql.SQL("ALTER ROLE gg_runtime PASSWORD {}").format(
                     sql.Literal(password)

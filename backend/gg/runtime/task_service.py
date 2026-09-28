@@ -10,6 +10,7 @@ ledger.
 from __future__ import annotations
 
 import re
+from uuid import UUID
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import TaskLedger
@@ -96,8 +97,15 @@ class TaskService:
                 )
 
     # Validate, then durably submit. Returns (record, created).
-    def submit(self, request: CreateTaskRequest) -> tuple[TaskRecord, bool]:
+    def submit(
+        self, request: CreateTaskRequest, *, owner_id: UUID | None = None
+    ) -> tuple[TaskRecord, bool]:
         self.validate(request)
+        if (
+            request.retry_of is not None
+            and self.get(request.retry_of, owner_id=owner_id) is None
+        ):
+            raise TaskValidationError("retry_of must refer to an accessible task")
         limits = StorageLimits.from_settings(self._settings)
         pressure = admission_pressure(self._ledger, limits)
         if pressure.blocked:
@@ -108,21 +116,22 @@ class TaskService:
             prompt=request.prompt,
             base_ref=request.base_ref,
             retry_of=request.retry_of,
+            owner_id=owner_id,
         )
         if not created and not self._matches_existing(record, request):
             raise TaskConflictError(record)
         return record, created
 
     # Return all tasks in FIFO order.
-    def list(self) -> list[TaskRecord]:
-        return self._ledger.list()
+    def list(self, *, owner_id: UUID | None = None) -> list[TaskRecord]:
+        return self._ledger.list(owner_id=owner_id)
 
     # Return one task by id, or None.
-    def get(self, task_id: str) -> TaskRecord | None:
-        return self._ledger.get(task_id)
+    def get(self, task_id: str, *, owner_id: UUID | None = None) -> TaskRecord | None:
+        return self._ledger.get(task_id, owner_id=owner_id)
 
-    def cancel(self, task_id: str) -> TaskRecord:
-        record = self._ledger.get(task_id)
+    def cancel(self, task_id: str, *, owner_id: UUID | None = None) -> TaskRecord:
+        record = self.get(task_id, owner_id=owner_id)
         if record is None:
             raise TaskControlError(f"unknown task {task_id}")
         if record.state is TaskState.CANCELLED:
@@ -138,8 +147,10 @@ class TaskService:
         self._ledger.request_task_cancel(task_id)
         return self._ledger.get(task_id) or record
 
-    def retry(self, task_id: str, request: RetryTaskRequest) -> tuple[TaskRecord, bool]:
-        predecessor = self._ledger.get(task_id)
+    def retry(
+        self, task_id: str, request: RetryTaskRequest, *, owner_id: UUID | None = None
+    ) -> tuple[TaskRecord, bool]:
+        predecessor = self.get(task_id, owner_id=owner_id)
         if predecessor is None:
             raise TaskControlError(f"unknown task {task_id}")
         if predecessor.state not in {
@@ -164,10 +175,10 @@ class TaskService:
             base_ref=base_ref,
             retry_of=task_id,
         )
-        return self.submit(create)
+        return self.submit(create, owner_id=owner_id)
 
-    def result(self, task_id: str) -> TaskResultRecord:
-        record = self._ledger.get(task_id)
+    def result(self, task_id: str, *, owner_id: UUID | None = None) -> TaskResultRecord:
+        record = self.get(task_id, owner_id=owner_id)
         if record is None:
             raise TaskControlError(f"unknown task {task_id}")
         archive = self._ledger.get_task_result(task_id)

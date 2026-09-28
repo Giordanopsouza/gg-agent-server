@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg import sql
@@ -24,7 +24,7 @@ from gg.sdk.tasks import TaskRecord, TaskState
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 6
+SUPPORTED_SCHEMA_VERSION = 7
 
 # Outcomes recorded only after the agent finished successfully. A later sandbox
 # reconcile must not replace these with a failure.
@@ -161,6 +161,7 @@ def _row_to_publication(row: dict[str, Any]) -> PublicationRecord:
 
 def _row_to_record(row: dict[str, Any]) -> TaskRecord:
     return TaskRecord(
+        owner_id=row["owner_id"],
         id=row["id"],
         seq=row["seq"],
         state=TaskState(row["state"]),
@@ -243,21 +244,24 @@ class TaskLedger:
         prompt: str,
         base_ref: str | None,
         retry_of: str | None,
+        owner_id: UUID | None = None,
     ) -> tuple[TaskRecord, bool]:
         assert self._conn is not None
         with self._lock:
             self._begin_write()
             try:
+                scope, scope_params = self._owner_scope(owner_id)
                 existing = self._conn.execute(
-                    "SELECT * FROM tasks WHERE idempotency_key = %s",
-                    (idempotency_key,),
+                    f"SELECT * FROM tasks WHERE idempotency_key = %s AND {scope}",
+                    (idempotency_key, *scope_params),
                 ).fetchone()
                 if existing is not None:
                     self._conn.execute("COMMIT")
                     return _row_to_record(existing), False
                 tombstone = self._conn.execute(
-                    "SELECT * FROM retention_tombstones WHERE idempotency_key = %s",
-                    (idempotency_key,),
+                    "SELECT * FROM retention_tombstones "
+                    f"WHERE idempotency_key = %s AND {scope}",
+                    (idempotency_key, *scope_params),
                 ).fetchone()
                 if tombstone is not None:
                     self._conn.execute("COMMIT")
@@ -272,11 +276,11 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     INSERT INTO tasks (
-                        id, seq, state, idempotency_key, repository, prompt,
-                        base_ref, base_sha, retry_of, created_at, updated_at,
+                        id, seq, state, idempotency_key, owner_id, repository,
+                        prompt, base_ref, base_sha, retry_of, created_at, updated_at,
                         outcome_detail, check_status, sandbox_cleanup_status
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, NULL,
+                        %s, %s, %s, %s, %s, %s, %s, %s, NULL,
                         %s, %s, %s, NULL, NULL, NULL
                     )
                     """,
@@ -285,6 +289,7 @@ class TaskLedger:
                         seq,
                         TaskState.QUEUED.value,
                         idempotency_key,
+                        owner_id,
                         repository or "",
                         prompt,
                         base_ref,
@@ -299,6 +304,7 @@ class TaskLedger:
                 raise
         return (
             TaskRecord(
+                owner_id=owner_id,
                 id=task_id,
                 seq=seq,
                 state=TaskState.QUEUED,
@@ -338,19 +344,39 @@ class TaskLedger:
         assert row is not None
         return _row_to_record(row)
 
-    def get(self, task_id: str) -> TaskRecord | None:
+    @staticmethod
+    def _owner_scope(owner_id: UUID | None) -> tuple[str, tuple[UUID, ...]]:
+        if owner_id is None:
+            return "owner_id IS NULL", ()
+        return "owner_id = %s", (owner_id,)
+
+    def get(self, task_id: str, *, owner_id: UUID | None = None) -> TaskRecord | None:
         assert self._conn is not None
         with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM tasks WHERE id = %s", (task_id,)
-            ).fetchone()
+            if owner_id is None:
+                row = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT * FROM tasks WHERE id = %s AND owner_id = %s",
+                    (task_id, owner_id),
+                ).fetchone()
         return _row_to_record(row) if row is not None else None
 
     # Return all tasks in FIFO (seq) order.
-    def list(self) -> list[TaskRecord]:
+    def list(self, *, owner_id: UUID | None = None) -> list[TaskRecord]:
         assert self._conn is not None
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM tasks ORDER BY seq ASC").fetchall()
+            if owner_id is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM tasks ORDER BY seq ASC"
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM tasks WHERE owner_id = %s ORDER BY seq ASC",
+                    (owner_id,),
+                ).fetchall()
         return [_row_to_record(row) for row in rows]
 
     def reserve_next(self, *, capacity: int) -> TaskRecord | None:
@@ -1376,15 +1402,15 @@ class TaskLedger:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT idempotency_key FROM retention_tombstones
+                SELECT task_id FROM retention_tombstones
                 WHERE expires_at < %s
                 """,
                 (before.isoformat(),),
             ).fetchall()
             for row in rows:
                 self._conn.execute(
-                    "DELETE FROM retention_tombstones WHERE idempotency_key = %s",
-                    (row["idempotency_key"],),
+                    "DELETE FROM retention_tombstones WHERE task_id = %s",
+                    (row["task_id"],),
                 )
         return len(rows)
 
@@ -1421,17 +1447,18 @@ class TaskLedger:
                 self._conn.execute(
                     """
                     INSERT INTO retention_tombstones (
-                        idempotency_key, task_id, repository, prompt, base_ref,
-                        retry_of, terminal_state, seq, created_at, updated_at,
+                        idempotency_key, owner_id, task_id, repository, prompt,
+                        base_ref, retry_of, terminal_state, seq, created_at, updated_at,
                         remote_effect_json, payload_expired_at, expires_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(idempotency_key) DO UPDATE SET
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(task_id) DO UPDATE SET
                         remote_effect_json = excluded.remote_effect_json,
                         payload_expired_at = excluded.payload_expired_at,
                         expires_at = excluded.expires_at
                     """,
                     (
                         record["idempotency_key"],
+                        record["owner_id"],
                         task_id,
                         record["repository"],
                         record["prompt"],
@@ -1478,6 +1505,7 @@ class TaskLedger:
     @staticmethod
     def _record_from_tombstone(row: dict[str, Any]) -> TaskRecord:
         return TaskRecord(
+            owner_id=row["owner_id"],
             id=row["task_id"],
             seq=row["seq"],
             state=TaskState(row["terminal_state"]),

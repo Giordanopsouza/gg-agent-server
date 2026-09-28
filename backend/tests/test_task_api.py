@@ -5,7 +5,8 @@ from unittest.mock import patch
 import httpx
 import pytest
 from httpx import ASGITransport
-from starlette.testclient import TestClient, WebSocketDenialResponse
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.ledger import TaskLedger
@@ -275,10 +276,10 @@ def test_task_event_socket_requires_control_plane_key() -> None:
         assert created.status_code == 201
         task_id = created.json()["id"]
 
-        with pytest.raises(WebSocketDenialResponse) as missing:
+        with pytest.raises(WebSocketDisconnect) as missing:
             with client.websocket_connect(f"/tasks/sockets/events/{task_id}"):
                 pass
-        with pytest.raises(WebSocketDenialResponse) as wrong:
+        with pytest.raises(WebSocketDisconnect) as wrong:
             with client.websocket_connect(
                 f"/tasks/sockets/events/{task_id}",
                 headers={"X-API-Key": "wrong"},
@@ -290,8 +291,8 @@ def test_task_event_socket_requires_control_plane_key() -> None:
         ):
             pass
 
-    assert missing.value.status_code == 401
-    assert wrong.value.status_code == 401
+    assert missing.value.code == 1008
+    assert wrong.value.code == 1008
 
 
 @pytest.mark.anyio
