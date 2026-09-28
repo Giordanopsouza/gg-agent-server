@@ -21,7 +21,7 @@ select ok(has_table_privilege('gg_runtime', 'app_private.profiles', 'SELECT,INSE
 select ok(not has_table_privilege('gg_runtime', 'app_private.profiles', 'DELETE'), 'runtime cannot delete profiles');
 select ok(not has_table_privilege('gg_runtime', 'auth.users', 'SELECT'), 'runtime cannot read Auth users');
 select ok(not has_schema_privilege('gg_runtime', 'runtime_private', 'CREATE'), 'runtime cannot migrate schema');
-select ok(not has_schema_privilege('gg_runtime', 'vault_private', 'USAGE'), 'runtime has no vault access yet');
+select ok(has_schema_privilege('gg_runtime', 'vault_private', 'USAGE'), 'runtime can use vault schema');
 select ok(has_function_privilege('gg_runtime', 'app_private.web_session_active(uuid,uuid)', 'EXECUTE'), 'runtime can check session liveness');
 select ok(not has_function_privilege('anon', 'app_private.web_session_active(uuid,uuid)', 'EXECUTE'), 'anon cannot check sessions');
 select ok(not has_function_privilege('authenticated', 'app_private.web_session_active(uuid,uuid)', 'EXECUTE'), 'authenticated cannot check sessions');

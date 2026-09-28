@@ -22,6 +22,11 @@ from gg.runtime.config import RuntimeSettings
 from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
+from gg.runtime.openrouter_vault import (
+    OpenRouterKeyVerifier,
+    PostgresOpenRouterVault,
+    openrouter_vault_router,
+)
 from gg.runtime.postgres import RuntimePostgres
 from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.readiness import readiness_from_scheduler
@@ -56,6 +61,8 @@ def create_app(
     task_supervision: TaskSupervisionManager | None = None,
     web_auth: SupabaseAuth | None = None,
     web_sessions: PostgresWebSessions | None = None,
+    openrouter_vault: PostgresOpenRouterVault | None = None,
+    openrouter_verifier: OpenRouterKeyVerifier | None = None,
 ) -> FastAPI:
     """Build the standalone runtime app."""
     database_url = os.getenv("GG_RUNTIME_DATABASE_URL")
@@ -108,6 +115,14 @@ def create_app(
     ):
         web_pool = RuntimePostgres.from_env().pool()
         web_sessions = PostgresWebSessions(web_pool)
+    if (
+        openrouter_vault is None
+        and web_pool is not None
+        and settings.openrouter_vault_key
+    ):
+        openrouter_vault = PostgresOpenRouterVault(
+            web_pool, settings.openrouter_vault_key
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -168,6 +183,15 @@ def create_app(
 
     app.include_router(task_router, dependencies=[Depends(task_access)])
     app.include_router(web_auth_router(settings, app.state.web_auth, web_sessions))
+    app.include_router(
+        openrouter_vault_router(
+            settings,
+            app.state.web_auth,
+            web_sessions,
+            openrouter_vault,
+            openrouter_verifier or OpenRouterKeyVerifier(),
+        )
+    )
     app.include_router(event_socket_router)
 
     return app
