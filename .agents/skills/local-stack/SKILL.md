@@ -16,19 +16,21 @@ on port 8000, which is a different service. Work from the repository root.
 1. Check whether `http://127.0.0.1:8001/health` and
    `http://127.0.0.1:5173/` already respond. Reuse a working process; start
    only what is down. Install missing dependencies with `uv sync --no-editable`
-   at the root or `npm ci` in `web/`.
+   at the root or `npm ci` in `frontend/`. Local Postgres must already be up
+   (`npm ci` at the root if needed, then `make supabase-local-start`). `.env`
+   must set `GG_RUNTIME_DATABASE_URL`
+   and `GG_RUNTIME_API_KEY`. Do not print those values.
 2. For an end-to-end run, load the local credentials without printing them and
-   start the control plane with dispatch enabled. Use an isolated database so
-   enabling dispatch cannot pick up unrelated queued tasks:
+   start the control plane with dispatch enabled. The runtime reads the local
+   Supabase ledger (`runtime_private`); there is no SQLite file and no
+   `GG_TASK_DB_PATH`. Before enabling dispatch, confirm no unrelated task is
+   already `queued`:
 
    ```bash
    set -a && source .env && set +a
-   GG_LOCAL_DEMO_DIR="$(mktemp -d /tmp/gg-local-stack.XXXXXX)"
-   GG_RUNTIME_API_KEY=local-demo \
-   GG_TASK_DB_PATH="$GG_LOCAL_DEMO_DIR/tasks.sqlite" \
    GG_TASK_DISPATCH_ENABLED=true \
    GG_TASK_CAPACITY=1 \
-   uv run --no-editable python -m gg.runtime --host 127.0.0.1 --port 8001
+   make run-runtime
    ```
 
    This provisions one Modal sandbox per submitted task. The local `.env`
@@ -39,24 +41,25 @@ on port 8000, which is a different service. Work from the repository root.
 3. In a second terminal, run Vite with an explicit local proxy:
 
    ```bash
-   cd web
+   cd frontend
    VITE_TASK_API_URL= \
    VITE_DEV_API_PROXY=http://127.0.0.1:8001 \
    npm run dev -- --host 127.0.0.1 --port 5173
    ```
 
-   `web/.env.local` can point `VITE_DEV_API_PROXY` at Railway. The explicit
+   `frontend/.env.local` can point `VITE_DEV_API_PROXY` at Railway. The explicit
    override prevents a local browser test from calling the remote runtime.
    Keep `VITE_TASK_API_URL` empty so browser requests use Vite's `/tasks`
    proxy.
 
-4. Require all three checks before using the UI:
+4. Require all three checks before using the UI. Use the key already loaded
+   from `.env`; do not echo it:
 
    ```bash
    curl -fsS http://127.0.0.1:8001/health
    curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5173/
    curl -fsS -o /dev/null -w '%{http_code}\n' \
-     -H 'X-API-Key: local-demo' http://127.0.0.1:5173/tasks
+     -H "X-API-Key: $GG_RUNTIME_API_KEY" http://127.0.0.1:5173/tasks
    ```
 
    Expect `{"status":"ok"}`, `200`, and `200`. A `401` from the proxy while
@@ -69,11 +72,11 @@ permission escalation. If uv cannot write its default cache, set
 
 ## Exercise the changed feature
 
-Open `http://127.0.0.1:5173/` in a browser, enter `local-demo` in the sidebar,
-and save it. The UI keeps this key in browser `localStorage` as
-`gg.runtime.apiKey`. Walk the changed flow by clicking, typing, submitting,
-and navigating. Use a task the sandbox can actually perform. With blank
-repository fields, give it a self-contained task such as creating a small file
+Open `http://127.0.0.1:5173/` in a browser, enter the `GG_RUNTIME_API_KEY`
+value in the sidebar, and save it. The UI keeps this key in browser
+`localStorage` as `gg.runtime.apiKey`. Walk the changed flow by clicking,
+typing, submitting, and navigating. Use a task the sandbox can actually perform.
+With blank repository fields, give it a self-contained task such as creating a small file
 and reading it back. To validate work on this codebase inside the sandbox,
 provide an accessible GitHub repository and base branch, with the needed clone
 credential configured. A blank sandbox cannot inspect the local checkout.
