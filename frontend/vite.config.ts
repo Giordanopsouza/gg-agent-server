@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         "/tasks": proxyTarget,
+        "/auth": proxyTarget,
       },
     },
   };

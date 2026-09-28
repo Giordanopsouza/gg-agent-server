@@ -56,6 +56,10 @@ class RuntimeSettings(BaseModel):
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
     github_clone_token: str | None = None
+    github_app_client_id: str | None = None
+    github_app_client_secret: str | None = None
+    github_webhook_secret: str | None = None
+    github_connection_key: str | None = None
     openrouter_api_key: str | None = None
     max_prompt_chars: int = Field(default=DEFAULT_MAX_PROMPT_CHARS, ge=1)
     max_base_ref_chars: int = Field(default=DEFAULT_MAX_BASE_REF_CHARS, ge=1)
@@ -128,7 +132,7 @@ class RuntimeSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_web_cookie_settings(self) -> RuntimeSettings:
-        for name in ("web_cookie_key", "openrouter_vault_key"):
+        for name in ("web_cookie_key", "openrouter_vault_key", "github_connection_key"):
             key = getattr(self, name)
             if key is None:
                 continue
@@ -268,6 +272,12 @@ def load_settings() -> RuntimeSettings:
         host=os.getenv("GG_RUNTIME_HOST", DEFAULT_HOST),
         port=_parse_port(os.getenv("GG_RUNTIME_PORT")),
         github_clone_token=_optional_secret(os.getenv("GG_GITHUB_CLONE_TOKEN")),
+        github_app_client_id=_optional_secret(os.getenv("GG_GITHUB_APP_CLIENT_ID")),
+        github_app_client_secret=_optional_secret(
+            os.getenv("GG_GITHUB_APP_CLIENT_SECRET")
+        ),
+        github_webhook_secret=_optional_secret(os.getenv("GG_GITHUB_WEBHOOK_SECRET")),
+        github_connection_key=_optional_secret(os.getenv("GG_GITHUB_CONNECTION_KEY")),
         openrouter_api_key=_optional_secret(os.getenv("OPENROUTER_API_KEY")),
         max_prompt_chars=_parse_int(
             os.getenv("GG_MAX_PROMPT_CHARS"), DEFAULT_MAX_PROMPT_CHARS

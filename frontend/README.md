@@ -18,7 +18,7 @@ npm run dev
 Open the Vite URL and save the value of `GG_RUNTIME_API_KEY` in the sidebar.
 The key is stored in this browser's `localStorage` until you clear it. No
 GitHub or model key is accepted by the UI. With the default setup, Vite proxies
-`/tasks` to `http://127.0.0.1:8001`, so the browser stays on one origin.
+`/tasks` and `/auth` to `http://127.0.0.1:8001`, so the browser stays on one origin.
 
 ## Configuration
 

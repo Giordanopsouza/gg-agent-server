@@ -341,6 +341,94 @@ class OpenRouterCredential(Base):
     )
 
 
+class GitHubConnection(Base):
+    __tablename__ = "github_connections"
+    __table_args__ = (
+        UniqueConstraint("github_user_id"),
+        CheckConstraint("github_user_id > 0", name="github_user_id_positive"),
+        CheckConstraint("key_version > 0", name="github_key_version_positive"),
+        CheckConstraint(
+            "status in ('connected','pending','revoked')", name="github_status_valid"
+        ),
+        {"schema": "vault_private"},
+    )
+
+    owner_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("app_private.profiles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    login: Mapped[str] = mapped_column(Text, nullable=False)
+    token_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    key_version: Mapped[int] = mapped_column(
+        Integer, server_default=text("1"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class GitHubInstallation(Base):
+    __tablename__ = "github_installations"
+    __table_args__ = (
+        CheckConstraint("installation_id > 0", name="installation_id_positive"),
+        CheckConstraint(
+            "status in ('active','removed')", name="installation_status_valid"
+        ),
+        Index("github_installations_id_idx", "installation_id"),
+        {"schema": "app_private"},
+    )
+
+    owner_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("app_private.profiles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    installation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    account_login: Mapped[str] = mapped_column(Text, nullable=False)
+    account_type: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
+class GitHubOAuthFlow(Base):
+    __tablename__ = "github_oauth_flows"
+    __table_args__ = (
+        Index("github_oauth_flows_expiry_idx", "expires_at"),
+        {"schema": "app_private"},
+    )
+
+    state_hash: Mapped[bytes] = mapped_column(LargeBinary, primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("app_private.profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    session_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class GitHubWebhookDelivery(Base):
+    __tablename__ = "github_webhook_deliveries"
+    __table_args__ = (
+        Index("github_webhook_deliveries_time_idx", "received_at"),
+        {"schema": "app_private"},
+    )
+
+    delivery_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True), primary_key=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+
 APPLICATION_SCHEMAS = frozenset({"app_private", "runtime_private", "vault_private"})
 
 
