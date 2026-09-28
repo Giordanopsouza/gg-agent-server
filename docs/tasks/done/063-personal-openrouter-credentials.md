@@ -1,7 +1,7 @@
 ---
 id: 063-personal-openrouter-credentials
 feature: mvp-web
-status: in-progress
+status: done
 depends_on: [061-google-login-and-sessions]
 ---
 

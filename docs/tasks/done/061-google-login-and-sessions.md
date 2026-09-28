@@ -1,7 +1,7 @@
 ---
 id: 061-google-login-and-sessions
 feature: mvp-web
-status: in-progress
+status: done
 depends_on: [077-supabase-foundation]
 ---
 

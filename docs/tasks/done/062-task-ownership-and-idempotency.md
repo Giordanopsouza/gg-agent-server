@@ -1,7 +1,7 @@
 ---
 id: 062-task-ownership-and-idempotency
 feature: mvp-web
-status: in-progress
+status: done
 depends_on: [061-google-login-and-sessions, 078-runtime-postgres-migration]
 ---
 
