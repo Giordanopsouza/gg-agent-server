@@ -13,6 +13,7 @@ from gg.sdk import (
     MessageReceipt,
     StartConversationRequest,
 )
+from gg.sdk.agent_backend import PiAgentConfig
 from gg.server.agent import (
     ConversationAlreadyRunningError,
     ConversationNotFoundError,
@@ -20,6 +21,7 @@ from gg.server.agent import (
     LocalWorkspace,
     load_meta,
 )
+from gg.server.agent.agent_backend import create_agent_backend
 from gg.server.agent.event_log import META_FILE
 from gg.server.config import Settings
 from gg.server.pubsub import PubSub
@@ -42,16 +44,24 @@ class ConversationService:
         working_dir: Path | str,
         conversation_id: str | None = None,
         agent: AgentConfig | None = None,
+        github_token: str | None = None,
     ) -> ConversationRecord:
         """Allocate an id, persist meta, and return the catalog record."""
         conversation_id = conversation_id or str(uuid4())
         conversation_dir = self._conversations_dir / conversation_id
         workspace = LocalWorkspace(working_dir=self._resolve_working_dir(working_dir))
+        selected = agent or PiAgentConfig()
+        backend = (
+            create_agent_backend(selected, github_token=github_token)
+            if github_token
+            else None
+        )
         conversation = LocalConversation(
             conversation_dir=conversation_dir,
             workspace=workspace,
             conversation_id=conversation_id,
-            agent=agent,
+            agent=selected,
+            agent_backend=backend,
         )
         self._live[conversation_id] = conversation
         return load_meta(conversation_dir)

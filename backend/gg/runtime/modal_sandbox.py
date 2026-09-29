@@ -365,10 +365,14 @@ class ModalSandboxLifecycle:
             if task.owner_id is not None:
                 env.pop("OPENROUTER_API_KEY", None)
                 env.pop("GG_GITHUB_CLONE_TOKEN", None)
+                env.pop("GH_TOKEN", None)
+                env.pop("GITHUB_TOKEN", None)
+                env.pop("GG_PI_OWNS_PUBLICATION", None)
                 assert personal_key is not None
                 env["OPENROUTER_API_KEY"] = personal_key
                 if github_credential is not None:
                     env["GG_GITHUB_CLONE_TOKEN"] = github_credential.token
+                    env["GG_PI_OWNS_PUBLICATION"] = "1"
             env["GG_SESSION_API_KEYS"] = record.session_api_key
             handle = await self._provider.create(
                 name=record.sandbox_name,

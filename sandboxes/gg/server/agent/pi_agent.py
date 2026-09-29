@@ -32,6 +32,24 @@ from gg.server.secret_redaction import redact_secret
 
 
 _STDERR_LIMIT = 16 * 1024
+
+
+def _pi_process_env(github_token: str | None) -> dict[str, str]:
+    """Copy the process environment without ambient GitHub credentials.
+
+    The task installation token is the only GitHub credential Pi may see, and
+    only when this run owns publication. A host GH_TOKEN is never forwarded.
+    """
+
+    env = dict(os.environ)
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    env.pop("GG_GITHUB_CLONE_TOKEN", None)
+    if github_token:
+        env["GH_TOKEN"] = github_token
+    return env
+
+
 _STDOUT_RECORD_LIMIT = 1024 * 1024
 _EOF = object()
 
@@ -69,8 +87,14 @@ class _BoundedCapture:
 class PiRpcAgent:
     """Run one Pi turn over its strict JSONL stdio protocol."""
 
-    def __init__(self, settings: PiAgentSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: PiAgentSettings | None = None,
+        *,
+        github_token: str | None = None,
+    ) -> None:
         self.settings = settings or PiAgentSettings()
+        self._github_token = github_token
         self._state_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._pending_lock = threading.Lock()
@@ -176,6 +200,7 @@ class PiRpcAgent:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,
+                env=_pi_process_env(self._github_token),
             )
         except OSError as exc:
             raise AgentStartupError("Pi RPC process could not be started") from exc

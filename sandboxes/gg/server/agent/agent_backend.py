@@ -39,7 +39,9 @@ class RunningAgentBackend(Protocol):
     def cancel(self) -> None: ...
 
 
-def create_agent_backend(config: AgentConfig) -> AgentBackend:
+def create_agent_backend(
+    config: AgentConfig, *, github_token: str | None = None
+) -> AgentBackend:
     """Construct an agent from its safe persisted configuration."""
     from gg.server.agent.pi_agent import PiAgentSettings, PiRpcAgent
 
@@ -50,5 +52,6 @@ def create_agent_backend(config: AgentConfig) -> AgentBackend:
             timeout_seconds=config.timeout_seconds,
             command_ack_timeout_seconds=config.command_ack_timeout_seconds,
             cancel_grace_seconds=config.cancel_grace_seconds,
-        )
+        ),
+        github_token=github_token,
     )

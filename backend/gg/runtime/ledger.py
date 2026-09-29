@@ -30,7 +30,9 @@ SUPPORTED_SCHEMA_VERSION = 8
 
 # Outcomes recorded only after the agent finished successfully. A later sandbox
 # reconcile must not replace these with a failure.
-_SETTLED_SUCCESS_OUTCOMES = frozenset({"published", "no_changes", "checks_passed"})
+_SETTLED_SUCCESS_OUTCOMES = frozenset(
+    {"published", "no_changes", "checks_passed", "checks_not_run"}
+)
 _TERMINAL_TASK_STATES = frozenset(
     {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED}
 )
@@ -849,6 +851,8 @@ class TaskLedger:
         detail: str | None = None,
         check_status: str | None = None,
         outcome_detail: str | None = None,
+        check_outcome: CheckOutcome | None = None,
+        agent_outcome: AgentOutcome | None = None,
     ) -> PublicationRecord:
         """Record publication progress without storing credentials."""
 
@@ -875,6 +879,8 @@ class TaskLedger:
                         pr_author = COALESCE(%s, pr_author),
                         pr_state = COALESCE(%s, pr_state),
                         detail = %s,
+                        check_outcome = COALESCE(%s, check_outcome),
+                        agent_outcome = COALESCE(%s, agent_outcome),
                         updated_at = %s
                     WHERE task_id = %s
                     """,
@@ -887,6 +893,8 @@ class TaskLedger:
                         pr_author,
                         pr_state,
                         detail,
+                        None if check_outcome is None else check_outcome.value,
+                        None if agent_outcome is None else agent_outcome.value,
                         now,
                         task_id,
                     ),

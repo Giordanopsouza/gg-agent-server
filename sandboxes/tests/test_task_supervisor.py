@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import time
@@ -29,7 +30,7 @@ from pathlib import Path
 
 record_path = Path(os.environ["FAKE_PI_RECORD"])
 prompt = json.loads(sys.stdin.buffer.readline())
-state = {"prompt": prompt}
+state = {"prompt": prompt, "gh_token": os.environ.get("GH_TOKEN")}
 
 
 def send(message):
@@ -44,6 +45,16 @@ if os.environ.get("FAKE_PI_MODE") == "edit":
     Path("README.md").write_text("changed\n", encoding="utf-8")
 if os.environ.get("FAKE_PI_MODE") == "leak_patch":
     Path("README.md").write_text(os.environ["OPENROUTER_API_KEY"], encoding="utf-8")
+if check_outcome := os.environ.get("FAKE_PI_CHECK_OUTCOME"):
+    intent = Path(os.environ["FAKE_PI_INTENT_PATH"])
+    intent.parent.mkdir(parents=True, exist_ok=True)
+    intent.write_text(json.dumps({
+        "repository": "owner/test",
+        "task_branch": "gg/task/owned-1",
+        "base_ref": "main",
+        "task_marker": "owned-1",
+        "check_outcome": check_outcome,
+    }), encoding="utf-8")
 
 send({"type": "agent_settled"})
 record_path.write_text(json.dumps(state), encoding="utf-8")
@@ -370,3 +381,64 @@ async def test_no_changes_result(
             body = manifest.json()
             assert body["agent_outcome"] == AgentOutcome.NO_CHANGES.value
             assert body["check_outcome"] == CheckOutcome.NOT_RUN.value
+
+
+@pytest.mark.anyio
+async def test_pi_owned_publication_receives_only_the_task_credential(
+    tmp_path: Path,
+    bare_repo: Path,
+    active_pi: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_BARE_REPO", str(bare_repo))
+    monkeypatch.setenv("GH_TOKEN", "global-host-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "global-host-token")
+    monkeypatch.setenv("FAKE_PI_CHECK_OUTCOME", "passed")
+    monkeypatch.setenv(
+        "FAKE_PI_INTENT_PATH",
+        str(tmp_path / "supervisor" / "pi-publication" / "owned-1.json"),
+    )
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "workspace",
+        task_supervisor_dir=tmp_path / "supervisor",
+        github_clone_token="task-installation-token",
+        pi_owns_publication=True,
+        process_env={
+            "PATH": os.environ["PATH"],
+            "OPENROUTER_API_KEY": "test-key",
+            "GH_TOKEN": "global-host-token",
+        },
+    )
+    monkeypatch.setattr(
+        "gg.server.task_supervisor.service.clone_repository",
+        _clone_from_bare,
+    )
+    app = create_app(settings)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with app.router.lifespan_context(app):
+            started = await client.post(
+                "/api/task-executions/start", json=_start_payload("owned-1")
+            )
+            assert started.status_code == 202
+            execution_id = started.json()["execution_id"]
+            deadline = time.monotonic() + 5
+            manifest = None
+            while time.monotonic() < deadline:
+                response = await client.get(
+                    f"/api/task-executions/{execution_id}/manifest"
+                )
+                if response.status_code == 200:
+                    manifest = response.json()
+                    break
+                await asyncio.sleep(0.05)
+    assert manifest is not None
+    record = json.loads(Path(os.environ["FAKE_PI_RECORD"]).read_text(encoding="utf-8"))
+    assert record["gh_token"] == "task-installation-token"
+    prompt = json.dumps(record["prompt"])
+    assert "gg-task-marker: owned-1" in prompt
+    assert "does not technically prevent a merge" in prompt
+    assert "global-host-token" not in prompt
+    assert "global-host-token" not in json.dumps(record)
+    assert manifest["check_outcome"] == CheckOutcome.PASSED.value

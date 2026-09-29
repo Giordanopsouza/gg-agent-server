@@ -171,6 +171,107 @@ class DraftPublisher:
         self._begin(request, commit_sha=request.head_sha)
         return self._record_published(request, pr, request.head_sha)
 
+    async def reconcile_observed(
+        self, request: PublicationRequest
+    ) -> PublicationRecord:
+        """Verify a pull request Pi already published. Never creates another.
+
+        A URL mentioned in the conversation is not an input. The recorded URL
+        is the one GitHub returns for the matching repository, head, base, and
+        task marker. A write token can merge; this method does not, and a
+        prompt telling Pi not to merge is not a permission boundary.
+        """
+
+        existing = self._ledger.get_publication(request.task_id)
+        if existing is not None and (
+            existing.repository != request.repository
+            or existing.task_branch != request.task_branch
+            or existing.base_ref != request.base_ref
+            or existing.task_marker != request.task_marker
+        ):
+            raise PublicationConflictError(
+                "existing publication identity does not match task"
+            )
+        if existing is not None and existing.state is PublicationState.PUBLISHED:
+            verified = await self._verified_match(request, existing)
+            if verified is not None:
+                return self._record_published(request, verified, verified.head_sha)
+            return existing
+        try:
+            matched = await self._matching_pull_requests(request)
+        except PublicationUncertainError:
+            if existing is not None and existing.pr_number is not None:
+                return existing
+            self._begin(request, commit_sha=request.head_sha)
+            self._ledger.update_publication(
+                request.task_id,
+                state=PublicationState.CREATING,
+                detail="uncertain: listing pull requests timed out",
+            )
+            raise
+        if len(matched) > 1:
+            raise PublicationConflictError(
+                "multiple pull requests match repository/head/base/task marker"
+            )
+        if len(matched) == 1:
+            pr = self._require_verified_pull(request, matched[0])
+            self._begin(request, commit_sha=pr.head_sha)
+            return self._record_published(request, pr, pr.head_sha)
+        others = await self._head_base_pull_requests(request)
+        if others:
+            raise PublicationConflictError(
+                "remote pull request exists for this head/base without this task marker"
+            )
+        if _should_publish(request):
+            self._begin(request, commit_sha=request.head_sha)
+            self._ledger.update_publication(
+                request.task_id,
+                state=PublicationState.FAILED,
+                detail="pull_request_missing",
+                check_outcome=request.check_outcome,
+                agent_outcome=request.agent_outcome,
+            )
+            raise PublicationError("pull_request_missing")
+        return self._record_skip(request, existing)
+
+    async def _verified_match(
+        self, request: PublicationRequest, existing: PublicationRecord
+    ) -> RemotePullRequest | None:
+        try:
+            matched = await self._matching_pull_requests(request)
+        except PublicationUncertainError:
+            return None
+        for pr in matched:
+            if pr.number != existing.pr_number:
+                continue
+            return self._require_verified_pull(request, pr)
+        return None
+
+    def _require_verified_pull(
+        self, request: PublicationRequest, pr: RemotePullRequest
+    ) -> RemotePullRequest:
+        expected_url = f"https://github.com/{request.repository}/pull/{pr.number}"
+        if pr.html_url != expected_url:
+            raise PublicationConflictError(
+                "pull request URL does not match the repository and number"
+            )
+        if pr.head_ref != request.task_branch or pr.base_ref != request.base_ref:
+            raise PublicationConflictError(
+                "pull request head or base does not match the task identity"
+            )
+        if not pr.draft or pr.state != "open":
+            raise PublicationConflictError("task pull request is not an open draft")
+        if request.head_sha is not None and pr.head_sha != request.head_sha:
+            raise PublicationConflictError(
+                "task pull request does not match the published branch head"
+            )
+        marker = marker_token(request.task_marker)
+        if marker not in pr.body and marker not in pr.title:
+            raise PublicationConflictError(
+                "pull request does not contain the task marker"
+            )
+        return pr
+
     def _record_skip(
         self,
         request: PublicationRequest,
@@ -416,6 +517,8 @@ class DraftPublisher:
             detail=outcome_detail,
             check_status=request.check_outcome.value,
             outcome_detail=outcome_detail,
+            check_outcome=request.check_outcome,
+            agent_outcome=request.agent_outcome,
         )
 
     def _git_identity_env(self) -> dict[str, str]:
@@ -458,6 +561,8 @@ def _published_outcome_detail(request: PublicationRequest) -> str:
         return "checks_timed_out"
     if request.check_outcome is CheckOutcome.PASSED:
         return "checks_passed"
+    if request.check_outcome is CheckOutcome.NOT_RUN:
+        return "checks_not_run"
     return "published"
 
 
