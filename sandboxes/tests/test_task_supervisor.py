@@ -45,6 +45,16 @@ if os.environ.get("FAKE_PI_MODE") == "edit":
     Path("README.md").write_text("changed\n", encoding="utf-8")
 if os.environ.get("FAKE_PI_MODE") == "leak_patch":
     Path("README.md").write_text(os.environ["OPENROUTER_API_KEY"], encoding="utf-8")
+if check_outcome := os.environ.get("FAKE_PI_CHECK_OUTCOME"):
+    intent = Path(os.environ["FAKE_PI_INTENT_PATH"])
+    intent.parent.mkdir(parents=True, exist_ok=True)
+    intent.write_text(json.dumps({
+        "repository": "owner/test",
+        "task_branch": "gg/task/owned-1",
+        "base_ref": "main",
+        "task_marker": "owned-1",
+        "check_outcome": check_outcome,
+    }), encoding="utf-8")
 
 send({"type": "agent_settled"})
 record_path.write_text(json.dumps(state), encoding="utf-8")
@@ -383,6 +393,11 @@ async def test_pi_owned_publication_receives_only_the_task_credential(
     monkeypatch.setenv("TEST_BARE_REPO", str(bare_repo))
     monkeypatch.setenv("GH_TOKEN", "global-host-token")
     monkeypatch.setenv("GITHUB_TOKEN", "global-host-token")
+    monkeypatch.setenv("FAKE_PI_CHECK_OUTCOME", "passed")
+    monkeypatch.setenv(
+        "FAKE_PI_INTENT_PATH",
+        str(tmp_path / "supervisor" / "pi-publication" / "owned-1.json"),
+    )
     settings = Settings(
         conversations_dir=tmp_path / "conversations",
         workspace_dir=tmp_path / "workspace",
@@ -426,4 +441,4 @@ async def test_pi_owned_publication_receives_only_the_task_credential(
     assert "does not technically prevent a merge" in prompt
     assert "global-host-token" not in prompt
     assert "global-host-token" not in json.dumps(record)
-    assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
+    assert manifest["check_outcome"] == CheckOutcome.PASSED.value

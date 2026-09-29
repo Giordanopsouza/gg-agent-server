@@ -51,12 +51,17 @@ class ConversationService:
         conversation_dir = self._conversations_dir / conversation_id
         workspace = LocalWorkspace(working_dir=self._resolve_working_dir(working_dir))
         selected = agent or PiAgentConfig()
+        backend = (
+            create_agent_backend(selected, github_token=github_token)
+            if github_token
+            else None
+        )
         conversation = LocalConversation(
             conversation_dir=conversation_dir,
             workspace=workspace,
             conversation_id=conversation_id,
             agent=selected,
-            agent_backend=create_agent_backend(selected, github_token=github_token),
+            agent_backend=backend,
         )
         self._live[conversation_id] = conversation
         return load_meta(conversation_dir)

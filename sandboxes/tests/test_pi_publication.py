@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 from dataclasses import dataclass, field
@@ -8,13 +9,18 @@ from pathlib import Path
 import pytest
 
 from gg.server.task_supervisor.pi_publication import (
+    GhPullRequestClient,
     NoChanges,
     PublicationConflict,
+    PublicationError,
     PublicationTimeout,
     RemotePull,
+    _push,
+    main,
     marker_line,
     open_or_update_draft,
     publish_draft,
+    reported_check_outcome,
 )
 
 
@@ -210,16 +216,144 @@ def test_commit_push_persists_intent_before_create(tmp_path: Path) -> None:
         task_marker="task-1",
         intent_path=intent,
         client=github,
-        check_outcome="not_run",
+        check_outcome="passed",
     )
     assert pull is not None
     assert github.creates == 1
-    assert "Check outcome: `not_run`" in pull.body
+    assert "Check outcome: `passed`" in pull.body
     assert marker_line("task-1") in pull.body
     saved = json.loads(intent.read_text(encoding="utf-8"))
     assert saved["commit_sha"] == pull.head_sha
+    assert (
+        reported_check_outcome(
+            intent,
+            repository="owner/repo",
+            task_branch="gg/task/task-1",
+            base_ref="main",
+            task_marker="task-1",
+        )
+        == "passed"
+    )
     remote = _git(
         ["git", "ls-remote", str(tmp_path / "origin.git"), "refs/heads/gg/task/task-1"],
         tmp_path,
     )
     assert pull.head_sha in remote
+
+
+def test_push_uses_task_token_only_for_the_git_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((args, kwargs["env"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    original = {"GH_TOKEN": "task-token", "PATH": "/usr/bin"}
+    _push(tmp_path, "gg/task/task-1", "abc123", original)
+
+    args, env = calls[0]
+    assert args == ["git", "push", "--", "origin", "abc123:refs/heads/gg/task/task-1"]
+    assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+    assert env["GIT_CONFIG_VALUE_0"] == (
+        "Authorization: Basic "
+        + base64.b64encode(b"x-access-token:task-token").decode()
+    )
+    assert original == {"GH_TOKEN": "task-token", "PATH": "/usr/bin"}
+
+
+def test_push_does_not_echo_the_token_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 1, "", "task-token")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(PublicationError, match="git push failed") as exc:
+        _push(tmp_path, "gg/task/task-1", "abc123", {"GH_TOKEN": "task-token"})
+    assert "task-token" not in str(exc.value)
+
+
+def test_gh_create_and_edit_view_the_pull_after_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = GhPullRequestClient()
+    calls: list[list[str]] = []
+    row = {
+        "number": 7,
+        "url": "https://github.com/owner/repo/pull/7",
+        "isDraft": True,
+        "state": "OPEN",
+        "title": "gg-task task-1",
+        "body": "gg-task-marker: task-1",
+        "headRefName": "gg/task/task-1",
+        "baseRefName": "main",
+        "headRefOid": "abc123",
+    }
+
+    def fake_gh(args: list[str]) -> str:
+        calls.append(args)
+        if args[:2] == ["pr", "create"]:
+            assert "--json" not in args
+            return row["url"] + "\n"
+        if args[:2] == ["pr", "edit"]:
+            assert "--json" not in args
+            return ""
+        assert args[:2] == ["pr", "view"]
+        return json.dumps(row)
+
+    monkeypatch.setattr(client, "_gh", fake_gh)
+    created = client.create_draft(
+        "owner/repo",
+        title="gg-task task-1",
+        body="gg-task-marker: task-1",
+        head="gg/task/task-1",
+        base="main",
+    )
+    updated = client.update_pull(
+        "owner/repo", 7, title="gg-task task-1", body="gg-task-marker: task-1"
+    )
+    assert created == updated
+    assert [args[:2] for args in calls] == [
+        ["pr", "create"],
+        ["pr", "view"],
+        ["pr", "edit"],
+        ["pr", "view"],
+    ]
+
+
+def test_cli_passes_the_task_environment_to_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_publish(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setenv("GH_TOKEN", "task-token")
+    monkeypatch.setattr(
+        "gg.server.task_supervisor.pi_publication.publish_draft", fake_publish
+    )
+    assert (
+        main(
+            [
+                "--repository",
+                "owner/repo",
+                "--branch",
+                "gg/task/task-1",
+                "--base",
+                "main",
+                "--marker",
+                "task-1",
+                "--intent-path",
+                str(tmp_path / "intent.json"),
+                "--check-outcome",
+                "failed",
+            ]
+        )
+        == 0
+    )
+    assert captured["process_env"]["GH_TOKEN"] == "task-token"
+    assert captured["check_outcome"] == "failed"

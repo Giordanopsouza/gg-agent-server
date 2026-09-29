@@ -1,9 +1,8 @@
 """Commit, push, and open or update one draft pull request from Pi's environment.
 
 The task installation token is already in ``GH_TOKEN`` for the Pi process.
-This module does not read the environment and does not accept a token argument,
-so a host-wide token cannot be passed in by mistake. ``gh`` inherits ``GH_TOKEN``
-when the remote is GitHub.
+The CLI passes its inherited environment to Git so the task token can
+authenticate one push. ``gh`` inherits that same token for GitHub API calls.
 
 A prompt can tell Pi not to merge. That is not a permission boundary: the
 installation token can write, and a write token can merge unless repository
@@ -13,12 +12,15 @@ protections forbid it. This command never calls a merge API.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from gg.server.config import publication_process_env
 
 
 MARKER_PREFIX = "gg-task-marker:"
@@ -106,8 +108,10 @@ def publication_instructions(
         "creates or updates the draft:\n\n"
         f"`{command}`\n\n"
         "Use only the GH_TOKEN already in this environment. Do not copy in "
-        "another GitHub token. Report checks you actually ran as passed or "
-        "failed, and checks you did not run as not_run. A finished conversation "
+        "another GitHub token. Add `--check-outcome passed` to the command "
+        "if all checks you ran passed, or `--check-outcome failed` if any "
+        "failed. Omit it when no checks ran. Report the checks in your final "
+        "message. A finished conversation "
         "is not evidence that CI passed.\n\n"
         "Draft pull requests are merged manually on GitHub. Telling you not to "
         "merge does not technically prevent a merge: this token can write, and "
@@ -132,6 +136,8 @@ def publish_draft(
 
     if task_branch == base_ref or task_branch.startswith("-") or ".." in task_branch:
         raise PublicationError("refusing to publish this branch")
+    if check_outcome not in {"passed", "failed", "not_run"}:
+        raise PublicationError("invalid check outcome")
     _assert_identity(intent_path, repository, task_branch, base_ref, task_marker)
     _write_intent(
         intent_path,
@@ -140,6 +146,7 @@ def publish_draft(
         base_ref=base_ref,
         task_marker=task_marker,
         commit_sha=None,
+        check_outcome=check_outcome,
     )
     env = None if process_env is None else dict(process_env)
     _commit_if_needed(repo_dir, task_marker, env)
@@ -155,6 +162,7 @@ def publish_draft(
         base_ref=base_ref,
         task_marker=task_marker,
         commit_sha=head,
+        check_outcome=check_outcome,
     )
     _push(repo_dir, task_branch, head, env)
     return open_or_update_draft(
@@ -270,6 +278,26 @@ def _assert_identity(
         raise PublicationConflict("existing publication identity does not match task")
 
 
+def reported_check_outcome(
+    path: Path,
+    *,
+    repository: str,
+    task_branch: str,
+    base_ref: str,
+    task_marker: str,
+) -> str:
+    """Read the check result Pi supplied to its publication command."""
+
+    if not path.is_file():
+        return "not_run"
+    _assert_identity(path, repository, task_branch, base_ref, task_marker)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    outcome = saved.get("check_outcome", "not_run")
+    if outcome not in {"passed", "failed", "not_run"}:
+        raise PublicationConflict("invalid publication check outcome")
+    return outcome
+
+
 def _write_intent(
     path: Path,
     *,
@@ -278,6 +306,7 @@ def _write_intent(
     base_ref: str,
     task_marker: str,
     commit_sha: str | None,
+    check_outcome: str,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file() and commit_sha is None:
@@ -289,6 +318,7 @@ def _write_intent(
         "base_ref": base_ref,
         "task_marker": task_marker,
         "commit_sha": commit_sha,
+        "check_outcome": check_outcome,
     }
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload), encoding="utf-8")
@@ -320,11 +350,22 @@ def _commit_if_needed(
 
 
 def _push(repo_dir: Path, branch: str, head: str, env: dict[str, str] | None) -> None:
-    _git(
-        repo_dir,
-        ["push", "--", "origin", f"{head}:refs/heads/{branch}"],
-        env,
-    )
+    push_env = None if env is None else dict(env)
+    if push_env is not None and (token := push_env.get("GH_TOKEN")):
+        credential = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        push_env["GIT_CONFIG_COUNT"] = "1"
+        push_env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+        push_env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {credential}"
+        push_env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        _git(
+            repo_dir,
+            ["push", "--", "origin", f"{head}:refs/heads/{branch}"],
+            push_env,
+        )
+    except PublicationError:
+        # Git diagnostics can include request headers; keep the token out of logs.
+        raise PublicationError("git push failed") from None
 
 
 def _git(repo_dir: Path, args: list[str], env: dict[str, str] | None) -> str:
@@ -382,7 +423,7 @@ class GhPullRequestClient:
         head: str,
         base: str,
     ) -> RemotePull:
-        payload = self._gh(
+        url = self._gh(
             [
                 "pr",
                 "create",
@@ -397,16 +438,17 @@ class GhPullRequestClient:
                 head,
                 "--base",
                 base,
-                "--json",
-                "number,url,isDraft,state,title,body,headRefName,baseRefName,headRefOid",
             ]
-        )
-        return _pull_from_gh(json.loads(payload))
+        ).strip()
+        prefix = f"https://github.com/{repository}/pull/"
+        if not url.startswith(prefix) or not url[len(prefix) :].isdigit():
+            raise PublicationError("gh pr create returned an invalid pull request URL")
+        return self._view_pull(repository, url)
 
     def update_pull(
         self, repository: str, number: int, *, title: str, body: str
     ) -> RemotePull:
-        payload = self._gh(
+        self._gh(
             [
                 "pr",
                 "edit",
@@ -417,6 +459,18 @@ class GhPullRequestClient:
                 title,
                 "--body",
                 body,
+            ]
+        )
+        return self._view_pull(repository, str(number))
+
+    def _view_pull(self, repository: str, number_or_url: str) -> RemotePull:
+        payload = self._gh(
+            [
+                "pr",
+                "view",
+                number_or_url,
+                "--repo",
+                repository,
                 "--json",
                 "number,url,isDraft,state,title,body,headRefName,baseRefName,headRefOid",
             ]
@@ -469,7 +523,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--marker", required=True)
     parser.add_argument("--intent-path", required=True, type=Path)
-    parser.add_argument("--check-outcome", default="not_run")
+    parser.add_argument(
+        "--check-outcome", choices=("passed", "failed", "not_run"), default="not_run"
+    )
     parser.add_argument("--repo-dir", type=Path, default=Path.cwd())
     args = parser.parse_args(argv)
     try:
@@ -481,6 +537,7 @@ def main(argv: list[str] | None = None) -> int:
             task_marker=args.marker,
             intent_path=args.intent_path,
             client=GhPullRequestClient(),
+            process_env=publication_process_env(),
             check_outcome=args.check_outcome,
         )
     except NoChanges:

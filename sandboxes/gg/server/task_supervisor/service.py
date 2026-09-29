@@ -29,7 +29,10 @@ from gg.server.task_supervisor.git_prep import (
     collect_git_evidence,
     resolve_base_sha,
 )
-from gg.server.task_supervisor.pi_publication import publication_instructions
+from gg.server.task_supervisor.pi_publication import (
+    publication_instructions,
+    reported_check_outcome,
+)
 from gg.server.task_supervisor.store import ExecutionStore, StartKeyConflictError
 
 
@@ -171,6 +174,19 @@ class TaskSupervisorService:
                     max_patch_bytes=MAX_PATCH_BYTES,
                 )
             check_outcome = CheckOutcome.NOT_RUN
+            if self._settings.pi_owns_publication and request.repository:
+                assert request.task_branch is not None and base_ref is not None
+                check_outcome = CheckOutcome(
+                    reported_check_outcome(
+                        self._settings.task_supervisor_dir
+                        / "pi-publication"
+                        / f"{request.task_id}.json",
+                        repository=request.repository,
+                        task_branch=request.task_branch,
+                        base_ref=base_ref,
+                        task_marker=request.task_id,
+                    )
+                )
             if (
                 request.repository
                 and agent_outcome is AgentOutcome.SUCCEEDED

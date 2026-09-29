@@ -24,6 +24,12 @@ DEFAULT_WORKSPACE_DIR = Path("workspace/project")
 DEFAULT_TASK_SUPERVISOR_DIR = Path("workspace/task-supervisor")
 
 
+def publication_process_env() -> dict[str, str]:
+    """Pass Pi's task-scoped environment to the publication CLI subprocesses."""
+
+    return dict(os.environ)
+
+
 class Settings(BaseModel):
     """Frozen server configuration parsed from GG_* env vars."""
 
