@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { authApi, configuredApiUrl, taskApi, type Branch, type CredentialStatus, type GitHubStatus, type Models, type Repository, type Session, type TaskEventCopy, type TaskRecord, type TaskResult } from "./api";
+import { authApi, configuredApiUrl, setSessionExpiredHandler, taskApi, type Branch, type CredentialStatus, type GitHubStatus, type Models, type Repository, type Session, type TaskEventCopy, type TaskRecord, type TaskResult } from "./api";
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const draftKey = (userId: string) => `gg.task-draft.${userId}`;
+
+function loginMessage(): string {
+  const url = new URL(window.location.href);
+  const outcome = url.searchParams.get("auth");
+  const message = outcome === "cancelled" ? "Google sign-in was cancelled. You can try again."
+    : outcome === "failed" ? "Google sign-in failed. Please try again." : "";
+  return message;
+}
 
 function currentTaskId(): string | null {
   const match = /^#\/tasks\/([^/]+)$/.exec(window.location.hash);
@@ -142,8 +151,8 @@ function Detail({ id, onTask, onResult }: {
   );
 }
 
-function Home({ credential, github, onCreated }: { credential: CredentialStatus | null; github: GitHubStatus | null; onCreated: (task: TaskRecord) => void }) {
-  const [prompt, setPrompt] = useState("");
+function Home({ userId, credential, github, onCreated }: { userId: string; credential: CredentialStatus | null; github: GitHubStatus | null; onCreated: (task: TaskRecord) => void }) {
+  const [prompt, setPrompt] = useState(() => sessionStorage.getItem(draftKey(userId)) || "");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<Models | null>(null);
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -186,6 +195,7 @@ function Home({ credential, github, onCreated }: { credential: CredentialStatus 
     setSubmitting(true); setError("");
     try {
       const task = await taskApi.create({ prompt: prompt.trim(), model, idempotency_key: submissionKey, ...(repository ? { repository, base_ref: baseRef } : {}) });
+      sessionStorage.removeItem(draftKey(userId));
       setSubmissionKey(crypto.randomUUID());
       onCreated(task);
       window.location.hash = `#/tasks/${encodeURIComponent(task.id)}`;
@@ -195,7 +205,7 @@ function Home({ credential, github, onCreated }: { credential: CredentialStatus 
   return <main className="main home-main"><div className="home-intro"><div className="eyebrow">YOUR WORKSPACE</div><h1>What should the agent do?</h1><p>Choose a model and, optionally, an authorized repository.</p></div>
     <form className="composer" onSubmit={(event) => void submit(event)}>
       <label className="field-label" htmlFor="prompt">TASK PROMPT <span>REQUIRED</span></label>
-      <textarea id="prompt" value={prompt} onChange={(event) => { setPrompt(event.target.value); setSubmissionKey(crypto.randomUUID()); }} placeholder="Describe what you want the agent to work on…" maxLength={16000} rows={6} />
+      <textarea id="prompt" value={prompt} onChange={(event) => { setPrompt(event.target.value); sessionStorage.setItem(draftKey(userId), event.target.value); setSubmissionKey(crypto.randomUUID()); }} placeholder="Describe what you want the agent to work on…" maxLength={16000} rows={6} />
       <div className="composer-divider" />
       <div className="repo-fields"><label>Model<select value={model} onChange={(event) => { setModel(event.target.value); setSubmissionKey(crypto.randomUUID()); }} disabled={!models}>{models?.models.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div>
       <div className="repo-heading"><div><strong>Repository</strong><p>Optional. Leave blank for a fresh workspace.</p></div><button type="button" className="text-button" onClick={() => void refreshRepositories()} disabled={github?.status !== "connected"}>Refresh</button></div>
@@ -225,19 +235,39 @@ export default function App() {
   const taskId = useTaskId();
   const [session, setSession] = useState<Session | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
-  const [sessionError, setSessionError] = useState("");
+  const [sessionError, setSessionError] = useState(loginMessage);
   const [credential, setCredential] = useState<CredentialStatus | null>(null);
   const [github, setGitHub] = useState<GitHubStatus | null>(null);
   const [setupError, setSetupError] = useState("");
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [results, setResults] = useState<Record<string, TaskResult>>({});
   const [listError, setListError] = useState("");
+  const [loadingTasks, setLoadingTasks] = useState(true);
   const onTask = useCallback((task: TaskRecord) => setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)].sort((a, b) => b.seq - a.seq)), []);
   const onResult = useCallback((id: string, result: TaskResult) => setResults((previous) => ({ ...previous, [id]: result })), []);
   useEffect(() => { localStorage.removeItem("gg.runtime.apiKey"); }, []);
   useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("auth")) {
+      url.searchParams.delete("auth");
+      window.history.replaceState(null, "", url);
+    }
+  }, []);
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      setSession(null); setCredential(null); setGitHub(null); setTasks([]); setResults({});
+      setSetupError(""); setListError("");
+      setSessionError("Your session expired. Sign in again to continue.");
+    });
+    return () => setSessionExpiredHandler(null);
+  }, []);
+  useEffect(() => {
     let active = true;
-    void authApi.session().then((value) => { if (active) setSession(value); }).catch((cause) => { if (active && !(cause instanceof Error && cause.message.startsWith("401:"))) setSessionError(String(cause)); }).finally(() => { if (active) setCheckingSession(false); });
+    void authApi.session().then((value) => { if (active) setSession(value); }).catch((cause) => {
+      if (active && !(cause instanceof Error && cause.message.startsWith("401:"))) {
+        setSessionError((previous) => previous || "Could not check your session. Please refresh and try again.");
+      }
+    }).finally(() => { if (active) setCheckingSession(false); });
     return () => { active = false; };
   }, []);
   useEffect(() => {
@@ -253,33 +283,39 @@ export default function App() {
     return () => { active = false; };
   }, [session]);
   useEffect(() => {
-    if (!session) { setTasks([]); setResults({}); return; }
+    if (!session) { setTasks([]); setResults({}); setLoadingTasks(true); return; }
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
         const listed = await taskApi.list();
         if (!active) return;
-        const recent = [...listed].sort((a, b) => b.seq - a.seq).slice(0, 12);
+        const recent = [...listed].sort((a, b) => b.seq - a.seq);
         setTasks(recent); setListError("");
-        const finished = recent.filter((task) => TERMINAL.has(task.state));
+        const finished = recent.filter((task) => TERMINAL.has(task.state)).slice(0, 12);
         const settled = await Promise.allSettled(finished.map((task) => taskApi.result(task.id)));
         if (active) setResults(Object.fromEntries(settled.flatMap((entry, index) => entry.status === "fulfilled" ? [[finished[index].id, entry.value] as const] : [])));
       } catch (cause) { if (active) setListError(String(cause)); }
-      finally { if (active) timer = setTimeout(poll, 5000); }
+      finally { if (active) { setLoadingTasks(false); timer = setTimeout(poll, 5000); } }
     };
     void poll();
     return () => { active = false; clearTimeout(timer); };
   }, [session]);
   async function logout() {
-    try { await authApi.logout(); setSession(null); setCredential(null); setGitHub(null); window.location.hash = "#/"; }
+    try { await authApi.logout(); sessionStorage.removeItem(draftKey(session!.user.id)); setSession(null); setCredential(null); setGitHub(null); setTasks([]); setResults({}); setSessionError(""); setSetupError(""); setListError(""); window.location.hash = "#/"; }
     catch (cause) { setSetupError(String(cause)); }
   }
   if (checkingSession) return <main className="auth-screen"><div className="auth-card">Checking session…</div></main>;
   if (!session) return <main className="auth-screen"><div className="auth-card"><div className="brand-mark">gg</div><h1>gg / tasks</h1><p>Sign in to configure your account and run tasks.</p>{sessionError && <div className="alert" role="alert">{sessionError}</div>}<a className="spawn-button" href={authApi.loginUrl()}>Continue with Google ↗</a></div></main>;
+  const groups = tasks.reduce((grouped, task) => {
+    const repository = task.repository || "Blank workspace";
+    if (!grouped.has(repository)) grouped.set(repository, []);
+    grouped.get(repository)!.push(task);
+    return grouped;
+  }, new Map<string, TaskRecord[]>());
   return <div className="shell"><aside className="sidebar"><a className="brand" href="#/"><span className="brand-mark">g<span>g</span></span><span>gg<span className="brand-light"> / tasks</span></span></a>
     <div className="sidebar-heading"><span>WORKSPACE</span><a href="#/" className="new-link" aria-label="New task">+</a></div><a className={`nav-item ${!taskId ? "selected" : ""}`} href="#/"><span className="nav-icon">◫</span> Overview</a>
-    <div className="sidebar-heading recent-heading"><span>RECENT TASKS</span><span>{tasks.length}</span></div><nav className="task-nav" aria-label="Recent tasks">{tasks.map((task) => <a className={`task-nav-item ${taskId === task.id ? "selected" : ""}`} href={`#/tasks/${encodeURIComponent(task.id)}`} key={task.id}><span className="nav-prompt">{task.prompt}</span><StatusChip status={statusLabel(task, results[task.id])} /></a>)}{!tasks.length && <p className="no-tasks">No tasks yet.</p>}</nav>
-    {listError && <p className="sidebar-error" role="alert">{listError}</p>}<AccountSetup session={session} credential={credential} github={github} onCredential={setCredential} onGitHub={setGitHub} onLogout={() => void logout()} /></aside>
-    <div className="content"><div className="topbar"><span>AGENT CONTROL PLANE</span><span className="topbar-right"><span className="online-dot" />Signed in</span></div>{setupError && <div className="alert setup-error" role="alert">{setupError}</div>}{taskId ? <Detail key={taskId} id={taskId} onTask={onTask} onResult={onResult} /> : <Home credential={credential} github={github} onCreated={onTask} />}</div></div>;
+    <div className="sidebar-heading recent-heading"><span>HISTORY</span><span>{tasks.length}</span></div><nav className="task-nav" aria-label="Task history">{loadingTasks ? <p className="no-tasks" role="status">Loading history…</p> : listError ? <p className="sidebar-error" role="alert">Could not load history. Retrying…</p> : !tasks.length ? <p className="no-tasks">No tasks yet.</p> : [...groups].map(([repository, items]) => <section className="history-group" key={repository} aria-label={repository}><h2>{repository}</h2>{items.map((task) => <a className={`task-nav-item ${taskId === task.id ? "selected" : ""}`} href={`#/tasks/${encodeURIComponent(task.id)}`} key={task.id} aria-current={taskId === task.id ? "page" : undefined}><span className="nav-prompt">{task.prompt}</span><span className="history-meta"><StatusChip status={statusLabel(task, results[task.id])} /><time dateTime={task.created_at}>{formatDate(task.created_at)}</time></span></a>)}</section>)}</nav>
+    <AccountSetup key={session.user.id} session={session} credential={credential} github={github} onCredential={setCredential} onGitHub={setGitHub} onLogout={() => void logout()} /></aside>
+    <div className="content"><div className="topbar"><span>AGENT CONTROL PLANE</span><span className="topbar-right"><span className="online-dot" />Signed in</span></div>{setupError && <div className="alert setup-error" role="alert">{setupError}</div>}{taskId ? <Detail key={`${session.user.id}:${taskId}`} id={taskId} onTask={onTask} onResult={onResult} /> : <Home key={session.user.id} userId={session.user.id} credential={credential} github={github} onCreated={onTask} />}</div></div>;
 }

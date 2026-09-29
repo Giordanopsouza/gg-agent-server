@@ -294,42 +294,43 @@ def web_auth_router(
         else:
             code = request.query_params.get("code")
             if not code:
-                raise HTTPException(status_code=400, detail="invalid login callback")
-            try:
-                tokens = await provider.exchange(code, flow["verifier"])
-                user = await provider.verified_user(tokens["access_token"])
-                if not tokens.get("refresh_token"):
-                    raise ValueError("missing refresh token")
-            except Exception:
-                raise HTTPException(
-                    status_code=400, detail="invalid login callback"
-                ) from None
-            assert sessions is not None
-            try:
-                profile_ready = await asyncio.to_thread(
-                    sessions.ensure_profile, user["id"], user["session_id"]
-                )
-            except (SQLAlchemyError, psycopg.Error):
-                raise HTTPException(
-                    status_code=503, detail="session store unavailable"
-                ) from None
-            if not profile_ready:
-                raise HTTPException(status_code=400, detail="inactive login session")
-            response = RedirectResponse(flow["return_to"], status_code=303)
-            response.set_cookie(
-                SESSION_COOKIE,
-                provider.seal(
-                    {
-                        "access": tokens["access_token"],
-                        "refresh": tokens["refresh_token"],
-                    }
-                ),
-                max_age=SESSION_SECONDS,
-                httponly=True,
-                secure=settings.web_cookie_secure,
-                samesite="lax",
-                path="/",
-            )
+                response = RedirectResponse("/?auth=failed", status_code=303)
+            else:
+                try:
+                    tokens = await provider.exchange(code, flow["verifier"])
+                    user = await provider.verified_user(tokens["access_token"])
+                    if not tokens.get("refresh_token"):
+                        raise ValueError("missing refresh token")
+                except Exception:
+                    response = RedirectResponse("/?auth=failed", status_code=303)
+                else:
+                    assert sessions is not None
+                    try:
+                        profile_ready = await asyncio.to_thread(
+                            sessions.ensure_profile, user["id"], user["session_id"]
+                        )
+                    except (SQLAlchemyError, psycopg.Error):
+                        raise HTTPException(
+                            status_code=503, detail="session store unavailable"
+                        ) from None
+                    if not profile_ready:
+                        response = RedirectResponse("/?auth=failed", status_code=303)
+                    else:
+                        response = RedirectResponse(flow["return_to"], status_code=303)
+                        response.set_cookie(
+                            SESSION_COOKIE,
+                            provider.seal(
+                                {
+                                    "access": tokens["access_token"],
+                                    "refresh": tokens["refresh_token"],
+                                }
+                            ),
+                            max_age=SESSION_SECONDS,
+                            httponly=True,
+                            secure=settings.web_cookie_secure,
+                            samesite="lax",
+                            path="/",
+                        )
         response.delete_cookie(FLOW_COOKIE, path="/auth/google")
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
