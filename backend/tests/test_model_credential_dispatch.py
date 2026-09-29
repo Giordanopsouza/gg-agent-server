@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
@@ -59,6 +60,11 @@ class FakeLedger:
         record = replace(self.creations[task_id], **changes)
         self.creations[task_id] = record
         return record
+
+    def record_base_sha(self, task_id: str, base_sha: str) -> None:
+        self.tasks[task_id] = self.tasks[task_id].model_copy(
+            update={"base_sha": base_sha}
+        )
 
 
 class FakeVault:
@@ -163,3 +169,46 @@ async def test_revoked_key_blocks_before_provider_creation() -> None:
     assert seen == ["Bearer key-a"]
     assert provider.calls == []
     assert ledger.creations == {}
+
+
+@pytest.mark.anyio
+async def test_owner_repository_sandbox_gets_the_task_credential_only() -> None:
+    ledger = FakeLedger()
+    ledger.tasks["repo"] = ledger.tasks["a"].model_copy(
+        update={
+            "id": "repo",
+            "idempotency_key": "repo",
+            "repository": "alice/private",
+            "base_ref": "main",
+        }
+    )
+    provider = FakeProvider()
+
+    class Authorization:
+        def credential(self, owner_id, repository, base_ref):
+            assert repository == "alice/private"
+            assert base_ref == "main"
+            return SimpleNamespace(token="installation-token", base_sha="abc123")
+
+    lifecycle = ModalSandboxLifecycle(
+        ledger=ledger,
+        provider=provider,
+        deployment="test",
+        credential_vault=FakeVault(),
+        repository_authorization=Authorization(),
+        sandbox_env={
+            "OPENROUTER_API_KEY": "global-key",
+            "GG_GITHUB_CLONE_TOKEN": "global-clone-token",
+            "GH_TOKEN": "global-gh-token",
+            "GITHUB_TOKEN": "global-github-token",
+        },
+    )
+    await lifecycle.create("repo")
+    env = provider.calls[0]["sandbox_env"]
+    assert env["OPENROUTER_API_KEY"] == "key-a"
+    assert env["GG_GITHUB_CLONE_TOKEN"] == "installation-token"
+    assert env["GG_PI_OWNS_PUBLICATION"] == "1"
+    assert "GH_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "global-clone-token" not in env.values()
+    assert "global-gh-token" not in env.values()

@@ -29,6 +29,7 @@ from gg.server.task_supervisor.git_prep import (
     collect_git_evidence,
     resolve_base_sha,
 )
+from gg.server.task_supervisor.pi_publication import publication_instructions
 from gg.server.task_supervisor.store import ExecutionStore, StartKeyConflictError
 
 
@@ -250,15 +251,36 @@ class TaskSupervisorService:
         repo_dir: Path,
         conversation_id: str,
     ) -> AgentOutcome:
-        if "GH_TOKEN" in self._process_env:
+        if not self._settings.pi_owns_publication and "GH_TOKEN" in self._process_env:
             raise RuntimeError("GH_TOKEN must not be present in Pi environment")
+        github_token = None
+        prompt = request.prompt
+        if self._settings.pi_owns_publication and request.repository:
+            if self._github_token is None:
+                raise RuntimeError("task github credential is not configured")
+            github_token = self._github_token
+            assert request.task_branch is not None and request.base_ref is not None
+            prompt = (
+                request.prompt
+                + "\n\n"
+                + publication_instructions(
+                    repository=request.repository,
+                    task_branch=request.task_branch,
+                    base_ref=request.base_ref,
+                    task_marker=request.task_id,
+                    intent_path=self._settings.task_supervisor_dir
+                    / "pi-publication"
+                    / f"{request.task_id}.json",
+                )
+            )
         meta = self._conversation_service.create(
             working_dir=repo_dir,
             conversation_id=conversation_id,
             agent=PiAgentConfig(model=request.model),
+            github_token=github_token,
         )
         _ = meta
-        self._conversation_service.send_message(conversation_id, request.prompt)
+        self._conversation_service.send_message(conversation_id, prompt)
         timeout = min(
             DEFAULT_AGENT_TIMEOUT_SECONDS,
             self._remaining_seconds(request.deadline_at, minimum=30),
@@ -341,12 +363,17 @@ class TaskSupervisorService:
         return max(minimum, remaining)
 
     def _redact_manifest(self, manifest: TaskResultManifest) -> TaskResultManifest:
-        key = self._process_env.get("OPENROUTER_API_KEY")
-        if not key:
-            return manifest
-        return TaskResultManifest.model_validate(
-            redact_secret(manifest.model_dump(mode="python"), key)
+        redacted: object = manifest.model_dump(mode="python")
+        secrets = (
+            self._process_env.get("OPENROUTER_API_KEY"),
+            self._github_token,
         )
+        if not any(secrets):
+            return manifest
+        for secret in secrets:
+            if secret:
+                redacted = redact_secret(redacted, secret)
+        return TaskResultManifest.model_validate(redacted)
 
     @staticmethod
     def _check_outcome(capture: CommandCapture) -> CheckOutcome:

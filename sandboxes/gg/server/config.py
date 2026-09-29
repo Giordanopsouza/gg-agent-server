@@ -36,6 +36,7 @@ class Settings(BaseModel):
     workspace_dir: Path = DEFAULT_WORKSPACE_DIR
     task_supervisor_dir: Path = DEFAULT_TASK_SUPERVISOR_DIR
     github_clone_token: str | None = None
+    pi_owns_publication: bool = False
     process_env: dict[str, str] = Field(default_factory=dict)
     # - # Empty list means an open server (no auth). See task 010 for enforcement.
     session_api_keys: list[str] = Field(default_factory=list)
@@ -93,6 +94,7 @@ def _load_settings() -> Settings:
         if stripped:
             data["github_clone_token"] = stripped
 
+    data["pi_owns_publication"] = os.getenv("GG_PI_OWNS_PUBLICATION") == "1"
     data["session_api_keys"] = _parse_session_api_keys(os.getenv("GG_SESSION_API_KEYS"))
 
     process_env = dict(os.environ)
@@ -104,9 +106,11 @@ def _load_settings() -> Settings:
         settings = Settings.model_validate(data)
     except ValidationError as exc:
         raise ValueError(f"Invalid server settings: {exc}") from exc
-    # The supervisor retains the token explicitly for clone. Child agent
-    # processes must not inherit it from the server environment.
+    # The supervisor retains the clone token explicitly. Ambient GitHub
+    # tokens are not forwarded into Pi; the task credential is injected later.
     os.environ.pop("GG_GITHUB_CLONE_TOKEN", None)
+    os.environ.pop("GH_TOKEN", None)
+    os.environ.pop("GITHUB_TOKEN", None)
     return settings
 
 

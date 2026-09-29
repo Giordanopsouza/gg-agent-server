@@ -34,7 +34,7 @@ from gg.runtime.storage import (
 )
 from gg.runtime.task_supervisor_client import TaskSupervisorClient
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
-from gg.sdk.publication import PublicationRequest
+from gg.sdk.publication import PublicationRequest, PublicationState
 from gg.sdk.task_execution import (
     AgentOutcome,
     CheckOutcome,
@@ -57,6 +57,8 @@ class PublicationPort(Protocol):
     async def publish(
         self, request: PublicationRequest, *, repo_dir: Path | None = None
     ) -> object: ...
+
+    async def reconcile_observed(self, request: PublicationRequest) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -331,6 +333,19 @@ class TaskSupervisionManager:
             else datetime.now(UTC) + duration
         )
         task_branch = f"{TASK_BRANCH_PREFIX}/{task_id}"
+        if task.owner_id is not None and task.repository and task.base_ref:
+            self._ledger.begin_publication(
+                task_id=task_id,
+                repository=task.repository,
+                task_branch=task_branch,
+                base_ref=task.base_ref,
+                task_marker=task_id,
+                commit_sha=None,
+                check_outcome=CheckOutcome.NOT_RUN,
+                agent_outcome=AgentOutcome.NOT_RUN,
+                state=PublicationState.PENDING,
+                detail="pi_publication_pending",
+            )
         self._ledger.begin_supervision(
             task_id=task_id,
             execution_id=task_id,
@@ -512,13 +527,12 @@ class TaskSupervisionManager:
             await self._maybe_publish(task_id, manifest, archive)
         except Exception as exc:
             terminal_state = TaskState.FAILED
-            if task.owner_id is not None and task.repository is not None:
+            detail = str(exc)
+            github_token = getattr(self._settings, "github_clone_token", None)
+            if github_token:
+                detail = detail.replace(github_token, "[REDACTED]")
+            if not detail:
                 detail = "GitHub publication unavailable"
-            else:
-                detail = str(exc)
-                github_token = getattr(self._settings, "github_clone_token", None)
-                if github_token:
-                    detail = detail.replace(github_token, "[REDACTED]")
             outcome_detail = f"publication failed: {detail}"
         self._ledger.finish_task(
             task_id,
@@ -570,22 +584,32 @@ class TaskSupervisionManager:
         archive: TaskResultArchive,
     ) -> None:
         task = self._ledger.get(task_id)
+        pi_owned = (
+            task is not None
+            and task.owner_id is not None
+            and task.repository is not None
+        )
         if (
             manifest is None
-            or (self._publisher is None and (task is None or task.owner_id is None))
+            or (self._publisher is None and not pi_owned)
             or manifest.repository is None
             or manifest.task_branch is None
             or manifest.base_ref is None
-            or manifest.base_sha is None
-            or not manifest.changed_files
+            or (manifest.base_sha is None and (task is None or task.base_sha is None))
+            or (not manifest.changed_files and not pi_owned)
         ):
             return
+        assert manifest.repository is not None
+        assert manifest.task_branch is not None
+        assert manifest.base_ref is not None
+        base_sha = manifest.base_sha or (task.base_sha if task is not None else None)
+        assert base_sha is not None
         request = PublicationRequest(
             task_id=task_id,
             repository=manifest.repository,
             task_branch=manifest.task_branch,
             base_ref=manifest.base_ref,
-            base_sha=manifest.base_sha,
+            base_sha=base_sha,
             head_sha=manifest.head_sha,
             task_marker=task_id,
             agent_outcome=manifest.agent_outcome,
@@ -603,7 +627,9 @@ class TaskSupervisionManager:
             if (
                 manifest.repository != task.repository
                 or manifest.base_ref != task.base_ref
-                or manifest.base_sha != task.base_sha
+                or (
+                    manifest.base_sha is not None and manifest.base_sha != task.base_sha
+                )
             ):
                 raise ValueError(
                     "sandbox manifest does not match authorized repository and base"
@@ -628,6 +654,11 @@ class TaskSupervisionManager:
         if github_token is None:
             return
         assert publisher is not None
+        if pi_owned:
+            result = publisher.reconcile_observed(request)
+            if isinstance(result, Awaitable):
+                await result
+            return
         if await publisher.adopt_existing(request) is not None:
             return
         with tempfile.TemporaryDirectory(prefix="gg-finalize-") as tmp:
