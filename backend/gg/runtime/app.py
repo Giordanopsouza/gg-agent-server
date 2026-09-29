@@ -22,7 +22,6 @@ from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 from gg.runtime.config import RuntimeSettings
-from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.github_connection import (
     GitHubClient,
     PostgresGitHubConnections,
@@ -36,7 +35,6 @@ from gg.runtime.openrouter_vault import (
     openrouter_vault_router,
 )
 from gg.runtime.postgres import RuntimePostgres
-from gg.runtime.publication import BotIdentity, DraftPublisher
 from gg.runtime.readiness import readiness_from_scheduler
 from gg.runtime.repository_authorization import RepositoryAuthorization
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
@@ -134,23 +132,10 @@ def create_app(
         credential_verifier=openrouter_verifier,
         repository_authorization=repository_authorization,
     )
-    publisher = None
-    if settings.github_clone_token:
-        publisher = DraftPublisher(
-            ledger=ledger,
-            github=HttpGitHubGateway(token=settings.github_clone_token),
-            bot=BotIdentity(
-                name="gg-bot",
-                email="gg-bot@users.noreply.github.com",
-                login="gg-bot",
-            ),
-            github_token=settings.github_clone_token,
-        )
     supervision = task_supervision or TaskSupervisionManager(
         ledger=ledger,
         lifecycle=lifecycle,
         settings=settings,
-        publisher=publisher,
         repository_authorization=repository_authorization,
     )
     storage_limits = StorageLimits.from_settings(settings)

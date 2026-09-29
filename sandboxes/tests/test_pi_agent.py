@@ -283,7 +283,8 @@ def test_success_uses_expected_command_cwd_and_translates_final_events(
         str(fake_pi),
         "--mode",
         "rpc",
-        "--no-session",
+        "--session-dir",
+        str(tmp_path / "pi-sessions" / "workspace"),
         "--no-approve",
         "--provider",
         "openrouter",
@@ -317,6 +318,31 @@ def test_success_uses_expected_command_cwd_and_translates_final_events(
         "is_error": False,
     }
     assert events[-1].payload == {"status": ConversationStatus.FINISHED}
+
+
+def test_second_turn_reuses_persisted_pi_session(
+    fake_pi: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_path = tmp_path / "record.json"
+    monkeypatch.setenv("FAKE_PI_RECORD", str(record_path))
+    conversation = _conversation(tmp_path)
+    conversation.send_message("create notes")
+    conversation.run()
+    session_dir = tmp_path / "pi-sessions" / "workspace"
+    (session_dir / "turn-one.jsonl").write_text("{}\n", encoding="utf-8")
+
+    conversation.send_message("continue notes")
+    conversation.run()
+
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["argv"][-1] == "--continue"
+    assert record["prompt"]["message"] == "continue notes"
+    messages = [
+        event.payload.get("text")
+        for event in conversation.list_events()
+        if event.kind is EventKind.MESSAGE and event.payload.get("role") == "user"
+    ]
+    assert messages == ["create notes", "continue notes"]
 
 
 def test_pi_output_redacts_key_before_event_persistence(

@@ -25,6 +25,7 @@ def _settings(tmp_path: Path, **overrides) -> RuntimeSettings:
         "image": "test-image:dev",
         "max_total_evidence_bytes": 4096,
         "min_free_disk_bytes": 0,
+        "dispatch_lock_path": str(tmp_path / "dispatch.lock"),
     }
     base.update(overrides)
     return RuntimeSettings(**base)

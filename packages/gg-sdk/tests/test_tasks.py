@@ -11,6 +11,8 @@ def test_task_state_covers_full_lifecycle() -> None:
         "queued",
         "starting",
         "running",
+        "idle",
+        "sleeping",
         "finalizing",
         "completed",
         "failed",

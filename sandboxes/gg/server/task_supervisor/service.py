@@ -18,7 +18,7 @@ from gg.sdk.task_execution import (
     TaskExecutionRecord,
     TaskResultManifest,
 )
-from gg.server.agent import AgentError
+from gg.server.agent import AgentError, ConversationNotFoundError
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
 from gg.server.secret_redaction import redact_secret
@@ -28,10 +28,6 @@ from gg.server.task_supervisor.git_prep import (
     clone_repository,
     collect_git_evidence,
     resolve_base_sha,
-)
-from gg.server.task_supervisor.pi_publication import (
-    publication_instructions,
-    reported_check_outcome,
 )
 from gg.server.task_supervisor.store import ExecutionStore, StartKeyConflictError
 
@@ -86,11 +82,11 @@ class TaskSupervisorService:
         self._started = False
 
     async def start(
-        self, request: StartTaskExecutionRequest
+        self, request: StartTaskExecutionRequest, *, github_token: str | None = None
     ) -> tuple[TaskExecutionRecord, bool]:
         if request.repository and (not request.base_ref or not request.task_branch):
             raise ValueError("repository tasks require base_ref and task_branch")
-        if request.repository and self._github_token is None:
+        if request.repository and (github_token or self._github_token) is None:
             raise RuntimeError("github clone token is not configured")
         try:
             record, created = self._store.admit_or_get(
@@ -109,7 +105,7 @@ class TaskSupervisorService:
         if record.execution_id in self._active:
             return record, False
         task = asyncio.create_task(
-            self._run_pipeline(request, record),
+            self._run_pipeline(request, record, github_token=github_token),
             name=f"task-exec-{record.execution_id}",
         )
         self._active[record.execution_id] = task
@@ -122,10 +118,22 @@ class TaskSupervisorService:
     def get_manifest(self, execution_id: str) -> TaskResultManifest:
         return self._store.load_manifest(execution_id)
 
+    def _conversation_id(self, task_id: str) -> str:
+        """Persist one conversation identity per retained workspace generation."""
+        path = self._settings.task_supervisor_dir / "conversation-id"
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        value = str(uuid4())
+        path.write_text(value, encoding="utf-8")
+        return value
+
     async def _run_pipeline(
         self,
         request: StartTaskExecutionRequest,
         record: TaskExecutionRecord,
+        *,
+        github_token: str | None = None,
     ) -> None:
         repo_dir = self._settings.workspace_dir / "tasks" / request.task_id
         base_ref = request.base_ref
@@ -133,34 +141,48 @@ class TaskSupervisorService:
         bootstrap_capture: CommandCapture | None = None
         check_capture: CommandCapture | None = None
         conversation_id: str | None = None
+        turn_token = github_token or self._github_token
         try:
             await self._update_phase(record, TaskExecutionPhase.PREPARING)
             if request.repository:
                 assert base_ref is not None and request.task_branch is not None
-                assert self._github_token is not None
-                clone_repository(
-                    repository=request.repository,
-                    destination=repo_dir,
-                    github_token=self._github_token,
-                    process_env=self._process_env,
-                )
+                token = turn_token
+                assert token is not None
+                if not (repo_dir / ".git").is_dir():
+                    clone_repository(
+                        repository=request.repository,
+                        destination=repo_dir,
+                        github_token=token,
+                        process_env=self._process_env,
+                    )
                 base_sha = request.base_sha or resolve_base_sha(
                     repo_dir=repo_dir, base_ref=base_ref
                 )
-                checkout_task_branch(
-                    repo_dir=repo_dir, branch=request.task_branch, base_sha=base_sha
-                )
+                if not (repo_dir / ".git" / "HEAD").is_file():
+                    raise GitPrepError("checkout is incomplete")
+                branch = subprocess.run(
+                    ["git", "branch", "--show-current"],
+                    cwd=repo_dir,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                ).stdout.strip()
+                if branch != request.task_branch:
+                    checkout_task_branch(
+                        repo_dir=repo_dir, branch=request.task_branch, base_sha=base_sha
+                    )
             else:
                 repo_dir.mkdir(parents=True, exist_ok=True)
 
             await self._update_phase(record, TaskExecutionPhase.RUNNING_AGENT)
-            conversation_id = str(uuid4())
+            conversation_id = self._conversation_id(request.task_id)
             record = record.model_copy(update={"conversation_id": conversation_id})
             self._store.save_execution(record)
             agent_outcome = await self._run_agent(
                 request=request,
                 repo_dir=repo_dir,
                 conversation_id=conversation_id,
+                github_token=token if request.repository else None,
             )
             head_sha = None
             changed: tuple[str, ...] = ()
@@ -174,19 +196,6 @@ class TaskSupervisorService:
                     max_patch_bytes=MAX_PATCH_BYTES,
                 )
             check_outcome = CheckOutcome.NOT_RUN
-            if self._settings.pi_owns_publication and request.repository:
-                assert request.task_branch is not None and base_ref is not None
-                check_outcome = CheckOutcome(
-                    reported_check_outcome(
-                        self._settings.task_supervisor_dir
-                        / "pi-publication"
-                        / f"{request.task_id}.json",
-                        repository=request.repository,
-                        task_branch=request.task_branch,
-                        base_ref=base_ref,
-                        task_marker=request.task_id,
-                    )
-                )
             if (
                 request.repository
                 and agent_outcome is AgentOutcome.SUCCEEDED
@@ -212,7 +221,9 @@ class TaskSupervisorService:
                 conversation_id=conversation_id,
                 completed_at=datetime.now(UTC),
             )
-            path = self._store.save_manifest(self._redact_manifest(manifest))
+            path = self._store.save_manifest(
+                self._redact_manifest(manifest, github_token=turn_token)
+            )
             terminal = (
                 TaskExecutionPhase.COMPLETED
                 if agent_outcome in {AgentOutcome.NO_CHANGES, AgentOutcome.SUCCEEDED}
@@ -235,6 +246,7 @@ class TaskSupervisorService:
             await self._finalize_failure(
                 record,
                 detail=str(exc),
+                github_token=turn_token,
                 agent_outcome=AgentOutcome.TIMEOUT,
                 check_outcome=CheckOutcome.NOT_RUN,
                 base_ref=base_ref,
@@ -249,6 +261,7 @@ class TaskSupervisorService:
             await self._finalize_failure(
                 record,
                 detail=str(exc),
+                github_token=turn_token,
                 agent_outcome=AgentOutcome.FAILED,
                 check_outcome=CheckOutcome.NOT_RUN,
                 base_ref=base_ref,
@@ -266,35 +279,26 @@ class TaskSupervisorService:
         request: StartTaskExecutionRequest,
         repo_dir: Path,
         conversation_id: str,
+        github_token: str | None = None,
     ) -> AgentOutcome:
-        if not self._settings.pi_owns_publication and "GH_TOKEN" in self._process_env:
-            raise RuntimeError("GH_TOKEN must not be present in Pi environment")
-        github_token = None
         prompt = request.prompt
-        if self._settings.pi_owns_publication and request.repository:
-            if self._github_token is None:
-                raise RuntimeError("task github credential is not configured")
-            github_token = self._github_token
-            assert request.task_branch is not None and request.base_ref is not None
-            prompt = (
-                request.prompt
-                + "\n\n"
-                + publication_instructions(
-                    repository=request.repository,
-                    task_branch=request.task_branch,
-                    base_ref=request.base_ref,
-                    task_marker=request.task_id,
-                    intent_path=self._settings.task_supervisor_dir
-                    / "pi-publication"
-                    / f"{request.task_id}.json",
-                )
+        if request.repository:
+            prompt += (
+                "\n\nWork in this checkout and report what you changed. "
+                "Do not commit, push, or open a pull request unless this "
+                "message explicitly asks for it. The gh CLI and git are "
+                "available with a repository-scoped credential."
             )
-        meta = self._conversation_service.create(
-            working_dir=repo_dir,
-            conversation_id=conversation_id,
-            agent=PiAgentConfig(model=request.model),
-            github_token=github_token,
-        )
+        try:
+            meta = self._conversation_service.get_record(conversation_id)
+            self._conversation_service.set_github_token(conversation_id, github_token)
+        except ConversationNotFoundError:
+            meta = self._conversation_service.create(
+                working_dir=repo_dir,
+                conversation_id=conversation_id,
+                agent=PiAgentConfig(model=request.model),
+                github_token=github_token,
+            )
         _ = meta
         self._conversation_service.send_message(conversation_id, prompt)
         timeout = min(
@@ -322,6 +326,7 @@ class TaskSupervisorService:
         record: TaskExecutionRecord,
         *,
         detail: str,
+        github_token: str | None = None,
         agent_outcome: AgentOutcome,
         check_outcome: CheckOutcome,
         repository: str | None = None,
@@ -332,6 +337,10 @@ class TaskSupervisorService:
         check: CommandCapture | None = None,
         conversation_id: str | None = None,
     ) -> None:
+        if github_token:
+            detail = detail.replace(github_token, "[REDACTED]")
+        if self._github_token:
+            detail = detail.replace(self._github_token, "[REDACTED]")
         manifest = TaskResultManifest(
             task_id=record.task_id,
             execution_id=record.execution_id,
@@ -347,7 +356,9 @@ class TaskSupervisorService:
             outcome_detail=detail,
             completed_at=datetime.now(UTC),
         )
-        path = self._store.save_manifest(self._redact_manifest(manifest))
+        path = self._store.save_manifest(
+            self._redact_manifest(manifest, github_token=github_token)
+        )
         await self._update_phase(
             record,
             TaskExecutionPhase.FAILED,
@@ -378,11 +389,14 @@ class TaskSupervisorService:
         remaining = (deadline_at - datetime.now(UTC)).total_seconds()
         return max(minimum, remaining)
 
-    def _redact_manifest(self, manifest: TaskResultManifest) -> TaskResultManifest:
+    def _redact_manifest(
+        self, manifest: TaskResultManifest, *, github_token: str | None = None
+    ) -> TaskResultManifest:
         redacted: object = manifest.model_dump(mode="python")
         secrets = (
             self._process_env.get("OPENROUTER_API_KEY"),
             self._github_token,
+            github_token,
         )
         if not any(secrets):
             return manifest

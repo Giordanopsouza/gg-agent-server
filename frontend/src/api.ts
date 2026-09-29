@@ -1,4 +1,4 @@
-export type TaskState = "queued" | "starting" | "running" | "finalizing" | "completed" | "failed" | "cancelled";
+export type TaskState = "queued" | "starting" | "running" | "idle" | "sleeping" | "finalizing" | "completed" | "failed" | "cancelled";
 
 export interface TaskRecord {
   id: string;
@@ -12,6 +12,8 @@ export interface TaskRecord {
   updated_at: string;
   outcome_detail: string | null;
   check_status: string | null;
+  workspace_expired: boolean;
+  workspace_last_activity_at: string | null;
 }
 
 export interface TaskEventCopy {
@@ -27,6 +29,9 @@ export interface TaskResult {
   manifest: { agent_outcome: string; check_outcome: string } | null;
   publication: { state: string; pr_url: string | null; detail: string | null } | null;
   prior_pr_url: string | null;
+  workspace_available: boolean;
+  workspace_expires_at: string | null;
+  workspace_expired: boolean;
 }
 
 export interface Session { user: { id: string; email: string | null } }
@@ -79,6 +84,10 @@ export const taskApi = {
   get: (id: string) => request<TaskRecord>(`/tasks/${encodeURIComponent(id)}`),
   events: (id: string, after: number) => request<TaskEventCopy[]>(`/tasks/${encodeURIComponent(id)}/events?after=${after}`),
   result: (id: string) => request<TaskResult>(`/tasks/${encodeURIComponent(id)}/result`),
+  message: (id: string, content: string, messageId: string) =>
+    request<{ id: string; status: string }>(`/tasks/${encodeURIComponent(id)}/messages`, {
+      method: "POST", body: JSON.stringify({ id: messageId, content }),
+    }),
   models: () => request<Models>("/tasks/models"),
   repositories: () => request<Repository[]>("/tasks/repositories"),
   branches: (repository: string) => request<Branch[]>(`/tasks/repositories/${encodeURIComponent(repository)}/branches`),

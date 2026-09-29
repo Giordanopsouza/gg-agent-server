@@ -65,7 +65,7 @@ def format_result(result: TaskResultRecord) -> str:
         lines.append(f"evidence_detail={result.evidence_detail}")
     if result.outcome_detail:
         lines.append(f"outcome_detail={result.outcome_detail}")
-    if result.check_status:
+    if result.check_status and result.check_status != "not_run":
         lines.append(f"check_status={result.check_status}")
     if result.sandbox_cleanup_status:
         lines.append(f"sandbox_cleanup_status={result.sandbox_cleanup_status}")
@@ -77,10 +77,9 @@ def format_result(result: TaskResultRecord) -> str:
         lines.append(f"prior_pr_url={result.prior_pr_url}")
     manifest = result.manifest
     if manifest is not None:
-        lines.append(
-            f"agent_outcome={manifest.agent_outcome} "
-            f"check_outcome={manifest.check_outcome}"
-        )
+        lines.append(f"agent_outcome={manifest.agent_outcome}")
+        if manifest.check_outcome.value != "not_run":
+            lines.append(f"check_outcome={manifest.check_outcome}")
         if manifest.check is not None:
             lines.append(f"check_exit_code={manifest.check.exit_code}")
     publication = result.publication

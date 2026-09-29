@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 
 from gg.sdk.task_execution import (
     StartTaskExecutionRequest,
@@ -21,12 +21,13 @@ task_supervisor_router = APIRouter(prefix="/task-executions", tags=["TaskExecuti
 async def start_task_execution(
     request: StartTaskExecutionRequest,
     response: Response,
+    github_token: str | None = Header(default=None, alias="X-Task-GitHub-Token"),
     service: TaskSupervisorService = Depends(get_task_supervisor_service),
 ) -> TaskExecutionRecord:
     """Persist execution identity and launch work without blocking on completion."""
 
     try:
-        record, created = await service.start(request)
+        record, created = await service.start(request, github_token=github_token)
     except StartKeyConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:

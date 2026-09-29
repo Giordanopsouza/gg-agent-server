@@ -66,6 +66,9 @@ function EventCard({ copy }: { copy: TaskEventCopy }) {
     : event.kind === "status" ? payloadText(payload.status)
       : event.kind === "error" ? payloadText(payload.message ?? payload.detail ?? payload)
         : payloadText(event.kind === "action" ? payload.args : payload.result);
+  const prUrl = event.kind === "message" && payload.role === "assistant"
+    ? body.match(/https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/\d+/)?.[0]
+    : undefined;
   return (
     <article className={`event-card event-${event.kind}`}>
       <div className="event-marker" aria-hidden="true">{event.kind === "message" ? "✦" : event.kind === "error" ? "!" : isTool ? "›" : "•"}</div>
@@ -76,7 +79,7 @@ function EventCard({ copy }: { copy: TaskEventCopy }) {
             <summary>{event.kind === "action" ? "View tool input" : payload.is_error === true ? "Tool error" : "View tool output"}</summary>
             <pre>{body || "No details"}</pre>
           </details>
-        ) : <p className="event-body">{body || "No details"}</p>}
+        ) : <p className="event-body">{body || "No details"}{prUrl && <><br /><a href={prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a></>}</p>}
       </div>
     </article>
   );
@@ -91,6 +94,9 @@ function Detail({ id, onTask, onResult }: {
   const [events, setEvents] = useState<TaskEventCopy[]>([]);
   const [result, setResult] = useState<TaskResult | null>(null);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [messageId, setMessageId] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     let active = true;
@@ -127,6 +133,16 @@ function Detail({ id, onTask, onResult }: {
 
   const prUrl = result?.publication?.pr_url || result?.prior_pr_url;
   const displayStatus = task ? statusLabel(task, result || undefined) : "loading";
+  async function sendFollowup(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!message.trim() || sending) return;
+    setSending(true); setError("");
+    try {
+      await taskApi.message(id, message.trim(), messageId);
+      setMessage(""); setMessageId(crypto.randomUUID());
+    } catch (cause) { setError(String(cause)); }
+    finally { setSending(false); }
+  }
   return (
     <main className="main detail-main">
       <div className="page-top"><a className="back-link" href="#/">← All tasks</a><span className="eyebrow">TASK DETAIL</span></div>
@@ -137,6 +153,9 @@ function Detail({ id, onTask, onResult }: {
           <StatusChip status={displayStatus} />
         </header>
         <div className="detail-meta"><span>{task.repository ? `${task.repository}@${task.base_ref}` : "Blank workspace"}</span><span className="meta-id">{task.id}</span></div>
+        {task.state === "sleeping" && <p className="workspace-note">Workspace sleeping. Your next message will wake it.</p>}
+        {result?.workspace_expired && <p className="workspace-note">Previous workspace files expired. Your next message starts a fresh checkout and Pi session; the conversation history remains here.</p>}
+        {result?.workspace_expires_at && <p className="workspace-note">Workspace files available until {formatDate(result.workspace_expires_at)} after the last activity.</p>}
         {prUrl ? <a className="pr-link" href={prUrl} target="_blank" rel="noopener noreferrer">View draft pull request ↗</a> : null}
         <div className="section-label">ACTIVITY <span>{events.length} events</span></div>
         <section className="timeline" aria-label="Task activity">
@@ -144,8 +163,8 @@ function Detail({ id, onTask, onResult }: {
           {events.map((copy) => <EventCard key={copy.cursor} copy={copy} />)}
           {!TERMINAL.has(task.state) && <div className="waiting"><span className="pulse" />Waiting for new activity…</div>}
         </section>
-        {TERMINAL.has(task.state) && <section className={`outcome ${task.state === "failed" ? "outcome-failed" : ""}`}><div className="eyebrow">TASK OUTCOME</div><h2>{displayStatus.replaceAll("_", " ")}</h2><p>{result?.outcome_detail || task.outcome_detail || (task.state === "completed" ? "Task finished." : "Task ended.")}</p>{result?.check_status && <span>Checks: {result.check_status}</span>}{result?.publication?.detail && <p>{result.publication.detail}</p>}</section>}
-        <div className="disabled-composer"><span>↳</span><div><strong>Follow-up is unavailable in this version</strong><small>This task is read-only while it runs.</small></div></div>
+        {TERMINAL.has(task.state) && <section className={`outcome ${task.state === "failed" ? "outcome-failed" : ""}`}><div className="eyebrow">TASK OUTCOME</div><h2>{displayStatus.replaceAll("_", " ")}</h2><p>{result?.outcome_detail || task.outcome_detail || (task.state === "completed" ? "Task finished." : "Task ended.")}</p></section>}
+        {!TERMINAL.has(task.state) && <form className="composer followup-composer" onSubmit={(event) => void sendFollowup(event)}><label htmlFor="followup">Continue the conversation</label><textarea id="followup" value={message} onChange={(event) => { setMessage(event.target.value); setMessageId(crypto.randomUUID()); }} rows={3} maxLength={16000} placeholder="Ask the agent to continue, commit, push, or open a PR…" /><button className="spawn-button" type="submit" disabled={sending || !message.trim()}>{sending ? "Sending…" : "Send message ↗"}</button></form>}
       </> : !error ? <div className="empty-panel">Loading task…</div> : null}
     </main>
   );

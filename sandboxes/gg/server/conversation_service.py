@@ -22,7 +22,7 @@ from gg.server.agent import (
     load_meta,
 )
 from gg.server.agent.agent_backend import create_agent_backend
-from gg.server.agent.event_log import META_FILE
+from gg.server.agent.event_log import META_FILE, load_base_state
 from gg.server.config import Settings
 from gg.server.pubsub import PubSub
 
@@ -90,7 +90,13 @@ class ConversationService:
         if not (conversation_dir / META_FILE).is_file():
             raise ConversationNotFoundError(conversation_id)
 
-        conversation = LocalConversation.open(conversation_dir=conversation_dir)
+        state = load_base_state(conversation_dir)
+        backend = create_agent_backend(
+            state.agent, github_token=self._settings.github_clone_token
+        )
+        conversation = LocalConversation.open(
+            conversation_dir=conversation_dir, agent_backend=backend
+        )
         self._live[conversation_id] = conversation
         return conversation
 
@@ -98,6 +104,9 @@ class ConversationService:
         """Return the catalog record, hydrating the live object if needed."""
         conversation = self.get(conversation_id)
         return load_meta(conversation.conversation_dir)
+
+    def set_github_token(self, conversation_id: str, token: str | None) -> None:
+        self.get(conversation_id).set_github_token(token)
 
     def list(self) -> list[ConversationRecord]:
         """Return catalog records from ``conversations_dir/*/meta.json``."""

@@ -207,7 +207,7 @@ async def test_owner_repository_sandbox_gets_the_task_credential_only() -> None:
     env = provider.calls[0]["sandbox_env"]
     assert env["OPENROUTER_API_KEY"] == "key-a"
     assert env["GG_GITHUB_CLONE_TOKEN"] == "installation-token"
-    assert env["GG_PI_OWNS_PUBLICATION"] == "1"
+    assert "GG_PI_OWNS_PUBLICATION" not in env
     assert "GH_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "global-clone-token" not in env.values()

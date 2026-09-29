@@ -39,7 +39,7 @@ AGENT_SERVER_PORT = 8000
 DEFAULT_CPU = (2.0, 2.0)
 DEFAULT_MEMORY = (4096, 4096)
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 5 * 60
-DEFAULT_PROVIDER_TIMEOUT_SECONDS = 70 * 60
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 24 * 60 * 60
 IDENTITY_TAG = "gg_identity"
 DEPLOYMENT_TAG = "gg_deployment"
 TASK_TAG = "gg_task_id"
@@ -104,6 +104,10 @@ class Provider(Protocol):
 
     async def terminate(self, handle: ProviderHandle) -> None: ...
 
+    async def sync(self, handle: ProviderHandle) -> None: ...
+
+    async def delete_workspace(self, task_id: str) -> None: ...
+
     async def detach(self, handle: ProviderHandle) -> None: ...
 
 
@@ -136,6 +140,13 @@ class ModalProvider:
         image = modal.Image.from_name(
             self._image_name, environment_name=self._environment_name
         )
+        task_id = kwargs["tags"][TASK_TAG]
+        volume = modal.Volume.from_name(
+            f"{self._app_name}-workspaces",
+            create_if_missing=True,
+            environment_name=self._environment_name,
+            version=2,
+        )
         return modal.Sandbox.create(
             "python",
             "-m",
@@ -149,6 +160,9 @@ class ModalProvider:
             name=kwargs["name"],
             tags=kwargs["tags"],
             env=kwargs["sandbox_env"],
+            volumes={
+                "/workspace": volume.with_mount_options(sub_path=f"/tasks/{task_id}")
+            },
             cpu=kwargs["cpu"],
             memory=kwargs["memory"],
             timeout=kwargs["provider_timeout"],
@@ -190,6 +204,26 @@ class ModalProvider:
 
     async def terminate(self, handle: ProviderHandle) -> None:
         await asyncio.to_thread(handle.terminate, wait=True)  # type: ignore[attr-defined]
+
+    async def sync(self, handle: ProviderHandle) -> None:
+        def run() -> None:
+            process = handle.exec("sync", "/workspace")  # type: ignore[attr-defined]
+            process.wait()
+            if process.returncode != 0:
+                raise ModalLifecycleError("workspace volume sync failed")
+
+        await asyncio.to_thread(run)
+
+    async def delete_workspace(self, task_id: str) -> None:
+        def remove() -> None:
+            volume = modal.Volume.from_name(
+                f"{self._app_name}-workspaces",
+                environment_name=self._environment_name,
+                version=2,
+            )
+            volume.remove_file(f"/tasks/{task_id}", recursive=True)
+
+        await asyncio.to_thread(remove)
 
     async def detach(self, handle: ProviderHandle) -> None:
         await asyncio.to_thread(handle.detach)  # type: ignore[attr-defined]
@@ -298,8 +332,8 @@ class ModalSandboxLifecycle:
                 raise AmbiguousProviderStateError(
                     f"sandbox creation for task {task_id} is unresolved"
                 )
-            if existing.provider_id is not None:
-                return snapshot
+            self._ledger.reset_sandbox_for_wake(task_id)
+            existing = self._ledger.get_sandbox_creation(task_id)
         personal_key: str | None = None
         credential_version: int | None = None
         if task.owner_id is not None:
@@ -362,6 +396,13 @@ class ModalSandboxLifecycle:
 
         try:
             env = dict(self._sandbox_env)
+            env.update(
+                {
+                    "GG_WORKSPACE_DIR": "/workspace/project",
+                    "GG_CONVERSATIONS_DIR": "/workspace/conversations",
+                    "GG_TASK_SUPERVISOR_DIR": "/workspace/task-supervisor",
+                }
+            )
             if task.owner_id is not None:
                 env.pop("OPENROUTER_API_KEY", None)
                 env.pop("GG_GITHUB_CLONE_TOKEN", None)
@@ -372,7 +413,6 @@ class ModalSandboxLifecycle:
                 env["OPENROUTER_API_KEY"] = personal_key
                 if github_credential is not None:
                     env["GG_GITHUB_CLONE_TOKEN"] = github_credential.token
-                    env["GG_PI_OWNS_PUBLICATION"] = "1"
             env["GG_SESSION_API_KEYS"] = record.session_api_key
             handle = await self._provider.create(
                 name=record.sandbox_name,
@@ -507,6 +547,16 @@ class ModalSandboxLifecycle:
             raise AmbiguousProviderStateError(
                 f"Modal termination for task {task_id} was unresolved"
             ) from exc
+
+    async def sync(self, task_id: str) -> None:
+        record = self._record(task_id)
+        snapshot, handle = await self._reconnect(record)
+        if snapshot.state is not SandboxProviderState.RUNNING or handle is None:
+            raise ModalLifecycleError("workspace sandbox is not running")
+        await self._provider.sync(handle)
+
+    async def expire_workspace(self, task_id: str) -> None:
+        await self._provider.delete_workspace(task_id)
 
     def _record(self, task_id: str) -> SandboxCreationRecord:
         record = self._ledger.get_sandbox_creation(task_id)

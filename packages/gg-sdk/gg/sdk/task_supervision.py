@@ -59,6 +59,9 @@ class TaskResultRecord(BaseModel):
     retry_of: str | None = None
     prior_task_branch: str | None = None
     prior_pr_url: str | None = None
+    workspace_available: bool = False
+    workspace_expires_at: datetime | None = None
+    workspace_expired: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

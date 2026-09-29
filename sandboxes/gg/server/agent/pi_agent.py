@@ -37,8 +37,8 @@ _STDERR_LIMIT = 16 * 1024
 def _pi_process_env(github_token: str | None) -> dict[str, str]:
     """Copy the process environment without ambient GitHub credentials.
 
-    The task installation token is the only GitHub credential Pi may see, and
-    only when this run owns publication. A host GH_TOKEN is never forwarded.
+    The task installation token is the only GitHub credential Pi may see.
+    A host GH_TOKEN is never forwarded.
     """
 
     env = dict(os.environ)
@@ -47,6 +47,10 @@ def _pi_process_env(github_token: str | None) -> dict[str, str]:
     env.pop("GG_GITHUB_CLONE_TOKEN", None)
     if github_token:
         env["GH_TOKEN"] = github_token
+        # gh reads GH_TOKEN directly; this helper stores no credential on disk.
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "credential.https://github.com.helper"
+        env["GIT_CONFIG_VALUE_0"] = "!gh auth git-credential"
     return env
 
 
@@ -181,17 +185,24 @@ class PiRpcAgent:
         emit: EventEmitter,
     ) -> None:
         api_key = self._preflight()
+        session_dir = (
+            workspace.working_dir.parent / "pi-sessions" / workspace.working_dir.name
+        )
+        session_dir.mkdir(parents=True, exist_ok=True)
         command = [
             "pi",
             "--mode",
             "rpc",
-            "--no-session",
+            "--session-dir",
+            str(session_dir),
             "--no-approve",
             "--provider",
             self.settings.provider,
             "--model",
             self.settings.model,
         ]
+        if any(session_dir.glob("*.jsonl")):
+            command.append("--continue")
         try:
             process = subprocess.Popen(
                 command,

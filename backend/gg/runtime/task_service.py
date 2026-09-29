@@ -10,6 +10,7 @@ ledger.
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from uuid import UUID
 
 from gg.runtime.config import RuntimeSettings
@@ -230,6 +231,26 @@ class TaskService:
             retry_of=record.retry_of,
             prior_task_branch=prior_branch,
             prior_pr_url=prior_pr,
+            workspace_available=record.state
+            in {
+                TaskState.STARTING,
+                TaskState.RUNNING,
+                TaskState.IDLE,
+            },
+            workspace_expires_at=(
+                (record.workspace_last_activity_at or record.updated_at)
+                + timedelta(days=7)
+                if record.state
+                in {
+                    TaskState.QUEUED,
+                    TaskState.STARTING,
+                    TaskState.RUNNING,
+                    TaskState.IDLE,
+                    TaskState.SLEEPING,
+                }
+                else None
+            ),
+            workspace_expired=record.workspace_expired,
             updated_at=record.updated_at,
         )
 

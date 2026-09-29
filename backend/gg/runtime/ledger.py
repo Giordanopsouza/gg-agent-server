@@ -26,7 +26,7 @@ from gg.sdk.tasks import TaskRecord, TaskState
 # The schema version this runtime understands. A database reporting a higher
 # version is from a future runtime and must fail startup explicitly rather
 # than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 8
+SUPPORTED_SCHEMA_VERSION = 9
 
 # Outcomes recorded only after the agent finished successfully. A later sandbox
 # reconcile must not replace these with a failure.
@@ -186,6 +186,15 @@ def _row_to_record(row: dict[str, Any]) -> TaskRecord:
         payload_expired=bool(row["payload_expired"])
         if "payload_expired" in row.keys()
         else False,
+        workspace_expired=bool(row["workspace_expired"])
+        if "workspace_expired" in row.keys()
+        else False,
+        workspace_last_activity_at=(
+            datetime.fromisoformat(row["workspace_last_activity_at"])
+            if "workspace_last_activity_at" in row.keys()
+            and row["workspace_last_activity_at"]
+            else None
+        ),
     )
 
 
@@ -996,6 +1005,7 @@ class TaskLedger:
         task_id: str,
         *,
         execution_id: str | None = None,
+        start_key: str | None = None,
         conversation_id: str | None = None,
         cancel_requested: bool | None = None,
         tail_gap_possible: bool | None = None,
@@ -1009,6 +1019,7 @@ class TaskLedger:
             if current is None:
                 raise KeyError(f"no supervision record for task {task_id}")
             execution = execution_id or current["execution_id"]
+            key = start_key or current["start_key"]
             conversation = (
                 current["conversation_id"]
                 if conversation_id is None
@@ -1027,11 +1038,11 @@ class TaskLedger:
             self._conn.execute(
                 """
                 UPDATE task_supervisions
-                SET execution_id = %s, conversation_id = %s,
+                SET execution_id = %s, start_key = %s, conversation_id = %s,
                     cancel_requested = %s, tail_gap_possible = %s, updated_at = %s
                 WHERE task_id = %s
                 """,
-                (execution, conversation, int(cancel), int(tail), now, task_id),
+                (execution, key, conversation, int(cancel), int(tail), now, task_id),
             )
             row = self._conn.execute(
                 "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
@@ -1127,7 +1138,7 @@ class TaskLedger:
         with self._lock:
             self._begin_write()
             try:
-                self._conn.execute(
+                saved = self._conn.execute(
                     """
                     INSERT INTO task_message_receipts (
                         task_id, message_id, content, status, detail,
@@ -1138,6 +1149,7 @@ class TaskLedger:
                         status = excluded.status,
                         detail = excluded.detail,
                         updated_at = excluded.updated_at
+                    WHERE task_message_receipts.content = excluded.content
                     """,
                     (
                         task_id,
@@ -1149,6 +1161,8 @@ class TaskLedger:
                         receipt.updated_at.isoformat(),
                     ),
                 )
+                if saved.rowcount != 1:
+                    raise RuntimeError("message id already belongs to another message")
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
@@ -1183,13 +1197,7 @@ class TaskLedger:
     def list_accepted_task_messages(self, task_id: str) -> list[MessageReceipt]:
         receipts = self.list_task_message_receipts(task_id)
         return [
-            item
-            for item in receipts
-            if item.status
-            in {
-                MessageDeliveryStatus.ACCEPTED,
-                MessageDeliveryStatus.UNKNOWN,
-            }
+            item for item in receipts if item.status is MessageDeliveryStatus.ACCEPTED
         ]
 
     def archive_task_result(
@@ -1314,10 +1322,21 @@ class TaskLedger:
                     SET state = %s,
                         outcome_detail = COALESCE(%s, outcome_detail),
                         check_status = COALESCE(%s, check_status),
-                        updated_at = %s
+                        updated_at = %s,
+                        workspace_last_activity_at = CASE WHEN %s = %s
+                            THEN workspace_last_activity_at ELSE %s END
                     WHERE id = %s
                     """,
-                    (state.value, outcome_detail, check_status, now, task_id),
+                    (
+                        state.value,
+                        outcome_detail,
+                        check_status,
+                        now,
+                        state.value,
+                        TaskState.SLEEPING.value,
+                        now,
+                        task_id,
+                    ),
                 )
                 row = self._conn.execute(
                     "SELECT * FROM tasks WHERE id = %s", (task_id,)
@@ -1329,6 +1348,84 @@ class TaskLedger:
         if row is None:
             raise KeyError(f"no task {task_id}")
         return _row_to_record(row)
+
+    def queue_workspace_message(self, task_id: str) -> None:
+        """Wake a sleeping workspace after its message receipt is durable."""
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET state = %s, updated_at = %s "
+                "WHERE id = %s AND state = %s",
+                (
+                    TaskState.QUEUED.value,
+                    _utcnow_iso(),
+                    task_id,
+                    TaskState.SLEEPING.value,
+                ),
+            )
+
+    def touch_workspace(self, task_id: str) -> None:
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET updated_at = %s, workspace_last_activity_at = %s "
+                "WHERE id = %s",
+                (_utcnow_iso(), _utcnow_iso(), task_id),
+            )
+
+    def try_mark_sleeping(self, task_id: str) -> bool:
+        """Close the idle window atomically with the message queue."""
+        assert self._conn is not None
+        with self._lock:
+            self._begin_write()
+            try:
+                pending = self._conn.execute(
+                    "SELECT 1 FROM task_message_receipts WHERE task_id = %s "
+                    "AND status = %s LIMIT 1",
+                    (task_id, MessageDeliveryStatus.ACCEPTED.value),
+                ).fetchone()
+                if pending is not None:
+                    self._conn.execute("COMMIT")
+                    return False
+                updated = self._conn.execute(
+                    "UPDATE tasks SET state = %s, updated_at = %s "
+                    "WHERE id = %s AND state = %s",
+                    (
+                        TaskState.SLEEPING.value,
+                        _utcnow_iso(),
+                        task_id,
+                        TaskState.IDLE.value,
+                    ),
+                )
+                self._conn.execute("COMMIT")
+                return updated.rowcount == 1
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def expire_workspace(self, task_id: str) -> None:
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET workspace_expired = 1 WHERE id = %s AND state = %s",
+                (task_id, TaskState.SLEEPING.value),
+            )
+
+    def reset_sandbox_for_wake(self, task_id: str) -> None:
+        """Discard the old provider identity after absence was confirmed."""
+        assert self._conn is not None
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sandbox_creations SET provider_id = NULL, "
+                "provider_state = %s, detail = NULL, updated_at = %s "
+                "WHERE task_id = %s AND provider_state = %s",
+                (
+                    SandboxProviderState.CREATING.value,
+                    _utcnow_iso(),
+                    task_id,
+                    SandboxProviderState.STOPPED.value,
+                ),
+            )
 
     def _schema_version(self) -> int:
         assert self._conn is not None

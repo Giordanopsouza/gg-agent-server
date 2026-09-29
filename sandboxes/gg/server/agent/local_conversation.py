@@ -43,6 +43,8 @@ from gg.server.agent.local_workspace import LocalWorkspace
 _ALLOWED_TRANSITIONS: dict[tuple[ConversationStatus, str], ConversationStatus] = {
     (ConversationStatus.IDLE, "send_message"): ConversationStatus.IDLE,
     (ConversationStatus.IDLE, "run"): ConversationStatus.RUNNING,
+    (ConversationStatus.FINISHED, "send_message"): ConversationStatus.IDLE,
+    (ConversationStatus.ERROR, "send_message"): ConversationStatus.IDLE,
     (ConversationStatus.RUNNING, "finish"): ConversationStatus.FINISHED,
     (ConversationStatus.RUNNING, "error"): ConversationStatus.ERROR,
     (ConversationStatus.RUNNING, "cancel"): ConversationStatus.CANCELLED,
@@ -116,6 +118,10 @@ class LocalConversation:
         obj._accepting_messages = False
         obj._cancelling = False
         obj.id = meta.id
+        if obj._status is ConversationStatus.RUNNING:
+            # A hydrated conversation has no surviving Pi process to own the turn.
+            obj._status = ConversationStatus.ERROR
+            obj._persist_status()
         return obj
 
     # Expose the current conversation status (idle, running, finished, …).
@@ -123,10 +129,19 @@ class LocalConversation:
     def status(self) -> ConversationStatus:
         return self._status
 
+    def set_github_token(self, token: str | None) -> None:
+        """Refresh the credential used by the next Pi process only."""
+        with self._control_lock:
+            if self._status is ConversationStatus.RUNNING:
+                raise ConversationAlreadyRunningError()
+            self._agent_backend = create_agent_backend(self._agent, github_token=token)
+
     # Record a user message in the event log; status stays idle until run().
     def send_message(self, text: str) -> Event:
         with self._control_lock:
             self._transition("send_message")
+            if self._status is not ConversationStatus.IDLE:
+                self._apply_status(ConversationStatus.IDLE)
             return self._append_event(
                 EventKind.MESSAGE,
                 {"role": "user", "text": text},
