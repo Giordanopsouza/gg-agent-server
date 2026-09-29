@@ -34,7 +34,7 @@ ARG TARGETARCH
 
 RUN groupadd -g ${GID} ${USERNAME} \
  && useradd -m -u ${UID} -g ${GID} -s /usr/sbin/nologin ${USERNAME} \
- && mkdir -p /workspace/project /workspace/conversations \
+ && mkdir -p /workspace \
  && chown -R ${USERNAME}:${USERNAME} /workspace
 
 RUN apt-get update \
@@ -76,7 +76,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     GG_CONVERSATIONS_DIR=/workspace/conversations
 
 USER ${USERNAME}
-WORKDIR /workspace/project
+WORKDIR /home/gg
 
 EXPOSE 8000
 
