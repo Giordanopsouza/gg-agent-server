@@ -6,6 +6,7 @@ import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import (
     Depends,
@@ -16,7 +17,9 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
+from fastapi.staticfiles import StaticFiles
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.github import HttpGitHubGateway
@@ -238,5 +241,17 @@ def create_app(
         )
     )
     app.include_router(event_socket_router)
+
+    web_static = Path(__file__).parent / "web_static"
+    if (web_static / "index.html").is_file():
+        app.mount(
+            "/assets", StaticFiles(directory=web_static / "assets"), name="assets"
+        )
+
+        @app.get("/", include_in_schema=False)
+        def web_index() -> FileResponse:
+            return FileResponse(
+                web_static / "index.html", headers={"Cache-Control": "no-cache"}
+            )
 
     return app

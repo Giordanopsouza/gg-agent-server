@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:runtime": "VITE_TASK_API_URL= npm run build && rm -rf ../backend/gg/runtime/web_static && cp -R dist ../backend/gg/runtime/web_static",
     "preview": "vite preview",
     "test": "vitest run"
   },
