@@ -37,6 +37,11 @@ export interface Branch { name: string; sha: string }
 export interface Models { default: string; models: string[] }
 
 const baseUrl = (import.meta.env.VITE_TASK_API_URL || "").replace(/\/$/, "");
+let onSessionExpired: (() => void) | null = null;
+
+export function setSessionExpiredHandler(handler: (() => void) | null): void {
+  onSessionExpired = handler;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -49,6 +54,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
+    if (response.status === 401 && path !== "/auth/session") onSessionExpired?.();
     const error = await response.json().catch(() => ({}));
     const detail = typeof error.detail === "string" ? error.detail : response.statusText;
     throw new Error(`${response.status}: ${detail || "Request failed"}`);

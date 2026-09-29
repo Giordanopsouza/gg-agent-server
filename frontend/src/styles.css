@@ -5,9 +5,10 @@
 body{margin:0;min-width:320px}
 button,input,textarea,select{font:inherit}
 button{cursor:pointer}
+:focus-visible{outline:2px solid #177244;outline-offset:3px}
 a{color:inherit;text-decoration:none}
 .shell{display:flex;min-height:100vh}
-.sidebar{width:286px;flex:none;background:#eff2ed;border-right:1px solid #dce3db;display:flex;flex-direction:column;padding:27px 15px 18px;min-height:100vh}
+.sidebar{width:286px;flex:none;background:#eff2ed;border-right:1px solid #dce3db;display:flex;flex-direction:column;padding:27px 15px 18px;height:100vh;position:sticky;top:0}
 .brand{display:flex;align-items:center;gap:12px;padding:0 11px 35px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:21px;letter-spacing:-.05em}
 .brand-mark{width:34px;height:34px;border-radius:10px;background:#0e583d;color:#f7fff6;display:grid;place-items:center;font-size:17px;letter-spacing:-.14em;padding-right:3px;box-shadow:0 3px 8px #0e583d26}
 .brand-mark span{color:#9ce5b3}.brand-light{color:#789083;font-weight:500;letter-spacing:-.03em}
@@ -18,7 +19,9 @@ a{color:inherit;text-decoration:none}
 .nav-icon{font-size:19px;line-height:1;color:#50725b}
 .recent-heading{margin-top:33px}
 .recent-heading span:last-child{background:#e3e8e1;border-radius:9px;padding:3px 6px;letter-spacing:0}
-.task-nav{display:flex;flex-direction:column;gap:5px;overflow-y:auto;min-height:80px;max-height:calc(100vh - 430px)}
+.task-nav{display:flex;flex-direction:column;gap:5px;overflow-y:auto;min-height:80px;flex:1}
+.history-group{min-width:0;margin:0 0 13px}.history-group h2{font-size:10px;font-weight:700;color:#6a8070;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:8px 12px}
+.history-meta{display:flex;align-items:center;justify-content:space-between;gap:5px;width:100%;min-width:0}.history-meta time{font-size:10px;color:#819384;white-space:nowrap}.history-meta .status-chip{font-size:9px;padding:4px 6px}
 .task-nav-item{display:flex;align-items:flex-start;flex-direction:column;gap:8px;padding:11px 12px;border-radius:8px;border:1px solid transparent;min-width:0}
 .task-nav-item:hover,.nav-item:hover{background:#e4ece3}
 .nav-prompt{font-size:12px;font-weight:600;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;width:100%}

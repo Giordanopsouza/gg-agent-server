@@ -5,11 +5,13 @@
 .PHONY: format-check format-fix pre-commit build ci run run-runtime docker-build
 .PHONY: supabase-local-start supabase-local-reset supabase-integration-tests postgres-tests alembic-tests
 .PHONY: db-upgrade db-current db-check
+.PHONY: frontend-install frontend-test frontend-build frontend-dev
 
 help:
 	@$(MAKE) -C packages/gg-sdk help
 	@$(MAKE) -C backend help
 	@$(MAKE) -C sandboxes help
+	@$(MAKE) -C frontend help
 	@printf '%s\n' 'root: run-runtime starts the control plane on port 8001'
 
 install:
@@ -57,6 +59,18 @@ run:
 
 run-runtime:
 	$(MAKE) -C backend run
+
+frontend-install:
+	$(MAKE) -C frontend install
+
+frontend-test:
+	$(MAKE) -C frontend test
+
+frontend-build:
+	$(MAKE) -C frontend build
+
+frontend-dev:
+	$(MAKE) -C frontend dev
 
 docker-build:
 	$(MAKE) -C sandboxes docker-build

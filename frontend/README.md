@@ -46,6 +46,18 @@ npm run build:runtime
 npm run preview
 ```
 
+From the repository root, `make frontend-install`, `make frontend-test`, and
+`make frontend-build` delegate to the frontend Makefile. The last target runs
+`build:runtime` and updates the bundle served by the control plane.
+
+Desktop QA: at 768px and 1440px, sign in and confirm the sidebar groups every
+task by repository with status and date. Open a task, reload, and confirm it
+remains selected. Check empty history, API error, and loading states. Type an
+unsent prompt, expire the session, sign in as the same account, and confirm the
+draft returns; another account must see an empty composer. Sign out and confirm
+the account, history, and draft clear. Tab through links, form controls, and
+task history to check focus and labels.
+
 `build:runtime` copies the static bundle into the `gg.runtime` Python package.
 The production runtime serves it at `/` and `/assets` on the same origin as
 `/auth` and `/tasks`. Rebuild and commit the bundled files whenever the

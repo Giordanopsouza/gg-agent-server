@@ -262,7 +262,9 @@ def test_login_session_and_operator_boundary(auth_app):
 def test_rejects_invalid_access_token(auth_app, claims):
     client, _, state = auth_app
     state["claims"] = claims
-    assert _callback(client, _start(client)).status_code == 400
+    response = _callback(client, _start(client))
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?auth=failed"
     assert client.get("/auth/session").status_code == 401
 
 
@@ -324,7 +326,9 @@ def test_revoked_session_rejects_unexpired_access_token(auth_app):
 def test_revoked_callback_and_unavailable_session_store(auth_app):
     client, _, state = auth_app
     state["revoked"] = True
-    assert _callback(client, _start(client)).status_code == 400
+    response = _callback(client, _start(client))
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?auth=failed"
     state["revoked"] = False
     state["session_store_error"] = True
     assert _callback(client, _start(client)).status_code == 503
