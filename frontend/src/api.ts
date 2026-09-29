@@ -80,4 +80,4 @@ export const taskApi = {
     request<TaskRecord>("/tasks", { method: "POST", body: JSON.stringify(payload) }),
 };
 
-export const configuredApiUrl = baseUrl || "Same origin (Vite proxy in development)";
+export const configuredApiUrl = baseUrl || "Same origin";

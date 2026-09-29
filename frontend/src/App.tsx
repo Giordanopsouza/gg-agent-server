@@ -217,7 +217,7 @@ function AccountSetup({ session, credential, github, onCredential, onGitHub, onL
   }
   return <div className="account-setup"><div className="account-heading"><strong>{session.user.email || session.user.id}</strong><button type="button" className="text-button" onClick={onLogout}>Sign out</button></div>
     <div className="setup-group"><strong>OpenRouter</strong><span>{credential?.configured ? `Saved ${credential.mask || ""}` : "No key saved"}</span><div className="setup-actions"><input type="password" aria-label="OpenRouter key" autoComplete="off" placeholder="OpenRouter API key" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)} /><button type="button" disabled={busy || !keyDraft} onClick={() => void act(async () => { onCredential(await authApi.saveCredential(keyDraft)); setKeyDraft(""); })}>Save</button></div>{credential?.configured && <button type="button" className="text-button" disabled={busy} onClick={() => void act(async () => onCredential(await authApi.removeCredential()))}>Remove key</button>}</div>
-    <div className="setup-group"><strong>GitHub</strong><span>{github?.status === "connected" ? `Connected as ${github.login}` : github?.status || "Unavailable"}</span><div className="setup-actions"><a className="setup-link" href={authApi.githubUrl()}>{github?.status === "connected" ? "Reconnect" : "Connect GitHub"}</a>{github && github.status !== "disconnected" && <button type="button" className="text-button" disabled={busy} onClick={() => void act(async () => onGitHub(await authApi.disconnectGitHub()))}>Disconnect</button>}</div>{github?.status === "pending" && <small>GitHub App installation is pending approval.</small>}{github?.status === "connected" && <small>{github.installations.length} installation(s)</small>}</div>
+    <div className="setup-group"><strong>GitHub</strong><span>{github?.status === "connected" ? `Connected as ${github.login}` : github?.status || "GitHub App setup pending"}</span><div className="setup-actions">{github && <a className="setup-link" href={authApi.githubUrl()}>{github.status === "connected" ? "Reconnect" : "Connect GitHub"}</a>}{github && github.status !== "disconnected" && <button type="button" className="text-button" disabled={busy} onClick={() => void act(async () => onGitHub(await authApi.disconnectGitHub()))}>Disconnect</button>}</div>{github?.status === "pending" && <small>GitHub App installation is pending approval.</small>}{github?.status === "connected" && <small>{github.installations.length} installation(s)</small>}</div>
     {error && <div className="alert" role="alert">{error}</div>}<small title={configuredApiUrl}>API: {configuredApiUrl}</small></div>;
 }
 
@@ -247,7 +247,7 @@ export default function App() {
       if (!active) return;
       if (key.status === "fulfilled") setCredential(key.value);
       if (connection.status === "fulfilled") setGitHub(connection.value);
-      const errors = [key, connection].filter((item) => item.status === "rejected");
+      const errors = [key, connection].filter((item) => item.status === "rejected" && !(item.reason instanceof Error && item.reason.message.startsWith("503: GitHub connection unavailable")));
       if (errors.length) setSetupError(errors.map((item) => item.status === "rejected" ? String(item.reason) : "").join("; "));
     });
     return () => { active = false; };
