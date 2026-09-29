@@ -12,7 +12,7 @@ from gg.runtime import modal_image
 def test_modal_sdk_and_runtime_versions_are_pinned() -> None:
     assert modal.__version__ == modal_image.MODAL_SDK_VERSION == "1.5.5"
     assert modal_image.version_evidence() == {
-        "image": "gg-agent-server:2026-09-20-v1",
+        "image": "gg-agent-server:2026-09-29-v2",
         "modal": "1.5.5",
         "python": "3.12.11",
         "uv": "0.11.2",
@@ -110,7 +110,7 @@ def test_build_and_publish_uses_repo_dockerfile_not_venv(
     assert captured["path"] == repo / "sandboxes" / "Dockerfile"
     assert captured["context_dir"] == repo.resolve()
     assert captured["force_build"] is True
-    assert captured["published"] == "gg-agent-server:2026-09-20-v1"
+    assert captured["published"] == "gg-agent-server:2026-09-29-v2"
 
 
 def test_repository_root_missing_dockerfile_is_explicit(tmp_path: Path) -> None:
