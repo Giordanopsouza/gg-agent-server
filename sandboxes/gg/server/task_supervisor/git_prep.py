@@ -103,7 +103,21 @@ def collect_git_evidence(
     )
     if names.returncode != 0:
         raise GitPrepError(names.stderr.strip() or "git diff --name-only failed")
-    changed = tuple(line for line in names.stdout.splitlines() if line.strip())
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status.returncode != 0:
+        raise GitPrepError(status.stderr.strip() or "git status failed")
+    changed = tuple(
+        dict.fromkeys(
+            [line for line in names.stdout.splitlines() if line.strip()]
+            + [line[3:] for line in status.stdout.splitlines() if len(line) > 3]
+        )
+    )
 
     patch = subprocess.run(
         ["git", "diff", base_sha],

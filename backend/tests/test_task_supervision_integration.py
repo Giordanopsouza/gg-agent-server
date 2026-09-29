@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -65,7 +65,11 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
         )
         record = TaskExecutionRecord(
             execution_id=(
-                f"exec-{body.task_id}" if state.distinct_execution_id else body.task_id
+                f"exec-{body.task_id}-{len(state.executions) + 1}"
+                if body.start_key != body.task_id
+                else f"exec-{body.task_id}"
+                if state.distinct_execution_id
+                else body.task_id
             ),
             task_id=body.task_id,
             repository=body.repository,
@@ -171,6 +175,8 @@ class ConnectableFakeLifecycle:
     ledger: TaskLedger
     agent_app: FastAPI
     terminate_calls: list[str] = field(default_factory=list)
+    sync_calls: list[str] = field(default_factory=list)
+    expire_calls: list[str] = field(default_factory=list)
 
     async def create(self, task_id: str) -> SandboxSnapshot:
         if self.ledger.get_sandbox_creation(task_id) is None:
@@ -186,7 +192,16 @@ class ConnectableFakeLifecycle:
                 provider_id="provider",
                 provider_state=SandboxProviderState.RUNNING,
             )
+        self.ledger.update_sandbox_creation(
+            task_id, provider_state=SandboxProviderState.RUNNING
+        )
         return SandboxSnapshot(task_id, "provider", SandboxProviderState.RUNNING)
+
+    async def sync(self, task_id: str) -> None:
+        self.sync_calls.append(task_id)
+
+    async def expire_workspace(self, task_id: str) -> None:
+        self.expire_calls.append(task_id)
 
     async def reconnect(self, task_id: str) -> SandboxSnapshot:
         creation = self.ledger.get_sandbox_creation(task_id)
@@ -237,7 +252,6 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
         ledger=ledger,
         lifecycle=lifecycle,  # type: ignore[arg-type]
         settings=settings,
-        publisher=None,
     )
     app = create_app(
         settings,
@@ -265,7 +279,7 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
                 await app.state.task_scheduler.dispatch_once()
                 record = ledger.get(task_id)
                 assert record is not None
-                if record.state is TaskState.COMPLETED:
+                if record.state is TaskState.IDLE:
                     break
                 await asyncio.sleep(0.05)
             events = await client.get(f"/tasks/{task_id}/events", headers=_AUTH)
@@ -274,16 +288,16 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
     assert created.status_code == 201
     assert events.status_code == 200
     assert len(events.json()) == 1
-    assert result.json()["state"] == "completed"
+    assert result.json()["state"] == "idle"
     assert result.json()["manifest"]["repository"] is None
     assert result.json()["publication"] is None
     assert result.json()["evidence_complete"] is True
-    assert lifecycle.terminate_calls == [task_id]
+    assert lifecycle.terminate_calls == []
     assert state.start_models == ["anthropic/claude-sonnet-4.5"]
 
 
 @pytest.mark.anyio
-async def test_publication_error_finishes_task_as_failed(tmp_path, monkeypatch) -> None:
+async def test_followup_runs_in_the_same_workspace(tmp_path) -> None:
     state = FakeAgentState()
     ledger = new_ledger()
     ledger.open()
@@ -301,10 +315,6 @@ async def test_publication_error_finishes_task_as_failed(tmp_path, monkeypatch) 
         settings=settings,
     )
 
-    async def fail_publication(*_args) -> None:
-        raise RuntimeError("remote branch conflict")
-
-    monkeypatch.setattr(supervision, "_maybe_publish", fail_publication)
     app = create_app(
         settings,
         task_ledger=ledger,
@@ -318,20 +328,74 @@ async def test_publication_error_finishes_task_as_failed(tmp_path, monkeypatch) 
             created = await client.post(
                 "/tasks",
                 headers=_AUTH,
-                json={"prompt": "do work", "idempotency_key": "publication-failure"},
+                json={"prompt": "first turn", "idempotency_key": "followup"},
             )
             task_id = created.json()["id"]
             for _ in range(50):
                 await app.state.task_scheduler.dispatch_once()
                 record = ledger.get(task_id)
                 assert record is not None
-                if record.state is TaskState.FAILED:
+                if record.state is TaskState.IDLE:
                     break
                 await asyncio.sleep(0.05)
+            assert ledger.get(task_id).state is TaskState.IDLE
+            sent = await client.post(
+                f"/tasks/{task_id}/messages",
+                headers=_AUTH,
+                json={"id": "message-1", "content": "second turn"},
+            )
+            assert sent.status_code == 200
+            for _ in range(50):
+                await app.state.task_scheduler.dispatch_once()
+                receipt = ledger.get_task_message_receipt(task_id, "message-1")
+                if (
+                    len(state.executions) == 2
+                    and receipt.status is MessageDeliveryStatus.DELIVERED
+                    and ledger.get(task_id).state is TaskState.IDLE
+                ):
+                    break
+                await asyncio.sleep(0.05)
+            result = await client.get(f"/tasks/{task_id}/result", headers=_AUTH)
+            ledger._conn.execute(
+                "UPDATE tasks SET workspace_last_activity_at = %s WHERE id = %s",
+                ((datetime.now(UTC) - timedelta(minutes=46)).isoformat(), task_id),
+            )
+            await supervision._drive_running(task_id)
+            assert ledger.get(task_id).state is TaskState.SLEEPING
+            assert ledger.get_reservation(task_id) is None
+            queued = await client.post(
+                f"/tasks/{task_id}/messages",
+                headers=_AUTH,
+                json={"id": "message-2", "content": "third turn after sleep"},
+            )
+            assert queued.status_code == 200
+            for _ in range(50):
+                await app.state.task_scheduler.dispatch_once()
+                if (
+                    len(state.executions) == 3
+                    and ledger.get(task_id).state is TaskState.IDLE
+                ):
+                    break
+                await asyncio.sleep(0.05)
+            ledger._conn.execute(
+                "UPDATE tasks SET workspace_last_activity_at = %s WHERE id = %s",
+                ((datetime.now(UTC) - timedelta(minutes=46)).isoformat(), task_id),
+            )
+            await supervision._drive_running(task_id)
+            ledger._conn.execute(
+                "UPDATE tasks SET workspace_last_activity_at = %s WHERE id = %s",
+                ((datetime.now(UTC) - timedelta(days=8)).isoformat(), task_id),
+            )
+            await app.state.task_scheduler.dispatch_once()
+            expired_result = await client.get(f"/tasks/{task_id}/result", headers=_AUTH)
 
-    assert record.state is TaskState.FAILED
-    assert record.outcome_detail == "publication failed: remote branch conflict"
-    assert lifecycle.terminate_calls == [task_id]
+    assert len(state.executions) == 3
+    assert result.json()["state"] == "idle"
+    assert result.json()["publication"] is None
+    assert lifecycle.sync_calls == [task_id, task_id]
+    assert lifecycle.terminate_calls == [task_id, task_id]
+    assert lifecycle.expire_calls == [task_id]
+    assert expired_result.json()["workspace_expired"] is True
 
 
 @pytest.mark.anyio
@@ -352,7 +416,6 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
         ledger=ledger,
         lifecycle=lifecycle,  # type: ignore[arg-type]
         settings=settings,
-        publisher=None,
     )
     app = create_app(
         settings,
@@ -382,7 +445,7 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
                 await app.state.task_scheduler.dispatch_once()
                 record = ledger.get(task_id)
                 assert record is not None
-                if record.state is TaskState.COMPLETED:
+                if record.state is TaskState.IDLE:
                     break
                 await asyncio.sleep(0.05)
             events = await client.get(f"/tasks/{task_id}/events", headers=_AUTH)
@@ -395,7 +458,7 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
     copied = live.get_nowait()
     assert copied.event.payload == {"status": "running"}
     assert live.empty()
-    assert result.json()["state"] == "completed"
+    assert result.json()["state"] == "idle"
 
 
 @pytest.mark.anyio

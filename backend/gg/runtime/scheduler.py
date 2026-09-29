@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import os
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -196,6 +197,18 @@ class TaskScheduler:
 
         async with self._cycle_lock:
             await self.reconcile()
+            for task in self._ledger.list():
+                last_activity = task.workspace_last_activity_at or task.updated_at
+                if (
+                    task.state is TaskState.SLEEPING
+                    and not task.workspace_expired
+                    and datetime.now(UTC) - last_activity >= timedelta(days=7)
+                ):
+                    if self._supervision is not None:
+                        await self._supervision.expire_sleeping_workspace(task.id)
+                    else:
+                        await self._lifecycle.expire_workspace(task.id)
+                        self._ledger.expire_workspace(task.id)
             if self._storage_limits is not None:
                 run_retention_pass(self._ledger, self._storage_limits)
             if not self._admission_enabled or self._stop.is_set():
@@ -263,9 +276,17 @@ class TaskScheduler:
                 continue
 
             if snapshot.state is SandboxProviderState.STOPPED:
-                if reservation.phase is ReservationPhase.TERMINATION_PENDING:
+                current_task = self._ledger.get(reservation.task_id)
+                if (
+                    reservation.phase is ReservationPhase.TERMINATION_PENDING
+                    or current_task is not None
+                    and current_task.state is TaskState.SLEEPING
+                ):
                     self._ledger.release_reservation(reservation.task_id)
-                elif creation.provider_id is None:
+                elif creation.provider_id is None or (
+                    reservation.phase is ReservationPhase.STARTING
+                    and self._ledger.get_task_result(reservation.task_id) is not None
+                ):
                     # Absence was established by deterministic identity lookup;
                     # a create attempt can now be made without duplication.
                     self._ledger.update_reservation(
@@ -273,6 +294,15 @@ class TaskScheduler:
                         phase=ReservationPhase.STARTING,
                         condition=None,
                     )
+                elif self._ledger.get_supervision(reservation.task_id) is not None:
+                    # Provider lifetime or host loss ended an active workspace.
+                    # Its Volume survives and a later message can rehydrate it.
+                    self._ledger.finish_task(
+                        reservation.task_id,
+                        state=TaskState.SLEEPING,
+                        outcome_detail="workspace VM stopped; send a message to resume",
+                    )
+                    self._ledger.release_reservation(reservation.task_id)
                 else:
                     self._ledger.mark_sandbox_lost(
                         reservation.task_id,
@@ -288,10 +318,16 @@ class TaskScheduler:
                 if reservation.phase is ReservationPhase.FINALIZING
                 else ReservationPhase.RUNNING
             )
+            current_task = self._ledger.get(reservation.task_id)
             state = (
                 TaskState.FINALIZING
                 if phase is ReservationPhase.FINALIZING
-                else TaskState.RUNNING
+                else (
+                    current_task.state
+                    if current_task is not None
+                    and current_task.state in {TaskState.IDLE, TaskState.SLEEPING}
+                    else TaskState.RUNNING
+                )
             )
             self._ledger.update_reservation(
                 reservation.task_id,

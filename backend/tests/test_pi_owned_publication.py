@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 
 from gg.runtime.github import GitHubTimeoutError, RemotePullRequest
-from gg.runtime.ledger import TaskResultArchive
 from gg.runtime.publication import (
     BotIdentity,
     DraftPublisher,
@@ -16,10 +14,8 @@ from gg.runtime.publication import (
     PublicationUncertainError,
     marker_token,
 )
-from gg.runtime.task_supervision import manager as manager_module
-from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.publication import PublicationRequest, PublicationState
-from gg.sdk.task_execution import AgentOutcome, CheckOutcome, TaskResultManifest
+from gg.sdk.task_execution import AgentOutcome, CheckOutcome
 from test_support.postgres_ledger import new_ledger
 
 
@@ -300,82 +296,4 @@ async def test_not_run_checks_are_not_reported_as_passed() -> None:
     assert published.check_outcome is CheckOutcome.NOT_RUN
     assert published.detail == "checks_not_run"
     assert published.detail != "checks_passed"
-    ledger.close()
-
-
-class _RecordingPublisher:
-    calls: list[str] = []
-    tokens: list[str] = []
-
-    def __init__(self, *, github_token: str, **kwargs: object) -> None:
-        del kwargs
-        self.tokens.append(github_token)
-
-    async def reconcile_observed(self, request: PublicationRequest) -> None:
-        del request
-        self.calls.append("reconcile")
-
-    async def publish(
-        self, request: PublicationRequest, *, repo_dir: object = None
-    ) -> None:
-        del request, repo_dir
-        self.calls.append("publish")
-
-    async def adopt_existing(self, request: PublicationRequest) -> None:
-        del request
-        self.calls.append("adopt")
-
-
-@pytest.mark.anyio
-async def test_owner_finalization_reconciles_with_the_task_token(monkeypatch) -> None:
-    _RecordingPublisher.calls = []
-    _RecordingPublisher.tokens = []
-    monkeypatch.setattr(manager_module, "DraftPublisher", _RecordingPublisher)
-    ledger = new_ledger()
-    ledger.open()
-    record, _ = ledger.submit(
-        idempotency_key="pi-owner",
-        repository="alice/private",
-        prompt="edit",
-        base_ref="main",
-        retry_of=None,
-        owner_id=OWNER,
-    )
-    ledger.record_base_sha(record.id, "base123")
-
-    class Authorization:
-        def credential(self, owner_id, repository, base_ref):
-            assert (owner_id, repository, base_ref) == (OWNER, "alice/private", "main")
-            return SimpleNamespace(token="installation-token", base_sha="base123")
-
-    supervision = TaskSupervisionManager(
-        ledger=ledger,
-        lifecycle=SimpleNamespace(),
-        settings=SimpleNamespace(github_clone_token="global-token"),
-        publisher=None,
-        repository_authorization=Authorization(),
-    )
-    manifest = TaskResultManifest(
-        task_id=record.id,
-        execution_id="exec-1",
-        repository="alice/private",
-        task_branch=f"gg/task/{record.id}",
-        base_ref="main",
-        base_sha="base123",
-        head_sha="abc123",
-        changed_files=("README.md",),
-        check_outcome=CheckOutcome.NOT_RUN,
-        agent_outcome=AgentOutcome.SUCCEEDED,
-    )
-    archive = TaskResultArchive(
-        task_id=record.id,
-        execution_id="exec-1",
-        manifest=manifest,
-        evidence_complete=True,
-        evidence_detail=None,
-        archived_at=None,
-    )
-    await supervision._maybe_publish(record.id, manifest, archive)
-    assert _RecordingPublisher.calls == ["reconcile"]
-    assert _RecordingPublisher.tokens == ["installation-token"]
     ledger.close()

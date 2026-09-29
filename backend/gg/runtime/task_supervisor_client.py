@@ -17,12 +17,13 @@ class TaskSupervisorClient:
         self._connection = connection
 
     async def start(
-        self, request: StartTaskExecutionRequest
+        self, request: StartTaskExecutionRequest, *, github_token: str | None = None
     ) -> tuple[TaskExecutionRecord, int]:
         async with self._connection.http_client(timeout=30) as client:
             response = await client.post(
                 "/api/task-executions/start",
                 json=request.model_dump(mode="json"),
+                headers={"X-Task-GitHub-Token": github_token} if github_token else None,
             )
             response.raise_for_status()
             return (

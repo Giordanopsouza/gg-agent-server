@@ -3,29 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Protocol
 
 import httpx
 
 from gg.runtime.config import RuntimeSettings
-from gg.runtime.github import HttpGitHubGateway
 from gg.runtime.ledger import (
     ReservationPhase,
     SandboxProviderState,
     SupervisionRecord,
     TaskLedger,
-    TaskResultArchive,
 )
 from gg.runtime.modal_sandbox import ModalLifecycleError, ModalSandboxLifecycle
-from gg.runtime.publication import BotIdentity, DraftPublisher
-from gg.runtime.repo_prep import prepare_repo_from_manifest
-from gg.runtime.repository_authorization import RepositoryAuthorization
+from gg.runtime.repository_authorization import (
+    RepositoryAccessError,
+    RepositoryAuthorization,
+)
 from gg.runtime.storage import (
     StorageLimits,
     measure_task_evidence,
@@ -34,7 +30,6 @@ from gg.runtime.storage import (
 )
 from gg.runtime.task_supervisor_client import TaskSupervisorClient
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
-from gg.sdk.publication import PublicationRequest, PublicationState
 from gg.sdk.task_execution import (
     AgentOutcome,
     CheckOutcome,
@@ -49,16 +44,6 @@ from gg.sdk.tasks import TaskRecord, TaskState
 DEFAULT_TASK_DEADLINE = timedelta(hours=1)
 DEFAULT_CLEANUP_BUDGET = timedelta(minutes=5)
 TASK_BRANCH_PREFIX = "gg/task"
-
-
-class PublicationPort(Protocol):
-    async def adopt_existing(self, request: PublicationRequest) -> object | None: ...
-
-    async def publish(
-        self, request: PublicationRequest, *, repo_dir: Path | None = None
-    ) -> object: ...
-
-    async def reconcile_observed(self, request: PublicationRequest) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -77,7 +62,6 @@ class TaskSupervisionManager:
         ledger: TaskLedger,
         lifecycle: ModalSandboxLifecycle,
         settings: RuntimeSettings | object,
-        publisher: PublicationPort | None = None,
         callbacks: SupervisionCallbacks | None = None,
         repository_authorization: RepositoryAuthorization | None = None,
     ) -> None:
@@ -89,12 +73,12 @@ class TaskSupervisionManager:
             if isinstance(settings, RuntimeSettings)
             else None
         )
-        self._publisher = publisher
         self._repository_authorization = repository_authorization
         self._callbacks = callbacks or SupervisionCallbacks()
         self._loops: dict[str, asyncio.Task[None]] = {}
         self._live: dict[str, list[asyncio.Queue[TaskEventCopy]]] = defaultdict(list)
         self._settlement_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._workspace_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._stop = asyncio.Event()
 
     async def startup(self) -> None:
@@ -178,50 +162,47 @@ class TaskSupervisionManager:
                 )
             except ValueError as exc:
                 raise RuntimeError(str(exc)) from exc
-        if task.state in {
-            TaskState.COMPLETED,
-            TaskState.FAILED,
-            TaskState.CANCELLED,
-            TaskState.FINALIZING,
-        }:
-            raise RuntimeError("task is not accepting messages")
-        existing = self._ledger.get_task_message_receipt(task_id, message_id)
-        if existing is not None:
-            return existing
-        accepted = MessageReceipt(
-            id=message_id,
-            content=content,
-            status=MessageDeliveryStatus.ACCEPTED,
-        )
-        self._ledger.save_task_message_receipt(task_id, accepted)
-        supervision = self._ledger.get_supervision(task_id)
-        if supervision is None or supervision.conversation_id is None:
+        async with self._workspace_locks[task_id]:
+            task = self._ledger.get(task_id)
+            if task.state in {
+                TaskState.COMPLETED,
+                TaskState.FAILED,
+                TaskState.CANCELLED,
+            }:
+                raise RuntimeError("task is not accepting messages")
+            await self._expire_sleeping_locked(task)
+            existing = self._ledger.get_task_message_receipt(task_id, message_id)
+            if existing is not None:
+                if existing.content != content:
+                    raise RuntimeError("message id already belongs to another message")
+                return existing
+            accepted = MessageReceipt(
+                id=message_id,
+                content=content,
+                status=MessageDeliveryStatus.ACCEPTED,
+            )
+            self._ledger.save_task_message_receipt(task_id, accepted)
+            self._ledger.touch_workspace(task_id)
+            if self._ledger.get(task_id).state is TaskState.SLEEPING:
+                self._ledger.queue_workspace_message(task_id)
+            self._ensure_loop(task_id)
             return accepted
-        try:
-            connection = await self._lifecycle.connect(task_id)
-        except ModalLifecycleError:
-            unknown = accepted.model_copy(
-                update={
-                    "status": MessageDeliveryStatus.UNKNOWN,
-                    "detail": "sandbox connection lost before forward",
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-            self._ledger.save_task_message_receipt(task_id, unknown)
-            return unknown
-        async with connection.http_client(timeout=30) as client:
-            response = await client.post(
-                f"/api/conversations/{supervision.conversation_id}/messages",
-                json={"id": message_id, "content": content},
-            )
-        if response.status_code == 409:
-            receipt = MessageReceipt.model_validate(response.json())
-            self._ledger.save_task_message_receipt(task_id, receipt)
-            return receipt
-        response.raise_for_status()
-        receipt = MessageReceipt.model_validate(response.json())
-        self._ledger.save_task_message_receipt(task_id, receipt)
-        return receipt
+
+    async def expire_sleeping_workspace(self, task_id: str) -> None:
+        async with self._workspace_locks[task_id]:
+            task = self._ledger.get(task_id)
+            if task is not None:
+                await self._expire_sleeping_locked(task)
+
+    async def _expire_sleeping_locked(self, task: TaskRecord) -> None:
+        last_activity = task.workspace_last_activity_at or task.updated_at
+        if (
+            task.state is TaskState.SLEEPING
+            and not task.workspace_expired
+            and datetime.now(UTC) - last_activity >= timedelta(days=7)
+        ):
+            await self._lifecycle.expire_workspace(task.id)
+            self._ledger.expire_workspace(task.id)
 
     def _ensure_loop(self, task_id: str) -> None:
         current = self._loops.get(task_id)
@@ -299,6 +280,16 @@ class TaskSupervisionManager:
             TaskExecutionPhase.COMPLETED,
             TaskExecutionPhase.FAILED,
         }:
+            archive = self._ledger.get_task_result(task_id)
+            if archive is not None and archive.execution_id == execution.execution_id:
+                pending = self._ledger.list_accepted_task_messages(task_id)
+                if pending:
+                    await self._start_followup(task_id, client, pending[0])
+                elif task.state is TaskState.IDLE:
+                    last_activity = task.workspace_last_activity_at or task.updated_at
+                    if datetime.now(UTC) - last_activity >= timedelta(minutes=45):
+                        await self._sleep_workspace(task_id)
+                return
             self._ledger.update_reservation(
                 task_id,
                 phase=ReservationPhase.FINALIZING,
@@ -314,9 +305,108 @@ class TaskSupervisionManager:
         supervision = self._ledger.get_supervision(task_id)
         if supervision is None or supervision.execution_id == task_id:
             supervision = await self._start_execution(task_id, task, client)
+        elif supervision.execution_id == supervision.start_key:
+            receipt = self._ledger.get_task_message_receipt(
+                task_id, supervision.start_key.partition(":")[2]
+            )
+            if receipt is not None:
+                await self._start_followup(task_id, client, receipt)
+                supervision = self._ledger.get_supervision(task_id)
+        elif supervision is not None:
+            try:
+                await client.get_execution(supervision.execution_id)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+                pending = self._ledger.list_accepted_task_messages(task_id)
+                if not pending:
+                    return None
+                await self._start_followup(task_id, client, pending[0])
+                supervision = self._ledger.get_supervision(task_id)
         if supervision is None:
             return None
         return await self._refresh_supervision(task_id, client, supervision)
+
+    async def _start_followup(
+        self, task_id: str, client: TaskSupervisorClient, receipt: MessageReceipt
+    ) -> None:
+        task = self._ledger.get(task_id)
+        supervision = self._ledger.get_supervision(task_id)
+        if task is None or supervision is None:
+            return
+        try:
+            github_token = await self._fresh_github_token(task)
+        except RepositoryAccessError as exc:
+            failed = receipt.model_copy(
+                update={
+                    "status": MessageDeliveryStatus.FAILED,
+                    "detail": str(exc),
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+            self._ledger.save_task_message_receipt(task_id, failed)
+            self._ledger.update_reservation(
+                task_id, phase=ReservationPhase.RUNNING, condition=str(exc)
+            )
+            return
+        start_key = f"{task_id}:{receipt.id}"
+        if supervision.start_key != start_key:
+            supervision = self._ledger.update_supervision(
+                task_id, execution_id=start_key, start_key=start_key
+            )
+        request = StartTaskExecutionRequest(
+            task_id=task_id,
+            repository=task.repository,
+            prompt=receipt.content,
+            base_ref=task.base_ref,
+            base_sha=task.base_sha,
+            task_branch=supervision.task_branch,
+            start_key=start_key,
+            deadline_at=datetime.now(UTC) + DEFAULT_TASK_DEADLINE,
+            model=task.model,
+        )
+        record, _ = await client.start(request, github_token=github_token)
+        delivered = receipt.model_copy(
+            update={
+                "status": MessageDeliveryStatus.DELIVERED,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self._ledger.save_task_message_receipt(task_id, delivered)
+        self._ledger.update_supervision(
+            task_id,
+            execution_id=record.execution_id,
+            conversation_id=record.conversation_id or supervision.conversation_id,
+        )
+        self._ledger.finish_task(task_id, state=TaskState.RUNNING)
+
+    async def _sleep_workspace(self, task_id: str) -> None:
+        async with self._workspace_locks[task_id]:
+            if not self._ledger.try_mark_sleeping(task_id):
+                return
+            try:
+                await self._lifecycle.sync(task_id)
+                snapshot = await self._lifecycle.terminate(task_id)
+                if snapshot.state is not SandboxProviderState.STOPPED:
+                    raise ModalLifecycleError("sandbox sleep was not confirmed")
+            except Exception:
+                if self._ledger.get(task_id).state is TaskState.SLEEPING:
+                    self._ledger.finish_task(task_id, state=TaskState.IDLE)
+                raise
+            self._ledger.release_reservation(task_id)
+
+    async def _fresh_github_token(self, task: TaskRecord) -> str | None:
+        if task.owner_id is None or task.repository is None:
+            return None
+        if self._repository_authorization is None:
+            raise RuntimeError("GitHub repository authorization unavailable")
+        credential = await asyncio.to_thread(
+            self._repository_authorization.credential,
+            task.owner_id,
+            task.repository,
+            task.base_ref or "",
+        )
+        return credential.token
 
     async def _start_execution(
         self, task_id: str, task: TaskRecord, client: TaskSupervisorClient
@@ -333,19 +423,6 @@ class TaskSupervisionManager:
             else datetime.now(UTC) + duration
         )
         task_branch = f"{TASK_BRANCH_PREFIX}/{task_id}"
-        if task.owner_id is not None and task.repository and task.base_ref:
-            self._ledger.begin_publication(
-                task_id=task_id,
-                repository=task.repository,
-                task_branch=task_branch,
-                base_ref=task.base_ref,
-                task_marker=task_id,
-                commit_sha=None,
-                check_outcome=CheckOutcome.NOT_RUN,
-                agent_outcome=AgentOutcome.NOT_RUN,
-                state=PublicationState.PENDING,
-                detail="pi_publication_pending",
-            )
         self._ledger.begin_supervision(
             task_id=task_id,
             execution_id=task_id,
@@ -364,7 +441,19 @@ class TaskSupervisionManager:
             model=task.model,
         )
         try:
-            record, _ = await client.start(request)
+            record, _ = await client.start(
+                request, github_token=await self._fresh_github_token(task)
+            )
+        except RepositoryAccessError as exc:
+            self._ledger.finish_task(
+                task_id, state=TaskState.FAILED, outcome_detail=str(exc)
+            )
+            self._ledger.update_reservation(
+                task_id,
+                phase=ReservationPhase.TERMINATION_PENDING,
+                condition=str(exc),
+            )
+            return None
         except httpx.HTTPError as exc:
             self._ledger.update_reservation(
                 task_id,
@@ -389,13 +478,14 @@ class TaskSupervisionManager:
         client: TaskSupervisorClient,
         supervision: SupervisionRecord,
     ) -> SupervisionRecord:
-        if supervision.conversation_id:
-            return supervision
         try:
             execution = await client.get_execution(supervision.execution_id)
         except httpx.HTTPError:
             return supervision
-        if not execution.conversation_id:
+        if (
+            not execution.conversation_id
+            or execution.conversation_id == supervision.conversation_id
+        ):
             return supervision
         return self._ledger.update_supervision(
             task_id, conversation_id=execution.conversation_id
@@ -502,7 +592,6 @@ class TaskSupervisionManager:
                 )
             except httpx.HTTPError:
                 self._ledger.update_supervision(task_id, tail_gap_possible=True)
-        await self._settle_messages(task_id, connection, supervision)
         manifest = await _fetch_manifest_with_retries(
             client, supervision.execution_id, budget=DEFAULT_CLEANUP_BUDGET
         )
@@ -513,7 +602,7 @@ class TaskSupervisionManager:
             )
         evidence_complete = manifest is not None
         evidence_detail = None if evidence_complete else "manifest archival incomplete"
-        archive = self._ledger.archive_task_result(
+        self._ledger.archive_task_result(
             task_id=task_id,
             execution_id=supervision.execution_id,
             manifest=manifest,
@@ -523,23 +612,19 @@ class TaskSupervisionManager:
         terminal_state, outcome_detail, check_status = _terminal_from_manifest(
             task, manifest, supervision.cancel_requested
         )
-        try:
-            await self._maybe_publish(task_id, manifest, archive)
-        except Exception as exc:
-            terminal_state = TaskState.FAILED
-            detail = str(exc)
-            github_token = getattr(self._settings, "github_clone_token", None)
-            if github_token:
-                detail = detail.replace(github_token, "[REDACTED]")
-            if not detail:
-                detail = "GitHub publication unavailable"
-            outcome_detail = f"publication failed: {detail}"
+        if terminal_state is not TaskState.CANCELLED:
+            terminal_state = TaskState.IDLE
         self._ledger.finish_task(
             task_id,
             state=terminal_state,
             outcome_detail=outcome_detail,
             check_status=check_status,
         )
+        if terminal_state is TaskState.IDLE:
+            self._ledger.update_reservation(
+                task_id, phase=ReservationPhase.RUNNING, task_state=TaskState.IDLE
+            )
+            return
         self._ledger.update_reservation(
             task_id,
             phase=ReservationPhase.TERMINATION_PENDING,
@@ -576,102 +661,6 @@ class TaskSupervisionManager:
             else:
                 settled = MessageReceipt.model_validate(response.json())
             self._ledger.save_task_message_receipt(task_id, settled)
-
-    async def _maybe_publish(
-        self,
-        task_id: str,
-        manifest: TaskResultManifest | None,
-        archive: TaskResultArchive,
-    ) -> None:
-        task = self._ledger.get(task_id)
-        pi_owned = (
-            task is not None
-            and task.owner_id is not None
-            and task.repository is not None
-        )
-        if (
-            manifest is None
-            or (self._publisher is None and not pi_owned)
-            or manifest.repository is None
-            or manifest.task_branch is None
-            or manifest.base_ref is None
-            or (manifest.base_sha is None and (task is None or task.base_sha is None))
-            or (not manifest.changed_files and not pi_owned)
-        ):
-            return
-        assert manifest.repository is not None
-        assert manifest.task_branch is not None
-        assert manifest.base_ref is not None
-        base_sha = manifest.base_sha or (task.base_sha if task is not None else None)
-        assert base_sha is not None
-        request = PublicationRequest(
-            task_id=task_id,
-            repository=manifest.repository,
-            task_branch=manifest.task_branch,
-            base_ref=manifest.base_ref,
-            base_sha=base_sha,
-            head_sha=manifest.head_sha,
-            task_marker=task_id,
-            agent_outcome=manifest.agent_outcome,
-            check_outcome=manifest.check_outcome,
-            check=manifest.check,
-            changed_files=manifest.changed_files,
-        )
-        import os
-
-        github_token = getattr(self._settings, "github_clone_token", None)
-        publisher = self._publisher
-        if task is not None and task.owner_id is not None:
-            if self._repository_authorization is None:
-                raise ValueError("GitHub repository authorization unavailable")
-            if (
-                manifest.repository != task.repository
-                or manifest.base_ref != task.base_ref
-                or (
-                    manifest.base_sha is not None and manifest.base_sha != task.base_sha
-                )
-            ):
-                raise ValueError(
-                    "sandbox manifest does not match authorized repository and base"
-                )
-            credential = await asyncio.to_thread(
-                self._repository_authorization.credential,
-                task.owner_id,
-                task.repository,
-                task.base_ref or "",
-            )
-            github_token = credential.token
-            publisher = DraftPublisher(
-                ledger=self._ledger,
-                github=HttpGitHubGateway(token=github_token),
-                bot=BotIdentity(
-                    name="gg-bot",
-                    email="gg-bot@users.noreply.github.com",
-                    login="gg-bot",
-                ),
-                github_token=github_token,
-            )
-        if github_token is None:
-            return
-        assert publisher is not None
-        if pi_owned:
-            result = publisher.reconcile_observed(request)
-            if isinstance(result, Awaitable):
-                await result
-            return
-        if await publisher.adopt_existing(request) is not None:
-            return
-        with tempfile.TemporaryDirectory(prefix="gg-finalize-") as tmp:
-            repo_dir = Path(tmp) / "repo"
-            prepare_repo_from_manifest(
-                manifest,
-                destination=repo_dir,
-                github_token=github_token,
-                process_env=os.environ,
-            )
-            result = publisher.publish(request, repo_dir=repo_dir)
-            if isinstance(result, Awaitable):
-                await result
 
     async def _attempt_cleanup(self, task_id: str) -> None:
         try:

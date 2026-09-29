@@ -30,7 +30,11 @@ from pathlib import Path
 
 record_path = Path(os.environ["FAKE_PI_RECORD"])
 prompt = json.loads(sys.stdin.buffer.readline())
-state = {"prompt": prompt, "gh_token": os.environ.get("GH_TOKEN")}
+state = {"prompt": prompt, "gh_token": os.environ.get("GH_TOKEN"),
+         "argv": sys.argv[1:]}
+session_dir = Path(sys.argv[sys.argv.index("--session-dir") + 1])
+session_dir.mkdir(parents=True, exist_ok=True)
+(session_dir / "fake-session.jsonl").write_text("{}\n", encoding="utf-8")
 
 
 def send(message):
@@ -43,6 +47,8 @@ record_path.with_suffix(".ready").write_text("ready", encoding="utf-8")
 
 if os.environ.get("FAKE_PI_MODE") == "edit":
     Path("README.md").write_text("changed\n", encoding="utf-8")
+if os.environ.get("FAKE_PI_MODE") == "read":
+    state["workspace_file"] = Path("README.md").read_text(encoding="utf-8")
 if os.environ.get("FAKE_PI_MODE") == "leak_patch":
     Path("README.md").write_text(os.environ["OPENROUTER_API_KEY"], encoding="utf-8")
 if check_outcome := os.environ.get("FAKE_PI_CHECK_OUTCOME"):
@@ -210,6 +216,67 @@ async def test_general_execution_finishes_in_blank_workspace(
     assert manifest["agent_outcome"] == AgentOutcome.SUCCEEDED.value
     assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
     assert (settings.workspace_dir / "tasks" / "general-1" / "README.md").exists()
+
+
+@pytest.mark.anyio
+async def test_new_server_resumes_dirty_checkout_and_pi_session(
+    tmp_path: Path,
+    bare_repo: Path,
+    active_pi: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_BARE_REPO", str(bare_repo))
+    monkeypatch.setattr(
+        "gg.server.task_supervisor.service.clone_repository", _clone_from_bare
+    )
+    settings = _settings(tmp_path, bare_repo)
+
+    async def run_turn(start_key: str, prompt: str, token: str) -> dict:
+        app = create_app(settings)
+        payload = _start_payload("resume-1")
+        payload.update({"start_key": start_key, "prompt": prompt})
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with app.router.lifespan_context(app):
+                response = await client.post(
+                    "/api/task-executions/start",
+                    json=payload,
+                    headers={"X-Task-GitHub-Token": token},
+                )
+                assert response.status_code == 202
+                execution_id = response.json()["execution_id"]
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    result = await client.get(
+                        f"/api/task-executions/{execution_id}/manifest"
+                    )
+                    if result.status_code == 200:
+                        return result.json()
+                    await asyncio.sleep(0.05)
+        raise AssertionError("turn did not finish")
+
+    first = await run_turn("resume-first", "edit the file", "first-token")
+    repo = tmp_path / "workspace" / "tasks" / "resume-1"
+    assert (repo / "README.md").read_text(encoding="utf-8") == "changed\n"
+    assert (
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == "M README.md"
+    )
+
+    monkeypatch.setenv("FAKE_PI_MODE", "read")
+    second = await run_turn("resume-second", "read the file", "fresh-token")
+    record = json.loads(Path(os.environ["FAKE_PI_RECORD"]).read_text())
+    assert second["conversation_id"] == first["conversation_id"]
+    assert record["workspace_file"] == "changed\n"
+    assert record["gh_token"] == "fresh-token"
+    assert "--continue" in record["argv"]
 
 
 @pytest.mark.anyio
@@ -384,7 +451,7 @@ async def test_no_changes_result(
 
 
 @pytest.mark.anyio
-async def test_pi_owned_publication_receives_only_the_task_credential(
+async def test_repository_turn_receives_only_task_credential_without_publication(
     tmp_path: Path,
     bare_repo: Path,
     active_pi: None,
@@ -437,8 +504,7 @@ async def test_pi_owned_publication_receives_only_the_task_credential(
     record = json.loads(Path(os.environ["FAKE_PI_RECORD"]).read_text(encoding="utf-8"))
     assert record["gh_token"] == "task-installation-token"
     prompt = json.dumps(record["prompt"])
-    assert "gg-task-marker: owned-1" in prompt
-    assert "does not technically prevent a merge" in prompt
+    assert "Do not commit, push, or open a pull request" in prompt
     assert "global-host-token" not in prompt
     assert "global-host-token" not in json.dumps(record)
-    assert manifest["check_outcome"] == CheckOutcome.PASSED.value
+    assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value

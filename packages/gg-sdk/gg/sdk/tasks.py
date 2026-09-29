@@ -23,6 +23,8 @@ class TaskState(StrEnum):
     QUEUED = "queued"
     STARTING = "starting"
     RUNNING = "running"
+    IDLE = "idle"
+    SLEEPING = "sleeping"
     FINALIZING = "finalizing"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -71,6 +73,8 @@ class TaskRecord(BaseModel):
     check_status: str | None = None
     sandbox_cleanup_status: str | None = None
     payload_expired: bool = False
+    workspace_expired: bool = False
+    workspace_last_activity_at: datetime | None = None
 
 
 __all__ = ["CreateTaskRequest", "TaskRecord", "TaskState"]

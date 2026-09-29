@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import gettempdir
 from unittest.mock import patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -20,6 +23,7 @@ def _settings(**overrides) -> RuntimeSettings:
     base = {
         "api_key": "control-secret",
         "image": "test-image:dev",
+        "dispatch_lock_path": str(Path(gettempdir()) / f"gg-task-api-{uuid4()}.lock"),
     }
     base.update(overrides)
     return RuntimeSettings(**base)

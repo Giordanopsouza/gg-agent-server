@@ -171,9 +171,11 @@ async def send_task_message(
     if service.get(task_id, owner_id=request.state.owner_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     try:
-        return await supervision.send_message(
+        receipt = await supervision.send_message(
             task_id, message_id=body.id, content=body.content
         )
+        request.app.state.task_scheduler.wake()
+        return receipt
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

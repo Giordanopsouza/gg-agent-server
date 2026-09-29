@@ -115,7 +115,7 @@ async def test_create_persists_intent_identity_and_provider_id_before_ready() ->
     assert call["cpu"] == (2.0, 2.0)
     assert call["memory"] == (4096, 4096)
     assert call["startup_timeout"] == 300
-    assert call["provider_timeout"] == 4200
+    assert call["provider_timeout"] == 86400
     assert call["name"].startswith("gg-prod-east-")  # type: ignore[union-attr]
     assert call["tags"] == {
         "gg_identity": "prod/east:task-1",
