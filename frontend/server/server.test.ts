@@ -80,7 +80,7 @@ test("proxies API headers, cookies, redirects, and exact webhook bytes", async (
   for (const route of ["/tasks", "/ready", "/health"]) {
     assert.equal((await fetch(`${origin}${route}`)).status, 200);
   }
-  assert.deepEqual(await (await fetch(`${origin}/web-health`)).json(), { status: "ok" });
+  assert.deepEqual(await (await fetch(`${origin}/web_health`)).json(), { status: "ok" });
 });
 
 test("forwards the task WebSocket upgrade", async () => {
@@ -105,7 +105,7 @@ test("returns 502 when the backend is unavailable", async () => {
   const port = await listen(unavailable);
   try {
     assert.equal((await fetch(`http://127.0.0.1:${port}/tasks`)).status, 502);
-    assert.equal((await fetch(`http://127.0.0.1:${port}/web-health`)).status, 200);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/web_health`)).status, 200);
   } finally {
     await new Promise<void>((resolve) => unavailable.close(() => resolve()));
   }

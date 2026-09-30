@@ -57,7 +57,7 @@ the account, history, and draft clear. Tab through links, form controls, and
 task history to check focus and labels.
 
 The production Node server serves `dist/` at `/` and `/assets`, exposes
-`/web-health`, and forwards `/auth`, `/tasks`, `/webhooks`, `/ready`, and
+`/web_health`, and forwards `/auth`, `/tasks`, `/webhooks`, `/ready`, and
 `/health` to the Python runtime. It also forwards task WebSocket upgrades.
 Direct navigation uses hash URLs (`#/tasks/<id>`), so no server fallback route
 is required. On Railway, build `gg-web` from `/frontend` using Node 22 and
