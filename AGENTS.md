@@ -9,10 +9,8 @@
 
 ## Task worktrees
 
-- For every new task that changes repository files, start in a dedicated Git worktree before editing. Continue using that worktree for follow-up turns on the same task; do not create another one for each turn.
-- Store each worktree under `./.agents/worktrees/` in the repository, at `./.agents/worktrees/<task-number>-<task-name>`. Use the task's existing number and a short lowercase hyphenated name. For tasks without an assigned number, use the next unused number found across `docs/tasks/` and its subdirectories.
-- Use the same identifier for the task branch (for example, worktree `076-task-worktrees` on branch `076-task-worktrees`).
-- If the current checkout is already the dedicated worktree for this task, keep working there.
+- Before any repository edit, confirm the checkout is the task's dedicated worktree. Reuse it for follow-up turns; otherwise create `./.agents/worktrees/<task-number>-<task-name>` on a branch with that exact identifier before editing.
+- Use the task's existing number and a short lowercase hyphenated name. If none is assigned, use the next unused number across `docs/tasks/` and its subdirectories.
 
 # Key Components
 
@@ -39,7 +37,7 @@
 
 Run core verbs from the root [`Makefile`](Makefile), which delegates to component Makefiles. `make help` lists the available aggregate and component targets.
 
-Manual QA order: `make format-fix`, `make lint-fix`, `make format-check`, `make lint-check`, `make pre-commit`, then `make unit-tests`.
+Before handing off a code change, run the root Makefile QA sequence in order: `make format-fix`, `make lint-fix`, `make format-check`, `make lint-check`, `make pre-commit`, then `make unit-tests`.
 
 Use `uv sync --no-editable`: editable workspace installs are unreliable here on Python 3.12 because generated `__editable__*.pth` hooks can be skipped. Use `uv run --no-editable ...` for commands outside Makefile targets.
 
@@ -51,4 +49,4 @@ Use `uv sync --no-editable`: editable workspace installs are unreliable here on 
 # Testing E2E
 
 - **Local server:** run `make run`, then `curl http://127.0.0.1:8000/health`; success is HTTP 200 reporting status `ok`. `GG_SESSION_API_KEYS` is optional on loopback and required before exposing a non-loopback bind.
-- **Platform feature:** after implementing each feature, use [`.agents/skills/local-stack/SKILL.md`](.agents/skills/local-stack/SKILL.md) to run the frontend and `gg.runtime` together and exercise a relevant task flow before shipping. Verify events, the result, and whether the agent actually fulfilled the prompt; `queued` and a `succeeded` label alone do not prove that.
+- **Platform feature:** before claiming a feature complete, use [`.agents/skills/local-stack/SKILL.md`](.agents/skills/local-stack/SKILL.md) with dispatch enabled and exercise a real task through the frontend and `gg.runtime`. Verify activity events, terminal result, and prompt fulfillment; `queued`, admission-only checks, or a `succeeded` label alone are insufficient. If prerequisites block the run, report the first unmet prerequisite and the exact boundary tested.

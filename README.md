@@ -54,7 +54,8 @@ npm run dev
 The backend uses SQLAlchemy 2.x with the psycopg driver. Alembic owns every new
 change to `app_private`, `runtime_private`, and `vault_private`; do not add new
 application DDL under `supabase/migrations/`. Supabase still owns Auth and the
-Postgres service.
+Postgres service. Step-by-step workflow for agents and humans:
+[`.agents/skills/alembic-migration/SKILL.md`](.agents/skills/alembic-migration/SKILL.md).
 
 Use a server-only migrator connection, never the `gg_runtime` URL:
 

@@ -124,6 +124,10 @@ class Task(Base):
     payload_expired: Mapped[int] = mapped_column(
         Integer, server_default=text("0"), nullable=False
     )
+    workspace_expired: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    workspace_last_activity_at: Mapped[str | None] = mapped_column(Text)
     owner_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
 
 

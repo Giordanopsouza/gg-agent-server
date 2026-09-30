@@ -91,23 +91,3 @@ db-check:
 	@test -n "$(GG_MIGRATION_DATABASE_URL)" || { echo "Set GG_MIGRATION_DATABASE_URL to the migrator Postgres URL"; exit 1; }
 	GG_MIGRATION_DATABASE_URL='$(GG_MIGRATION_DATABASE_URL)' $(ALEMBIC) check
 
-# The only destructive database target is deliberately local-only. Never pass a
-# linked project or --db-url to this target.
-supabase-local-start:
-	@test -x node_modules/.bin/supabase || { echo "Run npm ci first"; exit 1; }
-	./node_modules/.bin/supabase --workdir $(SUPABASE_LOCAL_WORKDIR) start
-
-supabase-local-reset:
-	@test "$(SUPABASE_RESET_TARGET)" = "gg-agent-server" || { echo "Set SUPABASE_RESET_TARGET=gg-agent-server for the local Docker project"; exit 1; }
-	./node_modules/.bin/supabase --workdir $(SUPABASE_LOCAL_WORKDIR) db reset --local --no-seed
-	GG_MIGRATION_DATABASE_URL='$(LOCAL_MIGRATION_DATABASE_URL)' $(ALEMBIC) upgrade head
-
-supabase-integration-tests:
-	@test "$(SUPABASE_RESET_TARGET)" = "gg-agent-server" || { echo "Integration resets local data; set SUPABASE_RESET_TARGET=gg-agent-server"; exit 1; }
-	./node_modules/.bin/supabase --workdir $(SUPABASE_LOCAL_WORKDIR) test db --local
-	SUPABASE_LOCAL_WORKDIR=$(SUPABASE_LOCAL_WORKDIR) uv run --no-editable python scripts/supabase_auth_smoke.py
-	SUPABASE_LOCAL_WORKDIR=$(SUPABASE_LOCAL_WORKDIR) PYTHONPATH=backend uv run --no-editable python scripts/supabase_pool_smoke.py
-	SUPABASE_LOCAL_WORKDIR=$(SUPABASE_LOCAL_WORKDIR) SUPABASE_RESET_TARGET=$(SUPABASE_RESET_TARGET) uv run --no-editable python scripts/supabase_auth_smoke.py --upgrade
-	GG_MIGRATION_DATABASE_URL='$(LOCAL_MIGRATION_DATABASE_URL)' $(ALEMBIC) check
-	./node_modules/.bin/supabase --workdir $(SUPABASE_LOCAL_WORKDIR) test db --local
-	./node_modules/.bin/supabase --workdir $(SUPABASE_LOCAL_WORKDIR) db advisors --local --type security --fail-on error
