@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 from httpx import ASGITransport
+from test_support.postgres_ledger import new_ledger
 
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.scheduler import DeploymentLock, DispatchLockError
@@ -13,7 +14,6 @@ from gg.runtime.storage import StorageLimits, admission_pressure, run_retention_
 from gg.runtime.task_service import StoragePressureError, TaskService
 from gg.sdk.domain import Event, EventKind
 from gg.sdk.tasks import CreateTaskRequest, TaskState
-from test_support.postgres_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}

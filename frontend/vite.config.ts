@@ -9,8 +9,11 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       proxy: {
-        "/tasks": proxyTarget,
+        "/tasks": { target: proxyTarget, ws: true },
         "/auth": proxyTarget,
+        "/webhooks": proxyTarget,
+        "/ready": proxyTarget,
+        "/health": proxyTarget,
       },
     },
   };

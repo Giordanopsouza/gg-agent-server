@@ -29,26 +29,24 @@ App, Postgres, and vault settings configured.
 
 - `VITE_DEV_API_PROXY`: development proxy target. Defaults to
   `http://127.0.0.1:8001`.
-- `VITE_TASK_API_URL`: browser-visible Task API base URL, set at build time.
-  Omit it when serving UI and API behind one origin with `/tasks` and `/auth`
-  routed to the control plane. A different origin requires credentialed CORS,
-  compatible cookie settings, and matching `GG_WEB_ORIGIN` on the backend.
-- `GG_RUNTIME_CORS_ORIGINS`: comma-separated exact UI origins allowed by the
-  runtime for cross-origin requests, for example
-  `https://tasks.example.com,http://localhost:5173`. Configure this on the
-  runtime when `VITE_TASK_API_URL` points to a different origin.
+- `GG_BACKEND_URL`: private backend HTTP URL for the production Node server,
+  including port. Locally use `http://127.0.0.1:8001`. On Railway use
+  `http://${{gg-runtime.RAILWAY_PRIVATE_DOMAIN}}:8001` as a service reference.
+- `PORT`: port listened to by the Node server; defaults to `3000` locally.
+- Browser API calls use relative URLs so cookies and OAuth callbacks stay on
+  the frontend origin.
 
 Build and verify:
 
 ```bash
 npm test
-npm run build:runtime
-npm run preview
+npm run build
+GG_BACKEND_URL=http://127.0.0.1:8001 npm start
 ```
 
 From the repository root, `make frontend-install`, `make frontend-test`, and
 `make frontend-build` delegate to the frontend Makefile. The last target runs
-`build:runtime` and updates the bundle served by the control plane.
+`build` and produces the `dist/` browser files and `dist-server/` Node files.
 
 Desktop QA: at 768px and 1440px, sign in and confirm the sidebar groups every
 task by repository with status and date. Open a task, reload, and confirm it
@@ -58,11 +56,14 @@ draft returns; another account must see an empty composer. Sign out and confirm
 the account, history, and draft clear. Tab through links, form controls, and
 task history to check focus and labels.
 
-`build:runtime` copies the static bundle into the `gg.runtime` Python package.
-The production runtime serves it at `/` and `/assets` on the same origin as
-`/auth` and `/tasks`. Rebuild and commit the bundled files whenever the
-frontend changes. Direct navigation uses hash URLs (`#/tasks/<id>`), so no
-server fallback route is required.
+The production Node server serves `dist/` at `/` and `/assets`, exposes
+`/web-health`, and forwards `/auth`, `/tasks`, `/webhooks`, `/ready`, and
+`/health` to the Python runtime. It also forwards task WebSocket upgrades.
+Direct navigation uses hash URLs (`#/tasks/<id>`), so no server fallback route
+is required. On Railway, build `gg-web` from `/frontend` using Node 22 and
+keep `gg-runtime` building from the repository root for the shared Python
+workspace. The frontend public domain is the sole browser origin; the runtime
+domain can be removed after the new frontend has passed cutover checks.
 
 The API owns task state and results. The UI shows the Task API's lifecycle
 state (`queued`, `starting`, `running`, `finalizing`, `completed`, `failed`, or

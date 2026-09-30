@@ -1,7 +1,6 @@
 """Clean rows created by local Postgres ledger tests after each case."""
 
 import pytest
-
 from test_support.postgres_ledger import clean_test_ledger
 
 
