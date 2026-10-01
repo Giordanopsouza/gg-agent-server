@@ -52,7 +52,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     credentials: "include",
-    signal: init?.signal || AbortSignal.timeout(10000),
+    signal: init?.signal || AbortSignal.timeout(60000),
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
