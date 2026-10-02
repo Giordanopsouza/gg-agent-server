@@ -13,12 +13,12 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from joserfc import jwk, jwt
 from pydantic import ValidationError
+from test_support.postgres_ledger import new_ledger
 
 from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.openrouter_vault import OpenRouterKeyVerifier
 from gg.runtime.web_auth import SupabaseAuth
-from test_support.postgres_ledger import new_ledger
 
 
 USER_ID = "d23bfe09-a12b-49c5-845f-315fc9ec10d6"
