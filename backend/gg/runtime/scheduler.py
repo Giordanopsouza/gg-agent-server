@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import hashlib
+import logging
 import os
 import tempfile
 import time
@@ -36,6 +37,9 @@ from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.tasks import TaskState
 
 
+logger = logging.getLogger(__name__)
+
+
 class DispatchLockError(RuntimeError):
     """Another local control-plane process owns this deployment."""
 
@@ -56,6 +60,10 @@ class DispatchStatus(BaseModel):
     capacity: int
     reserved: int
     pending: int
+    running: bool = False
+    last_cycle_at: datetime | None = None
+    last_error: str | None = None
+    blocked_reason: str | None = None
     disabled_reason: str | None = None
     conditions: tuple[DispatchCondition, ...] = ()
 
@@ -129,6 +137,9 @@ class TaskScheduler:
         self._reconciled = False
         self._cycle_lock = asyncio.Lock()
         self._last_maintenance: float | None = None
+        self._last_cycle_at: datetime | None = None
+        self._last_error: str | None = None
+        self._blocked_reason: str | None = None
 
     async def start(self) -> None:
         """Take exclusive ownership and reconcile before starting admission."""
@@ -197,7 +208,15 @@ class TaskScheduler:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
-            await self.dispatch_once()
+            try:
+                await self.dispatch_once()
+            except Exception as exc:
+                self._last_error = type(exc).__name__
+                logger.exception("Task scheduler cycle failed; retrying")
+            else:
+                self._last_error = None
+            finally:
+                self._last_cycle_at = datetime.now(UTC)
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=self._poll_seconds)
             except TimeoutError:
@@ -208,6 +227,7 @@ class TaskScheduler:
         """Reconcile ownership, then fill available slots in durable FIFO order."""
 
         async with self._cycle_lock:
+            self._blocked_reason = None
             await self.reconcile()
             tasks = await asyncio.to_thread(self._ledger.list)
             now = time.monotonic()
@@ -250,6 +270,7 @@ class TaskScheduler:
                     admission_pressure, self._ledger, self._storage_limits
                 )
                 if pressure.blocked:
+                    self._blocked_reason = pressure.reason
                     return
             while not self._stop.is_set():
                 task = await asyncio.to_thread(
@@ -479,6 +500,14 @@ class TaskScheduler:
             capacity=self._capacity,
             reserved=len(reservations),
             pending=pending,
+            running=(
+                self._loop_task is not None
+                and not self._loop_task.done()
+                and not self._stop.is_set()
+            ),
+            last_cycle_at=self._last_cycle_at,
+            last_error=self._last_error,
+            blocked_reason=self._blocked_reason,
             disabled_reason=None if self._admission_enabled else "dispatch disabled",
             conditions=conditions,
         )
