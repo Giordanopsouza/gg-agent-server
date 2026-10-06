@@ -41,7 +41,7 @@ export interface Repository { id: number; full_name: string; private: boolean; d
 export interface Branch { name: string; sha: string }
 export interface Models { default: string; models: string[] }
 
-const baseUrl = (import.meta.env.VITE_TASK_API_URL || "").replace(/\/$/, "");
+const baseUrl = "";
 let onSessionExpired: (() => void) | null = null;
 
 export function setSessionExpiredHandler(handler: (() => void) | null): void {
@@ -52,7 +52,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     credentials: "include",
-    signal: init?.signal || AbortSignal.timeout(10000),
+    signal: init?.signal || AbortSignal.timeout(60000),
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
@@ -95,4 +95,4 @@ export const taskApi = {
     request<TaskRecord>("/tasks", { method: "POST", body: JSON.stringify(payload) }),
 };
 
-export const configuredApiUrl = baseUrl || "Same origin";
+export const configuredApiUrl = "Same origin";

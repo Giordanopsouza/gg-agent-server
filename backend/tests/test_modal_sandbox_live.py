@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from test_support.postgres_ledger import new_ledger
 
 from gg.runtime.config import (
     DEFAULT_MODAL_APP_NAME,
@@ -11,7 +12,6 @@ from gg.runtime.config import (
 )
 from gg.runtime.ledger import SandboxProviderState
 from gg.runtime.modal_sandbox import ModalProvider, ModalSandboxLifecycle
-from test_support.postgres_ledger import new_ledger
 
 
 @pytest.mark.modal

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from test_support.postgres_ledger import new_ledger
 
 from gg.runtime.github import (
     GitHubTimeoutError,
@@ -24,7 +25,6 @@ from gg.runtime.publication import (
 )
 from gg.sdk.publication import PublicationRequest, PublicationState
 from gg.sdk.task_execution import AgentOutcome, CheckOutcome, CommandCapture
-from test_support.postgres_ledger import new_ledger
 
 
 TOKEN = "super-secret-github-token-do-not-leak"

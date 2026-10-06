@@ -3,12 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": { "node": "22.x" },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "build:runtime": "VITE_TASK_API_URL= npm run build && rm -rf ../backend/gg/runtime/web_static && cp -R dist ../backend/gg/runtime/web_static",
+    "build": "tsc --noEmit && tsc -p tsconfig.server.json && vite build",
+    "start": "node dist-server/server.js",
+    "test:server": "npm run build && node --test dist-server/server.test.js",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run src && npm run test:server"
   },
   "dependencies": {
     "react": "^19.1.1",

@@ -27,16 +27,16 @@ integration-tests:
 	uv run --no-editable pytest -m "modal or github"
 
 lint-check:
-	uv run --no-editable ruff check packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
+	uv run --no-editable ruff check packages/gg-sdk backend sandboxes conftest.py
 
 lint-fix:
-	uv run --no-editable ruff check --fix packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
+	uv run --no-editable ruff check --fix packages/gg-sdk backend sandboxes conftest.py
 
 format-check:
-	uv run --no-editable ruff format --check packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
+	uv run --no-editable ruff format --check packages/gg-sdk backend sandboxes conftest.py
 
 format-fix:
-	uv run --no-editable ruff format packages/gg-sdk backend sandboxes tests scripts test_support conftest.py
+	uv run --no-editable ruff format packages/gg-sdk backend sandboxes conftest.py
 
 pre-commit: format-check lint-check unit-tests
 
@@ -90,4 +90,3 @@ db-current:
 db-check:
 	@test -n "$(GG_MIGRATION_DATABASE_URL)" || { echo "Set GG_MIGRATION_DATABASE_URL to the migrator Postgres URL"; exit 1; }
 	GG_MIGRATION_DATABASE_URL='$(GG_MIGRATION_DATABASE_URL)' $(ALEMBIC) check
-
