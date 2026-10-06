@@ -148,6 +148,8 @@ def create_app(
         storage_limits=storage_limits,
     )
 
+    auth_provider = web_auth or SupabaseAuth(settings)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         scheduler_started = False
@@ -160,6 +162,7 @@ def create_app(
             if scheduler_started:
                 await scheduler.stop()
             await supervision.shutdown()
+            await auth_provider.close()
             ledger.close()
 
     app = FastAPI(title="gg-runtime", lifespan=lifespan)
@@ -177,7 +180,7 @@ def create_app(
     app.state.task_scheduler = scheduler
     app.state.task_supervision = supervision
     app.state.storage_limits = storage_limits
-    app.state.web_auth = web_auth or SupabaseAuth(settings)
+    app.state.web_auth = auth_provider
     app.state.web_sessions = web_sessions
 
     @app.get("/health")

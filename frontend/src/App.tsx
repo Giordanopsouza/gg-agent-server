@@ -31,7 +31,7 @@ function statusLabel(task: TaskRecord, result?: TaskResult): string {
   if (task.state === "completed" && result?.manifest?.agent_outcome) {
     return result.manifest.agent_outcome;
   }
-  return task.state;
+  return task.state === "completed" ? task.agent_outcome || task.state : task.state;
 }
 
 function StatusChip({ status }: { status: string }) {
@@ -102,24 +102,38 @@ function Detail({ id, onTask, onResult }: {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     let cursor = 0;
+    let resultRevision: string | null = null;
     setTask(null);
     setEvents([]);
     setResult(null);
     setError("");
     const poll = async () => {
       try {
-        const [record, copies, outcome] = await Promise.all([
-          taskApi.get(id), taskApi.events(id, cursor), taskApi.result(id),
-        ]);
-        if (!active) return;
-        setTask(record);
-        onTask(record);
-        setResult(outcome);
-        onResult(id, outcome);
-        if (copies.length) {
+        const recordPromise = taskApi.get(id).then((record) => {
+          if (!active) return;
+          setTask(record);
+          onTask(record);
+          return record;
+        });
+        const eventsPromise = taskApi.events(id, cursor).then((copies) => {
+          if (!active || !copies.length) return;
           cursor = Math.max(cursor, ...copies.map((copy) => copy.cursor));
           setEvents((previous) => [...previous, ...copies]);
-        }
+        });
+        const resultPromise = recordPromise.then(async (record) => {
+          if (!record) return;
+          const revision = `${record.state}:${record.updated_at}`;
+          if (revision === resultRevision) return;
+          const outcome = await taskApi.result(id);
+          if (!active) return;
+          setResult(outcome);
+          onResult(id, outcome);
+          resultRevision = revision;
+        });
+        const settled = await Promise.allSettled([recordPromise, eventsPromise, resultPromise]);
+        const failed = settled.find((entry) => entry.status === "rejected");
+        if (failed?.status === "rejected") throw failed.reason;
+        if (!active) return;
         setError("");
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : "Could not load task");
@@ -311,9 +325,6 @@ export default function App() {
         if (!active) return;
         const recent = [...listed].sort((a, b) => b.seq - a.seq);
         setTasks(recent); setListError("");
-        const finished = recent.filter((task) => TERMINAL.has(task.state)).slice(0, 12);
-        const settled = await Promise.allSettled(finished.map((task) => taskApi.result(task.id)));
-        if (active) setResults(Object.fromEntries(settled.flatMap((entry, index) => entry.status === "fulfilled" ? [[finished[index].id, entry.value] as const] : [])));
       } catch (cause) { if (active) setListError(String(cause)); }
       finally { if (active) { setLoadingTasks(false); timer = setTimeout(poll, 5000); } }
     };

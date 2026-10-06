@@ -125,3 +125,57 @@ describe("desktop session and history", () => {
     expect((host.querySelector("#prompt") as HTMLTextAreaElement).value).toBe("Private draft");
   });
 });
+
+describe("history and detail latency", () => {
+  it("renders completed history with a single request per poll", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn((url: string) => Promise.resolve(
+      url === "/auth/session" ? response({ user: { id: "user-a", email: null } })
+        : url === "/tasks" ? response([{ ...task("task-1", "owner/repo"), state: "completed", agent_outcome: "no_changes" }])
+          : url === "/auth/openrouter-credential" ? response({ configured: false })
+            : url === "/auth/github" ? response({ status: "disconnected", installations: [] })
+              : url === "/tasks/models" ? response({ default: "model-a", models: ["model-a"] })
+                : response({}),
+    ));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await renderApp();
+      expect(host.querySelector('nav[aria-label="Task history"]')?.textContent).toContain("no changes");
+      expect(host.textContent).not.toContain("Loading history");
+      await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+      expect(fetch.mock.calls.filter(([url]) => url === "/tasks")).toHaveLength(3);
+      expect(fetch.mock.calls.filter(([url]) => url.endsWith("/result"))).toHaveLength(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("shows detail before slow evidence and reuses unchanged results", async () => {
+    vi.useFakeTimers();
+    window.location.hash = "#/tasks/task-1";
+    let finishResult!: (value: Response) => void;
+    let finishEvents!: (value: Response) => void;
+    let updated = "2026-09-29T10:00:00Z";
+    const fetch = vi.fn((url: string) =>
+      url === "/tasks/task-1/result" ? new Promise<Response>((resolve) => { finishResult = resolve; })
+        : url.startsWith("/tasks/task-1/events") ? new Promise<Response>((resolve) => { finishEvents = resolve; })
+          : Promise.resolve(url === "/auth/session" ? response({ user: { id: "user-a", email: null } })
+            : url === "/tasks" ? response([task("task-1", null)])
+              : url === "/tasks/task-1" ? response({ ...task("task-1", null), updated_at: updated })
+                : url === "/auth/openrouter-credential" ? response({ configured: false })
+                  : url === "/auth/github" ? response({ status: "disconnected", installations: [] })
+                    : response({})),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await renderApp();
+      expect(host.querySelector(".detail-header h1")?.textContent).toBe("Task task-1");
+      await act(async () => { finishResult(response({ state: "running", manifest: null, publication: null })); finishEvents(response([])); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+      expect(fetch.mock.calls.filter(([url]) => url.endsWith("/result"))).toHaveLength(1);
+      await act(async () => { finishEvents(response([])); });
+      updated = "2026-09-29T10:01:00Z";
+      await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+      expect(fetch.mock.calls.filter(([url]) => url.endsWith("/result"))).toHaveLength(2);
+      await act(async () => { finishResult(response({ state: "running", manifest: null, publication: null })); finishEvents(response([])); });
+    } finally { vi.useRealTimers(); }
+  });
+});

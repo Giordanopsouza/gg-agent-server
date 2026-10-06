@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -12,8 +14,8 @@ from uuid import UUID, uuid4
 
 import psycopg
 from psycopg import sql
-from psycopg.rows import dict_row
-from sqlalchemy import Engine
+from psycopg.rows import dict_row, tuple_row
+from sqlalchemy import Engine, event
 
 from gg.runtime.postgres import RuntimePostgres
 from gg.sdk.agent_backend import DEFAULT_PI_MODEL
@@ -181,6 +183,7 @@ def _row_to_record(row: dict[str, Any]) -> TaskRecord:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         outcome_detail=row["outcome_detail"],
+        agent_outcome=row.get("agent_outcome"),
         check_status=row["check_status"],
         sandbox_cleanup_status=row["sandbox_cleanup_status"],
         payload_expired=bool(row["payload_expired"])
@@ -204,8 +207,37 @@ class TaskLedger:
     def __init__(self, database: RuntimePostgres) -> None:
         self._database = database
         self._engine: Engine = database.engine()
+        event.listen(self._engine, "connect", self._configure_connection)
         self._lock = threading.Lock()
         self._conn: Any | None = None
+
+    def _configure_connection(self, connection: Any, _: Any) -> None:
+        connection.autocommit = True
+        try:
+            connection.execute(
+                sql.SQL("SET search_path TO {}").format(
+                    sql.Identifier(self._database.schema)
+                )
+            )
+        finally:
+            connection.autocommit = False
+
+    @contextmanager
+    def _read_connection(self) -> Iterator[Any]:
+        """Borrow a pooled connection so reads never wait on the writer lock."""
+        assert self._conn is not None
+        if self._database.max_size == 1:
+            with self._lock:
+                yield self._conn
+            return
+        connection = self._engine.raw_connection()
+        driver = connection.driver_connection
+        driver.row_factory = dict_row
+        try:
+            yield connection
+        finally:
+            driver.row_factory = tuple_row
+            connection.close()
 
     @property
     def engine(self) -> Engine:
@@ -217,7 +249,7 @@ class TaskLedger:
             return
         connection = self._engine.raw_connection()
         connection.driver_connection.row_factory = dict_row
-        connection.autocommit = True
+        connection.driver_connection.autocommit = True
         try:
             connection.execute(
                 sql.SQL("SET search_path TO {}").format(
@@ -377,13 +409,13 @@ class TaskLedger:
 
     def get(self, task_id: str, *, owner_id: UUID | None = None) -> TaskRecord | None:
         assert self._conn is not None
-        with self._lock:
+        with self._read_connection() as connection:
             if owner_id is None:
-                row = self._conn.execute(
+                row = connection.execute(
                     "SELECT * FROM tasks WHERE id = %s", (task_id,)
                 ).fetchone()
             else:
-                row = self._conn.execute(
+                row = connection.execute(
                     "SELECT * FROM tasks WHERE id = %s AND owner_id = %s",
                     (task_id, owner_id),
                 ).fetchone()
@@ -391,15 +423,18 @@ class TaskLedger:
 
     # Return all tasks in FIFO (seq) order.
     def list(self, *, owner_id: UUID | None = None) -> list[TaskRecord]:
-        assert self._conn is not None
-        with self._lock:
+        with self._read_connection() as connection:
+            query = (
+                "SELECT tasks.*, "
+                "(results.manifest_json::jsonb ->> 'agent_outcome') AS agent_outcome "
+                "FROM tasks LEFT JOIN task_results AS results "
+                "ON results.task_id = tasks.id "
+            )
             if owner_id is None:
-                rows = self._conn.execute(
-                    "SELECT * FROM tasks ORDER BY seq ASC"
-                ).fetchall()
+                rows = connection.execute(query + "ORDER BY tasks.seq ASC").fetchall()
             else:
-                rows = self._conn.execute(
-                    "SELECT * FROM tasks WHERE owner_id = %s ORDER BY seq ASC",
+                rows = connection.execute(
+                    query + "WHERE tasks.owner_id = %s ORDER BY tasks.seq ASC",
                     (owner_id,),
                 ).fetchall()
         return [_row_to_record(row) for row in rows]
@@ -460,16 +495,16 @@ class TaskLedger:
 
     def list_reservations(self) -> list[ReservationRecord]:
         assert self._conn is not None
-        with self._lock:
-            rows = self._conn.execute(
+        with self._read_connection() as connection:
+            rows = connection.execute(
                 "SELECT * FROM task_reservations ORDER BY reserved_at, task_id"
             ).fetchall()
         return [_row_to_reservation(row) for row in rows]
 
     def get_reservation(self, task_id: str) -> ReservationRecord | None:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 "SELECT * FROM task_reservations WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_reservation(row) if row is not None else None
@@ -688,8 +723,8 @@ class TaskLedger:
 
     def get_sandbox_creation(self, task_id: str) -> SandboxCreationRecord | None:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_sandbox_record(row) if row is not None else None
@@ -839,8 +874,8 @@ class TaskLedger:
 
     def get_publication(self, task_id: str) -> PublicationRecord | None:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 "SELECT * FROM publication_intents WHERE task_id = %s",
                 (task_id,),
             ).fetchone()
@@ -994,8 +1029,8 @@ class TaskLedger:
 
     def get_supervision(self, task_id: str) -> SupervisionRecord | None:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_supervision(row) if row is not None else None
@@ -1111,8 +1146,8 @@ class TaskLedger:
         self, task_id: str, *, after_cursor: int = 0
     ) -> list[tuple[int, str, int, Event]]:
         assert self._conn is not None
-        with self._lock:
-            rows = self._conn.execute(
+        with self._read_connection() as connection:
+            rows = connection.execute(
                 """
                 SELECT cursor_seq, source_id, source_seq, event_json
                 FROM task_event_copies
@@ -1172,8 +1207,8 @@ class TaskLedger:
         self, task_id: str, message_id: str
     ) -> MessageReceipt | None:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 """
                 SELECT * FROM task_message_receipts
                 WHERE task_id = %s AND message_id = %s
@@ -1184,8 +1219,8 @@ class TaskLedger:
 
     def list_task_message_receipts(self, task_id: str) -> list[MessageReceipt]:
         assert self._conn is not None
-        with self._lock:
-            rows = self._conn.execute(
+        with self._read_connection() as connection:
+            rows = connection.execute(
                 """
                 SELECT * FROM task_message_receipts
                 WHERE task_id = %s ORDER BY created_at, message_id
@@ -1249,8 +1284,8 @@ class TaskLedger:
 
     def get_task_result(self, task_id: str) -> TaskResultArchive | None:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 "SELECT * FROM task_results WHERE task_id = %s", (task_id,)
             ).fetchone()
         return _row_to_task_result(row) if row is not None else None
@@ -1437,16 +1472,16 @@ class TaskLedger:
     def ping_database(self) -> bool:
         try:
             assert self._conn is not None
-            with self._lock:
-                self._conn.execute("SELECT 1")
+            with self._read_connection() as connection:
+                connection.execute("SELECT 1")
         except (psycopg.Error, AssertionError):
             return False
         return True
 
     def count_task_log_bytes(self, task_id: str) -> int:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 """
                 SELECT
                     COALESCE((
@@ -1464,8 +1499,8 @@ class TaskLedger:
 
     def count_task_artifact_bytes(self, task_id: str) -> int:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 """
                 SELECT COALESCE(LENGTH(manifest_json), 0) AS total
                 FROM task_results WHERE task_id = %s
@@ -1476,8 +1511,8 @@ class TaskLedger:
 
     def count_total_evidence_bytes(self) -> int:
         assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
+        with self._read_connection() as connection:
+            row = connection.execute(
                 """
                 SELECT
                     COALESCE((SELECT SUM(LENGTH(event_json)) FROM task_event_copies), 0)
@@ -1510,8 +1545,8 @@ class TaskLedger:
             TaskState.CANCELLED.value,
         )
         protected = self.protected_task_ids()
-        with self._lock:
-            rows = self._conn.execute(
+        with self._read_connection() as connection:
+            rows = connection.execute(
                 """
                 SELECT * FROM tasks
                 WHERE state IN (%s, %s, %s)

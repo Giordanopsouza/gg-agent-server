@@ -69,6 +69,7 @@ class TaskRecord(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     # Outcome, check, and cleanup status are stored separately so that a failed
     # sandbox cleanup cannot be confused with a failed task outcome.
+    agent_outcome: str | None = None
     outcome_detail: str | None = None
     check_status: str | None = None
     sandbox_cleanup_status: str | None = None

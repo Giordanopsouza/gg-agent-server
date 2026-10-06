@@ -10,6 +10,7 @@ export interface TaskRecord {
   model: string;
   created_at: string;
   updated_at: string;
+  agent_outcome?: string | null;
   outcome_detail: string | null;
   check_status: string | null;
   workspace_expired: boolean;
