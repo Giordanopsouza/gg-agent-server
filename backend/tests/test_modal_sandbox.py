@@ -4,7 +4,6 @@ import json
 from dataclasses import dataclass
 
 import pytest
-from test_support.postgres_ledger import new_ledger
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import SandboxProviderState, TaskLedger
@@ -17,6 +16,7 @@ from gg.runtime.modal_sandbox import (
     SandboxConnection,
     lifecycle_from_settings,
 )
+from test_support.postgres_ledger import new_ledger
 
 
 @dataclass

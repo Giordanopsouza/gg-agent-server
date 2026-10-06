@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import pytest
-from test_support.postgres_ledger import new_ledger
 
 from gg.runtime.ledger import (
     ReservationPhase,
@@ -14,6 +13,7 @@ from gg.runtime.ledger import (
 from gg.runtime.modal_sandbox import SandboxSnapshot
 from gg.runtime.scheduler import DeploymentLock, DispatchLockError, TaskScheduler
 from gg.sdk.tasks import TaskState
+from test_support.postgres_ledger import new_ledger
 
 
 def _submit(ledger: TaskLedger, key: str):
