@@ -110,3 +110,43 @@ test("returns 502 when the backend is unavailable", async () => {
     await new Promise<void>((resolve) => unavailable.close(() => resolve()));
   }
 });
+
+
+test("rejects invalid HTTP and WebSocket targets without forwarding or crashing", async () => {
+  let forwarded = 0;
+  const record = () => { forwarded++; };
+  api.on("request", record);
+  api.on("upgrade", record);
+  const alternate = createServer((_req, res) => { forwarded++; res.end("alternate"); });
+  const alternatePort = await listen(alternate);
+  const port = Number(new URL(origin).port);
+  try {
+    for (const upgrade of [false, true]) {
+      for (const target of [
+        "//",
+        "//[invalid/tasks",
+        `//127.0.0.1:${alternatePort}/tasks/sockets/events/one`,
+        `http://127.0.0.1:${alternatePort}/tasks/sockets/events/one`,
+        `/\\127.0.0.1:${alternatePort}/tasks/sockets/events/one`,
+      ]) {
+        const reply = await new Promise<string>((resolve, reject) => {
+          const socket = connect(port, "127.0.0.1");
+          let response = "";
+          socket.setTimeout(3000, () => socket.destroy(new Error("request timed out")));
+          socket.on("connect", () => socket.write(`GET ${target} HTTP/1.1\r\nHost: localhost\r\nConnection: ${upgrade ? "Upgrade" : "close"}\r\n${upgrade ? "Upgrade: websocket\r\n" : ""}\r\n`));
+          socket.on("data", (chunk) => { response += chunk.toString(); });
+          socket.on("end", () => { socket.destroy(); resolve(response); });
+          socket.on("error", reject);
+        });
+        assert.match(reply, /^HTTP\/1.1 400 /, `${upgrade ? "WebSocket" : "HTTP"}: ${target}`);
+        assert.equal((await fetch(`${origin}/web_health`)).status, 200);
+      }
+    }
+    assert.equal(forwarded, 0);
+  } finally {
+    api.off("request", record);
+    api.off("upgrade", record);
+    alternate.closeAllConnections();
+    await new Promise<void>((resolve) => alternate.close(() => resolve()));
+  }
+});

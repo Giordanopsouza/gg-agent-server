@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createHttpServer, request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,8 +23,20 @@ function apiPath(pathname: string): boolean {
   return apiPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
-function backendRequest(req: IncomingMessage, backend: URL) {
-  const target = new URL(req.url || "/", backend);
+function requestTarget(req: IncomingMessage): URL | null {
+  const raw = req.url || "/";
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
+  try {
+    return new URL(raw, "http://localhost");
+  } catch {
+    return null;
+  }
+}
+
+function backendRequest(req: IncomingMessage, backend: URL, path: URL) {
+  const target = new URL(backend);
+  target.pathname = path.pathname;
+  target.search = path.search;
   return (backend.protocol === "https:" ? httpsRequest : httpRequest)(target, {
     method: req.method,
     headers: req.headers,
@@ -37,14 +49,19 @@ export function createWebServer(backend: URL, dist = defaultDist) {
   }
   const distRoot = resolve(dist);
   const server = createHttpServer(async (req, res) => {
-    const pathname = new URL(req.url || "/", "http://localhost").pathname;
+    const target = requestTarget(req);
+    if (!target) {
+      res.writeHead(400).end();
+      return;
+    }
+    const pathname = target.pathname;
     if (pathname === "/web_health") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ status: "ok" }));
       return;
     }
     if (apiPath(pathname)) {
-      const upstream = backendRequest(req, backend);
+      const upstream = backendRequest(req, backend, target);
       upstream.on("response", (response) => {
         res.writeHead(response.statusCode || 502, response.headers);
         response.pipe(res);
@@ -88,12 +105,17 @@ export function createWebServer(backend: URL, dist = defaultDist) {
   });
 
   server.on("upgrade", (req, socket: Socket, head) => {
-    const pathname = new URL(req.url || "/", "http://localhost").pathname;
+    const target = requestTarget(req);
+    if (!target) {
+      socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    const pathname = target.pathname;
     if (!pathname.startsWith("/tasks/sockets/events/")) {
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }
-    const upstream = backendRequest(req, backend);
+    const upstream = backendRequest(req, backend, target);
     upstream.on("upgrade", (response, backendSocket, backendHead) => {
       const lines = [`HTTP/${response.httpVersion} ${response.statusCode} ${response.statusMessage}`];
       for (let i = 0; i < response.rawHeaders.length; i += 2) {
