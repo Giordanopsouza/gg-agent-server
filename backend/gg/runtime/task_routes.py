@@ -7,6 +7,7 @@ new tasks and ``200`` for identical idempotent replays.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 from fastapi import (
@@ -168,7 +169,9 @@ async def send_task_message(
     service: TaskService = Depends(_get_service),
     supervision: TaskSupervisionManager = Depends(_get_supervision),
 ) -> MessageReceipt:
-    if service.get(task_id, owner_id=request.state.owner_id) is None:
+    if (
+        await asyncio.to_thread(service.get, task_id, owner_id=request.state.owner_id)
+    ) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     try:
         receipt = await supervision.send_message(
@@ -276,7 +279,7 @@ async def stream_task_events(
     if (
         supervision is None
         or service is None
-        or service.get(task_id, owner_id=owner_id) is None
+        or (await asyncio.to_thread(service.get, task_id, owner_id=owner_id)) is None
     ):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return

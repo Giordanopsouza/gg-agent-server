@@ -11,7 +11,6 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
-from test_support.postgres_ledger import new_ledger
 
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.ledger import SandboxProviderState, TaskLedger
@@ -27,6 +26,7 @@ from gg.sdk.task_execution import (
     TaskResultManifest,
 )
 from gg.sdk.tasks import TaskState
+from test_support.postgres_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}

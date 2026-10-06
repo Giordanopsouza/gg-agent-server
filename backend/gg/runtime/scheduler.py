@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import os
 import tempfile
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -127,6 +128,7 @@ class TaskScheduler:
         self._loop_task: asyncio.Task[None] | None = None
         self._reconciled = False
         self._cycle_lock = asyncio.Lock()
+        self._last_maintenance: float | None = None
 
     async def start(self) -> None:
         """Take exclusive ownership and reconcile before starting admission."""
@@ -148,28 +150,38 @@ class TaskScheduler:
             if self._loop_task is not None:
                 await self._loop_task
                 self._loop_task = None
-            for reservation in self._ledger.list_reservations():
-                if self._ledger.get_sandbox_creation(reservation.task_id) is None:
+            for reservation in await asyncio.to_thread(self._ledger.list_reservations):
+                if (
+                    await asyncio.to_thread(
+                        self._ledger.get_sandbox_creation, reservation.task_id
+                    )
+                ) is None:
                     continue
                 try:
                     snapshot = await self._lifecycle.detach(reservation.task_id)
                     if snapshot.state is SandboxProviderState.STOPPED:
                         if reservation.phase is ReservationPhase.TERMINATION_PENDING:
-                            self._ledger.release_reservation(reservation.task_id)
+                            await asyncio.to_thread(
+                                self._ledger.release_reservation,
+                                reservation.task_id,
+                            )
                         else:
-                            self._ledger.mark_sandbox_lost(
+                            await asyncio.to_thread(
+                                self._ledger.mark_sandbox_lost,
                                 reservation.task_id,
                                 detail=snapshot.detail
                                 or "sandbox was confirmed lost during shutdown",
                             )
                     elif snapshot.state is SandboxProviderState.UNKNOWN:
-                        self._ledger.update_reservation(
+                        await asyncio.to_thread(
+                            self._ledger.update_reservation,
                             reservation.task_id,
                             phase=reservation.phase,
                             condition=snapshot.detail or "detach state is unknown",
                         )
                 except ModalLifecycleError as exc:
-                    self._ledger.update_reservation(
+                    await asyncio.to_thread(
+                        self._ledger.update_reservation,
                         reservation.task_id,
                         phase=reservation.phase,
                         condition=f"detach unresolved: {exc}",
@@ -197,38 +209,52 @@ class TaskScheduler:
 
         async with self._cycle_lock:
             await self.reconcile()
-            for task in self._ledger.list():
-                last_activity = task.workspace_last_activity_at or task.updated_at
-                if (
-                    task.state is TaskState.SLEEPING
-                    and not task.workspace_expired
-                    and datetime.now(UTC) - last_activity >= timedelta(days=7)
-                ):
-                    if self._supervision is not None:
-                        await self._supervision.expire_sleeping_workspace(task.id)
-                    else:
-                        await self._lifecycle.expire_workspace(task.id)
-                        self._ledger.expire_workspace(task.id)
-            if self._storage_limits is not None:
-                run_retention_pass(self._ledger, self._storage_limits)
+            tasks = await asyncio.to_thread(self._ledger.list)
+            now = time.monotonic()
+            if self._last_maintenance is None or now - self._last_maintenance >= 60:
+                for task in tasks:
+                    last_activity = task.workspace_last_activity_at or task.updated_at
+                    if (
+                        task.state is TaskState.SLEEPING
+                        and not task.workspace_expired
+                        and datetime.now(UTC) - last_activity >= timedelta(days=7)
+                    ):
+                        if self._supervision is not None:
+                            await self._supervision.expire_sleeping_workspace(task.id)
+                        else:
+                            await self._lifecycle.expire_workspace(task.id)
+                            await asyncio.to_thread(
+                                self._ledger.expire_workspace, task.id
+                            )
+                if self._storage_limits is not None:
+                    await asyncio.to_thread(
+                        run_retention_pass, self._ledger, self._storage_limits
+                    )
+                self._last_maintenance = time.monotonic()
             if not self._admission_enabled or self._stop.is_set():
                 return
-            if self._storage_limits is not None:
-                pressure = admission_pressure(self._ledger, self._storage_limits)
-                if pressure.blocked:
-                    return
             if self._supervision is not None:
                 await self._supervision.sync_reserved_tasks()
             # Resume reservations that crashed before a provider identity was
             # established before admitting any additional queued work.
-            for reservation in self._ledger.list_reservations():
+            for reservation in await asyncio.to_thread(self._ledger.list_reservations):
                 if reservation.phase is not ReservationPhase.STARTING:
                     continue
                 await self._provision(reservation.task_id)
                 if self._stop.is_set():
                     return
+            if not any(task.state is TaskState.QUEUED for task in tasks):
+                return
+            if self._storage_limits is not None:
+                pressure = await asyncio.to_thread(
+                    admission_pressure, self._ledger, self._storage_limits
+                )
+                if pressure.blocked:
+                    return
             while not self._stop.is_set():
-                task = self._ledger.reserve_next(capacity=self._capacity)
+                task = await asyncio.to_thread(
+                    self._ledger.reserve_next, capacity=self._capacity
+                )
                 if task is None:
                     return
                 await self._provision(task.id)
@@ -236,15 +262,20 @@ class TaskScheduler:
     async def reconcile(self) -> None:
         """Resolve every existing reservation before any new task is admitted."""
 
-        self._ledger.settle_successful_tasks()
-        for reservation in self._ledger.list_reservations():
-            creation = self._ledger.get_sandbox_creation(reservation.task_id)
+        await asyncio.to_thread(self._ledger.settle_successful_tasks)
+        for reservation in await asyncio.to_thread(self._ledger.list_reservations):
+            creation = await asyncio.to_thread(
+                self._ledger.get_sandbox_creation, reservation.task_id
+            )
             if creation is None:
                 if reservation.phase is ReservationPhase.TERMINATION_PENDING:
-                    self._ledger.release_reservation(reservation.task_id)
+                    await asyncio.to_thread(
+                        self._ledger.release_reservation, reservation.task_id
+                    )
                 else:
                     # Crash before the provider call: creation is safe to begin.
-                    self._ledger.update_reservation(
+                    await asyncio.to_thread(
+                        self._ledger.update_reservation,
                         reservation.task_id,
                         phase=ReservationPhase.STARTING,
                         condition=None,
@@ -253,14 +284,16 @@ class TaskScheduler:
             try:
                 snapshot = await self._lifecycle.reconnect(reservation.task_id)
             except ConflictingSandboxesError as exc:
-                self._ledger.update_reservation(
+                await asyncio.to_thread(
+                    self._ledger.update_reservation,
                     reservation.task_id,
                     phase=ReservationPhase.UNRESOLVED_CREATION,
                     condition=f"conflicting provider identity: {exc}",
                 )
                 continue
             except ModalLifecycleError as exc:
-                self._ledger.update_reservation(
+                await asyncio.to_thread(
+                    self._ledger.update_reservation,
                     reservation.task_id,
                     phase=ReservationPhase.UNRESOLVED_CREATION,
                     condition=f"provider reconciliation failed: {exc}",
@@ -268,7 +301,8 @@ class TaskScheduler:
                 continue
 
             if snapshot.state is SandboxProviderState.UNKNOWN:
-                self._ledger.update_reservation(
+                await asyncio.to_thread(
+                    self._ledger.update_reservation,
                     reservation.task_id,
                     phase=ReservationPhase.UNRESOLVED_CREATION,
                     condition=snapshot.detail or "provider state is unknown",
@@ -276,35 +310,55 @@ class TaskScheduler:
                 continue
 
             if snapshot.state is SandboxProviderState.STOPPED:
-                current_task = self._ledger.get(reservation.task_id)
+                current_task = await asyncio.to_thread(
+                    self._ledger.get, reservation.task_id
+                )
                 if (
                     reservation.phase is ReservationPhase.TERMINATION_PENDING
                     or current_task is not None
                     and current_task.state is TaskState.SLEEPING
                 ):
-                    self._ledger.release_reservation(reservation.task_id)
+                    await asyncio.to_thread(
+                        self._ledger.release_reservation, reservation.task_id
+                    )
                 elif creation.provider_id is None or (
                     reservation.phase is ReservationPhase.STARTING
-                    and self._ledger.get_task_result(reservation.task_id) is not None
+                    and (
+                        await asyncio.to_thread(
+                            self._ledger.get_task_result, reservation.task_id
+                        )
+                    )
+                    is not None
                 ):
                     # Absence was established by deterministic identity lookup;
                     # a create attempt can now be made without duplication.
-                    self._ledger.update_reservation(
+                    await asyncio.to_thread(
+                        self._ledger.update_reservation,
                         reservation.task_id,
                         phase=ReservationPhase.STARTING,
                         condition=None,
                     )
-                elif self._ledger.get_supervision(reservation.task_id) is not None:
+                elif (
+                    await asyncio.to_thread(
+                        self._ledger.get_supervision, reservation.task_id
+                    )
+                ) is not None:
                     # Provider lifetime or host loss ended an active workspace.
                     # Its Volume survives and a later message can rehydrate it.
-                    self._ledger.finish_task(
+                    await asyncio.to_thread(
+                        self._ledger.finish_task,
                         reservation.task_id,
                         state=TaskState.SLEEPING,
-                        outcome_detail="workspace VM stopped; send a message to resume",
+                        outcome_detail=(
+                            "workspace VM stopped; send a message to resume"
+                        ),
                     )
-                    self._ledger.release_reservation(reservation.task_id)
+                    await asyncio.to_thread(
+                        self._ledger.release_reservation, reservation.task_id
+                    )
                 else:
-                    self._ledger.mark_sandbox_lost(
+                    await asyncio.to_thread(
+                        self._ledger.mark_sandbox_lost,
                         reservation.task_id,
                         detail=snapshot.detail or "sandbox was confirmed lost",
                     )
@@ -318,7 +372,9 @@ class TaskScheduler:
                 if reservation.phase is ReservationPhase.FINALIZING
                 else ReservationPhase.RUNNING
             )
-            current_task = self._ledger.get(reservation.task_id)
+            current_task = await asyncio.to_thread(
+                self._ledger.get, reservation.task_id
+            )
             state = (
                 TaskState.FINALIZING
                 if phase is ReservationPhase.FINALIZING
@@ -329,7 +385,8 @@ class TaskScheduler:
                     else TaskState.RUNNING
                 )
             )
-            self._ledger.update_reservation(
+            await asyncio.to_thread(
+                self._ledger.update_reservation,
                 reservation.task_id,
                 phase=phase,
                 condition=None,
@@ -341,34 +398,41 @@ class TaskScheduler:
         try:
             snapshot = await self._lifecycle.create(task_id)
         except CredentialUnavailableError as exc:
-            self._ledger.finish_task(
-                task_id, state=TaskState.FAILED, outcome_detail=str(exc)
+            await asyncio.to_thread(
+                self._ledger.finish_task,
+                task_id,
+                state=TaskState.FAILED,
+                outcome_detail=str(exc),
             )
-            self._ledger.release_reservation(task_id)
+            await asyncio.to_thread(self._ledger.release_reservation, task_id)
             return
         except AmbiguousProviderStateError as exc:
-            self._ledger.update_reservation(
+            await asyncio.to_thread(
+                self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.UNRESOLVED_CREATION,
                 condition=str(exc),
             )
             return
         except ModalLifecycleError as exc:
-            self._ledger.update_reservation(
+            await asyncio.to_thread(
+                self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.UNRESOLVED_CREATION,
                 condition=f"provisioning failed: {exc}",
             )
             return
         if snapshot.state is SandboxProviderState.RUNNING:
-            self._ledger.update_reservation(
+            await asyncio.to_thread(
+                self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.RUNNING,
                 condition=None,
                 task_state=TaskState.RUNNING,
             )
         else:
-            self._ledger.update_reservation(
+            await asyncio.to_thread(
+                self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.UNRESOLVED_CREATION,
                 condition=snapshot.detail or "provisioning did not establish running",
@@ -378,16 +442,18 @@ class TaskScheduler:
         try:
             snapshot = await self._lifecycle.terminate(task_id)
         except ModalLifecycleError as exc:
-            self._ledger.update_reservation(
+            await asyncio.to_thread(
+                self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.TERMINATION_PENDING,
                 condition=f"termination unresolved: {exc}",
             )
             return
         if snapshot.state is SandboxProviderState.STOPPED:
-            self._ledger.release_reservation(task_id)
+            await asyncio.to_thread(self._ledger.release_reservation, task_id)
         else:
-            self._ledger.update_reservation(
+            await asyncio.to_thread(
+                self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.TERMINATION_PENDING,
                 condition=snapshot.detail or "termination is not confirmed",

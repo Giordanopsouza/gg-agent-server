@@ -320,10 +320,10 @@ class ModalSandboxLifecycle:
         self._provider_timeout = provider_timeout
 
     async def create(self, task_id: str) -> SandboxSnapshot:
-        task = self._ledger.get(task_id)
+        task = await asyncio.to_thread(self._ledger.get, task_id)
         if task is None:
             raise ModalLifecycleError("task not found")
-        existing = self._ledger.get_sandbox_creation(task_id)
+        existing = await asyncio.to_thread(self._ledger.get_sandbox_creation, task_id)
         if existing is not None:
             snapshot, _ = await self._reconnect(existing)
             if snapshot.state is SandboxProviderState.RUNNING:
@@ -332,8 +332,10 @@ class ModalSandboxLifecycle:
                 raise AmbiguousProviderStateError(
                     f"sandbox creation for task {task_id} is unresolved"
                 )
-            self._ledger.reset_sandbox_for_wake(task_id)
-            existing = self._ledger.get_sandbox_creation(task_id)
+            await asyncio.to_thread(self._ledger.reset_sandbox_for_wake, task_id)
+            existing = await asyncio.to_thread(
+                self._ledger.get_sandbox_creation, task_id
+            )
         personal_key: str | None = None
         credential_version: int | None = None
         if task.owner_id is not None:
@@ -378,10 +380,13 @@ class ModalSandboxLifecycle:
                 )
             except RepositoryAccessError as exc:
                 raise CredentialUnavailableError(str(exc)) from exc
-            self._ledger.record_base_sha(task_id, github_credential.base_sha)
+            await asyncio.to_thread(
+                self._ledger.record_base_sha, task_id, github_credential.base_sha
+            )
         name, tags = _sandbox_identity(self._deployment, task_id)
         if existing is None:
-            record, _ = self._ledger.begin_sandbox_creation(
+            record, _ = await asyncio.to_thread(
+                self._ledger.begin_sandbox_creation,
                 task_id=task_id,
                 deployment=self._deployment,
                 sandbox_name=name,
@@ -390,8 +395,8 @@ class ModalSandboxLifecycle:
                 credential_version=credential_version,
             )
         else:
-            record = self._ledger.set_sandbox_credential_version(
-                task_id, credential_version
+            record = await asyncio.to_thread(
+                self._ledger.set_sandbox_credential_version, task_id, credential_version
             )
 
         try:
@@ -425,7 +430,8 @@ class ModalSandboxLifecycle:
                 provider_timeout=self._provider_timeout,
             )
         except Exception as exc:
-            self._ledger.update_sandbox_creation(
+            await asyncio.to_thread(
+                self._ledger.update_sandbox_creation,
                 task_id,
                 provider_state=SandboxProviderState.UNKNOWN,
                 detail=f"create response unresolved: {type(exc).__name__}",
@@ -435,7 +441,8 @@ class ModalSandboxLifecycle:
             ) from exc
 
         # This write is deliberately the first operation after create returns.
-        record = self._ledger.update_sandbox_creation(
+        record = await asyncio.to_thread(
+            self._ledger.update_sandbox_creation,
             task_id,
             provider_id=handle.object_id,
             provider_state=SandboxProviderState.CREATING,
@@ -443,7 +450,8 @@ class ModalSandboxLifecycle:
         try:
             await self._provider.wait_until_ready(handle, timeout=self._startup_timeout)
         except Exception as exc:
-            self._ledger.update_sandbox_creation(
+            await asyncio.to_thread(
+                self._ledger.update_sandbox_creation,
                 task_id,
                 provider_state=SandboxProviderState.UNKNOWN,
                 detail=f"startup readiness unresolved: {type(exc).__name__}",
@@ -451,15 +459,17 @@ class ModalSandboxLifecycle:
             raise AmbiguousProviderStateError(
                 f"Modal startup for task {task_id} was unresolved"
             ) from exc
-        self._ledger.update_sandbox_creation(
-            task_id, provider_state=SandboxProviderState.RUNNING
+        await asyncio.to_thread(
+            self._ledger.update_sandbox_creation,
+            task_id,
+            provider_state=SandboxProviderState.RUNNING,
         )
         return SandboxSnapshot(
             task_id, record.provider_id, SandboxProviderState.RUNNING
         )
 
     async def inspect(self, task_id: str) -> SandboxSnapshot:
-        record = self._record(task_id)
+        record = await asyncio.to_thread(self._record, task_id)
         snapshot, _ = await self._reconnect(record)
         return snapshot
 
@@ -467,7 +477,7 @@ class ModalSandboxLifecycle:
         return await self.inspect(task_id)
 
     async def connect(self, task_id: str) -> SandboxConnection:
-        record = self._record(task_id)
+        record = await asyncio.to_thread(self._record, task_id)
         snapshot, handle = await self._reconnect(record)
         if snapshot.state is not SandboxProviderState.RUNNING or handle is None:
             raise ModalLifecycleError(
@@ -479,7 +489,8 @@ class ModalSandboxLifecycle:
             )
         except Exception as exc:
             # Connectivity failure does not establish provider termination.
-            self._ledger.update_sandbox_creation(
+            await asyncio.to_thread(
+                self._ledger.update_sandbox_creation,
                 task_id,
                 provider_state=SandboxProviderState.UNKNOWN,
                 detail=f"connect request failed: {type(exc).__name__}",
@@ -498,25 +509,29 @@ class ModalSandboxLifecycle:
                 response = await client.get("/health")
                 response.raise_for_status()
         except (httpx.HTTPError, AmbiguousProviderStateError) as exc:
-            updated = self._ledger.update_sandbox_creation(
+            updated = await asyncio.to_thread(
+                self._ledger.update_sandbox_creation,
                 task_id,
                 provider_state=SandboxProviderState.UNKNOWN,
                 detail=f"health request failed: {type(exc).__name__}",
             )
             return self._snapshot(updated)
-        updated = self._ledger.update_sandbox_creation(
-            task_id, provider_state=SandboxProviderState.RUNNING
+        updated = await asyncio.to_thread(
+            self._ledger.update_sandbox_creation,
+            task_id,
+            provider_state=SandboxProviderState.RUNNING,
         )
         return self._snapshot(updated)
 
     async def detach(self, task_id: str) -> SandboxSnapshot:
-        record = self._record(task_id)
+        record = await asyncio.to_thread(self._record, task_id)
         snapshot, handle = await self._reconnect(record)
         if handle is not None:
             try:
                 await self._provider.detach(handle)
             except Exception as exc:
-                self._ledger.update_sandbox_creation(
+                await asyncio.to_thread(
+                    self._ledger.update_sandbox_creation,
                     task_id,
                     provider_state=SandboxProviderState.UNKNOWN,
                     detail=f"detach failed: {type(exc).__name__}",
@@ -527,7 +542,7 @@ class ModalSandboxLifecycle:
         return snapshot
 
     async def terminate(self, task_id: str) -> SandboxSnapshot:
-        record = self._record(task_id)
+        record = await asyncio.to_thread(self._record, task_id)
         snapshot, handle = await self._reconnect(record)
         if snapshot.state is SandboxProviderState.STOPPED:
             return snapshot
@@ -539,7 +554,8 @@ class ModalSandboxLifecycle:
             await self._provider.terminate(handle)
             return await self.inspect(task_id)
         except Exception as exc:
-            self._ledger.update_sandbox_creation(
+            await asyncio.to_thread(
+                self._ledger.update_sandbox_creation,
                 task_id,
                 provider_state=SandboxProviderState.UNKNOWN,
                 detail=f"termination response unresolved: {type(exc).__name__}",
@@ -549,7 +565,7 @@ class ModalSandboxLifecycle:
             ) from exc
 
     async def sync(self, task_id: str) -> None:
-        record = self._record(task_id)
+        record = await asyncio.to_thread(self._record, task_id)
         snapshot, handle = await self._reconnect(record)
         if snapshot.state is not SandboxProviderState.RUNNING or handle is None:
             raise ModalLifecycleError("workspace sandbox is not running")
@@ -572,14 +588,16 @@ class ModalSandboxLifecycle:
             try:
                 handle = await self._provider.from_id(record.provider_id)
             except _ProviderNotFoundError:
-                updated = self._ledger.update_sandbox_creation(
+                updated = await asyncio.to_thread(
+                    self._ledger.update_sandbox_creation,
                     record.task_id,
                     provider_state=SandboxProviderState.STOPPED,
                     detail="provider confirmed sandbox absent",
                 )
                 return self._snapshot(updated), None
             except Exception as exc:
-                updated = self._ledger.update_sandbox_creation(
+                updated = await asyncio.to_thread(
+                    self._ledger.update_sandbox_creation,
                     record.task_id,
                     provider_state=SandboxProviderState.UNKNOWN,
                     detail=f"provider lookup failed: {type(exc).__name__}",
@@ -589,14 +607,16 @@ class ModalSandboxLifecycle:
             try:
                 matches = await self._provider.find(tags=json.loads(record.tags_json))
             except Exception as exc:
-                updated = self._ledger.update_sandbox_creation(
+                updated = await asyncio.to_thread(
+                    self._ledger.update_sandbox_creation,
                     record.task_id,
                     provider_state=SandboxProviderState.UNKNOWN,
                     detail=f"identity discovery failed: {type(exc).__name__}",
                 )
                 return self._snapshot(updated), None
             if len(matches) > 1:
-                updated = self._ledger.update_sandbox_creation(
+                updated = await asyncio.to_thread(
+                    self._ledger.update_sandbox_creation,
                     record.task_id,
                     provider_state=SandboxProviderState.UNKNOWN,
                     detail="multiple provider sandboxes match deterministic identity",
@@ -605,14 +625,16 @@ class ModalSandboxLifecycle:
                     updated.detail or "conflicting sandboxes"
                 )
             if not matches:
-                updated = self._ledger.update_sandbox_creation(
+                updated = await asyncio.to_thread(
+                    self._ledger.update_sandbox_creation,
                     record.task_id,
                     provider_state=SandboxProviderState.STOPPED,
                     detail="provider confirmed deterministic identity absent",
                 )
                 return self._snapshot(updated), None
             handle = matches[0]
-            record = self._ledger.update_sandbox_creation(
+            record = await asyncio.to_thread(
+                self._ledger.update_sandbox_creation,
                 record.task_id,
                 provider_id=handle.object_id,
                 provider_state=SandboxProviderState.CREATING,
@@ -621,7 +643,8 @@ class ModalSandboxLifecycle:
         try:
             return_code = await self._provider.poll(handle)
         except Exception as exc:
-            updated = self._ledger.update_sandbox_creation(
+            updated = await asyncio.to_thread(
+                self._ledger.update_sandbox_creation,
                 record.task_id,
                 provider_state=SandboxProviderState.UNKNOWN,
                 detail=f"provider status failed: {type(exc).__name__}",
@@ -632,7 +655,8 @@ class ModalSandboxLifecycle:
             if return_code is None
             else SandboxProviderState.STOPPED
         )
-        updated = self._ledger.update_sandbox_creation(
+        updated = await asyncio.to_thread(
+            self._ledger.update_sandbox_creation,
             record.task_id,
             provider_state=state,
             detail=None if return_code is None else f"provider exit code {return_code}",

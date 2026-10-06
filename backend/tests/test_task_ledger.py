@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
-from test_support.postgres_ledger import new_ledger
-
 from gg.runtime.ledger import TaskLedger
+from test_support.postgres_ledger import new_ledger
 
 
 def _submit(ledger: TaskLedger, key: str):

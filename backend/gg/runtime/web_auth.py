@@ -18,6 +18,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from joserfc import jwk, jwt
+from joserfc.errors import InvalidKeyIdError, MissingKeyError
 from sqlalchemy.exc import SQLAlchemyError
 
 from gg.runtime.config import RuntimeSettings
@@ -28,6 +29,8 @@ SESSION_COOKIE = "gg_session"
 FLOW_COOKIE = "gg_login_flow"
 FLOW_SECONDS = 600
 SESSION_SECONDS = 7 * 24 * 60 * 60
+JWKS_SECONDS = 600
+JWKS_REFRESH_COOLDOWN = 10
 
 
 def _safe_return_path(value: str) -> str:
@@ -76,6 +79,10 @@ class SupabaseAuth:
     ) -> None:
         self.settings = settings
         self.transport = transport
+        self._http_client: httpx.AsyncClient | None = None
+        self._jwks_lock = asyncio.Lock()
+        self._jwks: jwk.KeySet | None = None
+        self._jwks_fetched_at = 0.0
         self._refresh_lock = asyncio.Lock()
         self._recent_refresh: tuple[float, str, dict[str, Any]] | None = None
         self._cipher = (
@@ -118,25 +125,47 @@ class SupabaseAuth:
         return f"{self.settings.supabase_url}/auth/v1/authorize?{query}"
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            base_url=self.settings.supabase_url,
-            transport=self.transport,
-            timeout=10,
-            headers={"apikey": self.settings.supabase_publishable_key or ""},
-        )
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(
+                base_url=self.settings.supabase_url,
+                transport=self.transport,
+                timeout=10,
+                headers={"apikey": self.settings.supabase_publishable_key or ""},
+            )
+        return self._http_client
+
+    async def close(self) -> None:
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
+
+    async def _signing_keys(self, *, refresh: bool = False) -> jwk.KeySet:
+        async with self._jwks_lock:
+            age = time.monotonic() - self._jwks_fetched_at
+            if (
+                self._jwks is None
+                or age >= JWKS_SECONDS
+                or (refresh and age >= JWKS_REFRESH_COOLDOWN)
+            ):
+                response = await self._client().get("/auth/v1/.well-known/jwks.json")
+                response.raise_for_status()
+                self._jwks = jwk.KeySet.import_key_set(response.json())
+                self._jwks_fetched_at = time.monotonic()
+            return self._jwks
 
     async def exchange(self, code: str, verifier: str) -> dict[str, Any]:
-        async with self._client() as client:
-            response = await client.post(
-                "/auth/v1/token",
-                params={"grant_type": "pkce"},
-                json={"auth_code": code, "code_verifier": verifier},
-            )
-            response.raise_for_status()
-            return response.json()
+        client = self._client()
+        response = await client.post(
+            "/auth/v1/token",
+            params={"grant_type": "pkce"},
+            json={"auth_code": code, "code_verifier": verifier},
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def refresh(self, refresh_token: str) -> dict[str, Any]:
-        async with self._refresh_lock, self._client() as client:
+        async with self._refresh_lock:
+            client = self._client()
             recent = self._recent_refresh
             if (
                 recent is not None
@@ -155,44 +184,46 @@ class SupabaseAuth:
             return tokens
 
     async def verified_user(self, access_token: str) -> dict[str, str | None]:
-        async with self._client() as client:
-            keys_response = await client.get("/auth/v1/.well-known/jwks.json")
-            keys_response.raise_for_status()
-            keys = jwk.KeySet.import_key_set(keys_response.json())
+        client = self._client()
+        keys = await self._signing_keys()
+        try:
             verified = jwt.decode(access_token, keys, algorithms=["ES256", "RS256"])
-            claims = verified.claims
-            now = int(time.time())
-            if (
-                claims.get("iss") != f"{self.settings.supabase_url}/auth/v1"
-                or claims.get("aud") != "authenticated"
-                or type(claims.get("exp")) is not int
-                or claims["exp"] <= now
-                or claims.get("role") != "authenticated"
-            ):
-                raise ValueError("invalid access token claims")
-            subject = str(UUID(claims["sub"]))
-            session_id = str(UUID(claims["session_id"]))
-            user_response = await client.get(
-                "/auth/v1/user", headers={"Authorization": f"Bearer {access_token}"}
-            )
-            user_response.raise_for_status()
-            user = user_response.json()
-            if user.get("id") != subject or user.get("banned_until"):
-                raise ValueError("inactive user")
-            return {
-                "id": subject,
-                "email": user.get("email"),
-                "session_id": session_id,
-            }
+        except (InvalidKeyIdError, MissingKeyError):
+            keys = await self._signing_keys(refresh=True)
+            verified = jwt.decode(access_token, keys, algorithms=["ES256", "RS256"])
+        claims = verified.claims
+        now = int(time.time())
+        if (
+            claims.get("iss") != f"{self.settings.supabase_url}/auth/v1"
+            or claims.get("aud") != "authenticated"
+            or type(claims.get("exp")) is not int
+            or claims["exp"] <= now
+            or claims.get("role") != "authenticated"
+        ):
+            raise ValueError("invalid access token claims")
+        subject = str(UUID(claims["sub"]))
+        session_id = str(UUID(claims["session_id"]))
+        user_response = await client.get(
+            "/auth/v1/user", headers={"Authorization": f"Bearer {access_token}"}
+        )
+        user_response.raise_for_status()
+        user = user_response.json()
+        if user.get("id") != subject or user.get("banned_until"):
+            raise ValueError("inactive user")
+        return {
+            "id": subject,
+            "email": user.get("email"),
+            "session_id": session_id,
+        }
 
     async def sign_out(self, access_token: str) -> None:
-        async with self._client() as client:
-            response = await client.post(
-                "/auth/v1/logout",
-                params={"scope": "local"},
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            response.raise_for_status()
+        client = self._client()
+        response = await client.post(
+            "/auth/v1/logout",
+            params={"scope": "local"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        response.raise_for_status()
 
 
 async def authenticated_web_user(
