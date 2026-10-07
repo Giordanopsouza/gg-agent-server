@@ -1,0 +1,152 @@
+"""Closed, validated snapshots and serialized revision durability barriers."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sqlite3
+import tempfile
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+
+from gg.runtime.sqlite_db import SQLiteDB
+from gg.runtime.sqlite_migrations import InvalidDatabase, validate_schema
+
+
+def validate_snapshot(path: Path) -> int:
+    """Read without changing the source or consuming any WAL sidecar."""
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if any(Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")):
+        raise InvalidDatabase("snapshot must be self-contained; sidecars found")
+    with path.open("rb") as snapshot:
+        header = snapshot.read(100)
+    if header[:16] != b"SQLite format 3\x00" or header[18:20] != b"\x01\x01":
+        raise InvalidDatabase("snapshot has invalid or WAL-dependent header")
+    connection = sqlite3.connect(
+        path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True
+    )
+    try:
+        if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+            raise InvalidDatabase("snapshot must use DELETE journal mode")
+        if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+            raise InvalidDatabase("snapshot integrity check failed")
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise InvalidDatabase("snapshot has broken foreign keys")
+        return validate_schema(connection)
+    except sqlite3.DatabaseError as exc:
+        raise InvalidDatabase("corrupt snapshot") from exc
+    finally:
+        connection.close()
+
+
+def publish_snapshot(db: SQLiteDB, destination: Path) -> int:
+    """backup() includes WAL commits; revision is read from the completed copy."""
+    with db.read() as source:
+        return publish_connection_snapshot(source, destination)
+
+
+def publish_connection_snapshot(source: sqlite3.Connection, destination: Path) -> int:
+    """Administrative backup under an exclusive lifecycle lease."""
+    active = Path(source.execute("PRAGMA database_list").fetchone()[2]).resolve()
+    destination = destination.resolve()
+    reserved = {
+        active,
+        *(Path(f"{active}{s}") for s in ("-wal", "-shm", "-journal", ".lock")),
+    }
+    if destination in reserved or (
+        destination.exists() and destination.samefile(active)
+    ):
+        raise ValueError("snapshot destination must differ from active database")
+    if any(
+        Path(f"{destination}{suffix}").exists()
+        for suffix in ("-wal", "-shm", "-journal")
+    ):
+        raise InvalidDatabase("snapshot destination has sidecars")
+    descriptor, filename = tempfile.mkstemp(
+        prefix=f".{destination.name}-", dir=destination.parent
+    )
+    os.close(descriptor)
+    temporary = Path(filename)
+    try:
+        target = sqlite3.connect(temporary, isolation_level=None)
+        try:
+            source.backup(target)
+            target.execute("PRAGMA journal_mode = DELETE")
+        finally:
+            target.close()
+        revision = validate_snapshot(temporary)
+        with temporary.open("rb") as snapshot:
+            os.fsync(snapshot.fileno())
+        os.replace(temporary, destination)
+        directory = os.open(destination.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return revision
+    finally:
+        temporary.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm", "-journal"):
+            Path(f"{temporary}{suffix}").unlink(missing_ok=True)
+
+
+class CheckpointCoordinator:
+    """One coordinator per runtime/Volume; commit can be Volume.commit.aio.
+
+    A published local snapshot is not confirmed until commit returns. Callers
+    awaiting a failed checkpoint must treat their already committed local write
+    as pending, not rolled back. Background scheduling is supplied by the runtime.
+    """
+
+    def __init__(
+        self, db: SQLiteDB, snapshot: Path, commit: Callable[[], Awaitable[None]]
+    ):
+        self.db = db
+        self.snapshot = snapshot
+        self.commit = commit
+        self.confirmed_revision = -1
+        self._lock = asyncio.Lock()
+        self._confirmed = asyncio.Condition()
+
+    @property
+    def pending(self) -> bool:
+        return self.db.revision > self.confirmed_revision
+
+    async def checkpoint(self) -> int:
+        async with self._lock:
+            revision = publish_snapshot(self.db, self.snapshot)
+            commit = asyncio.create_task(self.commit())
+            try:
+                await asyncio.shield(commit)
+            except asyncio.CancelledError:
+                # Keep the serialization lock until the in-flight commit settles.
+                # Its outcome remains unconfirmed; a retry will publish again.
+                while not commit.done():
+                    try:
+                        await asyncio.shield(commit)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not commit.cancelled():
+                    # Retrieve a possible failure without confirming.
+                    commit.exception()
+                raise
+            async with self._confirmed:
+                self.confirmed_revision = revision
+                self._confirmed.notify_all()
+            return revision
+
+    async def ensure_durable(self, revision: int) -> None:
+        if revision < 0 or revision > self.db.revision:
+            raise ValueError("revision must name a committed local write")
+        while self.confirmed_revision < revision:
+            await self.checkpoint()
+
+    async def wait_until_confirmed(self, revision: int) -> None:
+        """Passive waiter; failures/cancellation do not release it as successful."""
+        if revision < 0 or revision > self.db.revision:
+            raise ValueError("revision must name a committed local write")
+        async with self._confirmed:
+            await self._confirmed.wait_for(lambda: self.confirmed_revision >= revision)
