@@ -25,6 +25,9 @@ class RuntimeReadiness(BaseModel):
     dispatch_owner: bool
     reconciled: bool
     unresolved_capacity: int
+    scheduler_running: bool
+    scheduler_error: str | None = None
+    admission_blocked_reason: str | None = None
     conditions: tuple[ReadinessCondition, ...] = ()
 
 
@@ -69,6 +72,9 @@ def build_readiness(
         database_available
         and dispatch_owner
         and dispatch.reconciled
+        and dispatch.running
+        and dispatch.last_error is None
+        and dispatch.blocked_reason is None
         and unresolved == 0
     )
     return RuntimeReadiness(
@@ -77,6 +83,9 @@ def build_readiness(
         dispatch_owner=dispatch_owner,
         reconciled=dispatch.reconciled,
         unresolved_capacity=unresolved,
+        scheduler_running=dispatch.running,
+        scheduler_error=dispatch.last_error,
+        admission_blocked_reason=dispatch.blocked_reason,
         conditions=conditions,
     )
 
