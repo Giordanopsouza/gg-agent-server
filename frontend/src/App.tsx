@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { authApi, configuredApiUrl, setSessionExpiredHandler, taskApi, type Branch, type CredentialStatus, type GitHubStatus, type Models, type Repository, type Session, type TaskEventCopy, type TaskRecord, type TaskResult } from "./api";
+import { Icon } from "./Icon";
+import { authApi, setSessionExpiredHandler, taskApi, type Branch, type CredentialStatus, type GitHubStatus, type Models, type Repository, type Session, type TaskEventCopy, type TaskRecord, type TaskResult } from "./api";
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const draftKey = (userId: string) => `gg.task-draft.${userId}`;
@@ -12,19 +13,18 @@ function loginMessage(): string {
   return message;
 }
 
-function currentTaskId(): string | null {
-  const match = /^#\/tasks\/([^/]+)$/.exec(window.location.hash);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-function useTaskId(): string | null {
-  const [id, setId] = useState(currentTaskId);
+function useRoute() {
+  const [hash, setHash] = useState(() => window.location.hash);
   useEffect(() => {
-    const update = () => setId(currentTaskId());
+    const update = () => setHash(window.location.hash);
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
-  return id;
+  const match = /^#\/tasks\/([^/]+)$/.exec(hash);
+  return {
+    taskId: match ? decodeURIComponent(match[1]) : null,
+    page: hash === "#/settings" ? "settings" : hash === "#/tasks" ? "tasks" : "home",
+  };
 }
 
 function statusLabel(task: TaskRecord, result?: TaskResult): string {
@@ -224,7 +224,7 @@ function Home({ userId, credential, github, onCreated }: { userId: string; crede
   }, [repository, repositories]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!prompt.trim() || !model || !credential?.configured || (repository && !baseRef)) return;
+    if (submitting || !prompt.trim() || !model || !credential?.configured || (repository && !baseRef)) return;
     setSubmitting(true); setError("");
     try {
       const task = await taskApi.create({ prompt: prompt.trim(), model, idempotency_key: submissionKey, ...(repository ? { repository, base_ref: baseRef } : {}) });
@@ -235,18 +235,31 @@ function Home({ userId, credential, github, onCreated }: { userId: string; crede
     } catch (cause) { setError(String(cause)); }
     finally { setSubmitting(false); }
   }
-  return <main className="main home-main"><div className="home-intro"><div className="eyebrow">YOUR WORKSPACE</div><h1>What should the agent do?</h1><p>Choose a model and, optionally, an authorized repository.</p></div>
-    <form className="composer" onSubmit={(event) => void submit(event)}>
-      <label className="field-label" htmlFor="prompt">TASK PROMPT <span>REQUIRED</span></label>
-      <textarea id="prompt" value={prompt} onChange={(event) => { setPrompt(event.target.value); sessionStorage.setItem(draftKey(userId), event.target.value); setSubmissionKey(crypto.randomUUID()); }} placeholder="Describe what you want the agent to work on…" maxLength={16000} rows={6} />
-      <div className="composer-divider" />
-      <div className="repo-fields"><label>Model<select value={model} onChange={(event) => { setModel(event.target.value); setSubmissionKey(crypto.randomUUID()); }} disabled={!models}>{models?.models.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div>
-      <div className="repo-heading"><div><strong>Repository</strong><p>Optional. Leave blank for a fresh workspace.</p></div><button type="button" className="text-button" onClick={() => void refreshRepositories()} disabled={github?.status !== "connected"}>Refresh</button></div>
-      <div className="repo-fields"><label>GitHub repository<select value={repository} onChange={(event) => { setRepository(event.target.value); setSubmissionKey(crypto.randomUUID()); }} disabled={github?.status !== "connected"}><option value="">Blank workspace</option>{repositories.map((item) => <option key={item.id} value={item.full_name}>{item.full_name}{item.private ? " (private)" : ""}</option>)}</select></label>
-      <label>Base branch<select value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setSubmissionKey(crypto.randomUUID()); }} disabled={!repository || !branches.length}><option value="">Select a branch</option>{branches.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label></div>
-      {error && <div className="alert" role="alert">{error}</div>}
-      <div className="composer-footer"><span>One task, one workspace</span><button className="spawn-button" type="submit" disabled={submitting || !credential?.configured || !models || !prompt.trim() || (!!repository && !baseRef)}>{submitting ? "Spawning…" : "Spawn task"}<span aria-hidden="true">↗</span></button></div>
-    </form><div className="home-note">Your agent works in the background. You can come back later.</div></main>;
+  return <main className="main home-main">
+    <div className="home-workspace">
+      <div className="home-intro"><h1>What would you like to build?</h1></div>
+      <form className="task-form" onSubmit={(event) => void submit(event)}>
+        <div className="composer">
+          <label className="sr-only" htmlFor="prompt">Task prompt</label>
+          <textarea id="prompt" value={prompt} onChange={(event) => { setPrompt(event.target.value); sessionStorage.setItem(draftKey(userId), event.target.value); setSubmissionKey(crypto.randomUUID()); }} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Ask your agent to help with coding tasks…" maxLength={16000} rows={4} />
+          <div className="composer-footer">
+            <span className="composer-hint"><Icon name="sparkles" /> Background task</span>
+            <div className="composer-actions">
+              <label className="model-control"><span className="sr-only">Model</span><select value={model} onChange={(event) => { setModel(event.target.value); setSubmissionKey(crypto.randomUUID()); }} disabled={!models}>{!models ? <option>Loading models…</option> : models.models.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+              <button className="send-button" aria-label={submitting ? "Spawning task" : "Spawn task"} title="Spawn task (⌘ / Ctrl + Enter)" type="submit" disabled={submitting || !credential?.configured || !models || !prompt.trim() || (!!repository && !baseRef)}><Icon name={submitting ? "loader" : "send"} /></button>
+            </div>
+          </div>
+        </div>
+        <div className="workspace-controls">
+          <label className="repository-control"><Icon name="branch" /><span className="sr-only">GitHub repository</span><select value={repository} onChange={(event) => { setRepository(event.target.value); setSubmissionKey(crypto.randomUUID()); }} disabled={github?.status !== "connected"}><option value="">Blank workspace</option>{repositories.map((item) => <option key={item.id} value={item.full_name}>{item.full_name}{item.private ? " (private)" : ""}</option>)}</select></label>
+          {repository ? <label className="branch-control"><span className="sr-only">Base branch</span><select value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setSubmissionKey(crypto.randomUUID()); }} disabled={!branches.length}><option value="">{branches.length ? "Select a branch" : "Loading branches…"}</option>{branches.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label> : null}
+          {github?.status === "connected" ? <button type="button" className="icon-button refresh-repos" aria-label="Refresh repositories" title="Refresh repositories" onClick={() => void refreshRepositories()}><Icon name="refresh" /></button> : <a className="connect-repository" href="#/settings">Connect GitHub <Icon name="arrow" /></a>}
+        </div>
+        {error ? <div className="alert" role="alert">{error}</div> : null}
+      </form>
+      {!credential ? <p className="home-note" role="status">Checking your account…</p> : !credential.configured ? <p className="home-note">Add your <a href="#/settings">OpenRouter key</a> to start your first task.</p> : null}
+    </div>
+  </main>;
 }
 
 function AccountSetup({ session, credential, github, onCredential, onGitHub, onLogout }: { session: Session; credential: CredentialStatus | null; github: GitHubStatus | null; onCredential: (value: CredentialStatus) => void; onGitHub: (value: GitHubStatus) => void; onLogout: () => void }) {
@@ -261,11 +274,15 @@ function AccountSetup({ session, credential, github, onCredential, onGitHub, onL
   return <div className="account-setup"><div className="account-heading"><strong>{session.user.email || session.user.id}</strong><button type="button" className="text-button" onClick={onLogout}>Sign out</button></div>
     <div className="setup-group"><strong>OpenRouter</strong><span>{credential?.configured ? `Saved ${credential.mask || ""}` : "No key saved"}</span><div className="setup-actions"><input type="password" aria-label="OpenRouter key" autoComplete="off" placeholder="OpenRouter API key" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)} /><button type="button" disabled={busy || !keyDraft} onClick={() => void act(async () => { onCredential(await authApi.saveCredential(keyDraft)); setKeyDraft(""); })}>Save</button></div>{credential?.configured && <button type="button" className="text-button" disabled={busy} onClick={() => void act(async () => onCredential(await authApi.removeCredential()))}>Remove key</button>}</div>
     <div className="setup-group"><strong>GitHub</strong><span>{github?.status === "connected" ? `Connected as ${github.login}` : github?.status || "GitHub App setup pending"}</span><div className="setup-actions">{github && <a className="setup-link" href={authApi.githubUrl()}>{github.status === "connected" ? "Reconnect" : "Connect GitHub"}</a>}{github && github.status !== "disconnected" && <button type="button" className="text-button" disabled={busy} onClick={() => void act(async () => onGitHub(await authApi.disconnectGitHub()))}>Disconnect</button>}</div>{github?.status === "pending" && <small>GitHub App installation is pending approval.</small>}{github?.status === "connected" && <small>{github.installations.length} installation(s)</small>}</div>
-    {error && <div className="alert" role="alert">{error}</div>}<small title={configuredApiUrl}>API: {configuredApiUrl}</small></div>;
+    {error && <div className="alert" role="alert">{error}</div>}</div>;
 }
 
 export default function App() {
-  const taskId = useTaskId();
+  const { taskId, page } = useRoute();
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 650);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const [session, setSession] = useState<Session | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [sessionError, setSessionError] = useState(loginMessage);
@@ -337,15 +354,39 @@ export default function App() {
   }
   if (checkingSession) return <main className="auth-screen"><div className="auth-card">Checking session…</div></main>;
   if (!session) return <main className="auth-screen"><div className="auth-card"><div className="brand-mark">gg</div><h1>gg / tasks</h1><p>Sign in to configure your account and run tasks.</p>{sessionError && <div className="alert" role="alert">{sessionError}</div>}<a className="spawn-button" href={authApi.loginUrl()}>Continue with Google ↗</a></div></main>;
-  const groups = tasks.reduce((grouped, task) => {
+  const visibleTasks = tasks.filter((task) => `${task.prompt} ${task.repository || "Blank workspace"}`.toLowerCase().includes(search.toLowerCase()));
+  const activeTasks = tasks.filter((task) => ["queued", "starting", "running", "finalizing"].includes(task.state)).length;
+  const groups = visibleTasks.reduce((grouped, task) => {
     const repository = task.repository || "Blank workspace";
     if (!grouped.has(repository)) grouped.set(repository, []);
     grouped.get(repository)!.push(task);
     return grouped;
   }, new Map<string, TaskRecord[]>());
-  return <div className="shell"><aside className="sidebar"><a className="brand" href="#/"><span className="brand-mark">g<span>g</span></span><span>gg<span className="brand-light"> / tasks</span></span></a>
-    <div className="sidebar-heading"><span>WORKSPACE</span><a href="#/" className="new-link" aria-label="New task">+</a></div><a className={`nav-item ${!taskId ? "selected" : ""}`} href="#/"><span className="nav-icon">◫</span> Overview</a>
-    <div className="sidebar-heading recent-heading"><span>HISTORY</span><span>{tasks.length}</span></div><nav className="task-nav" aria-label="Task history">{loadingTasks ? <p className="no-tasks" role="status">Loading history…</p> : listError ? <p className="sidebar-error" role="alert">Could not load history. Retrying…</p> : !tasks.length ? <p className="no-tasks">No tasks yet.</p> : [...groups].map(([repository, items]) => <section className="history-group" key={repository} aria-label={repository}><h2>{repository}</h2>{items.map((task) => <a className={`task-nav-item ${taskId === task.id ? "selected" : ""}`} href={`#/tasks/${encodeURIComponent(task.id)}`} key={task.id} aria-current={taskId === task.id ? "page" : undefined}><span className="nav-prompt">{task.prompt}</span><span className="history-meta"><StatusChip status={statusLabel(task, results[task.id])} /><time dateTime={task.created_at}>{formatDate(task.created_at)}</time></span></a>)}</section>)}</nav>
-    <AccountSetup key={session.user.id} session={session} credential={credential} github={github} onCredential={setCredential} onGitHub={setGitHub} onLogout={() => void logout()} /></aside>
-    <div className="content"><div className="topbar"><span>AGENT CONTROL PLANE</span><span className="topbar-right"><span className="online-dot" />Signed in</span></div>{setupError && <div className="alert setup-error" role="alert">{setupError}</div>}{taskId ? <Detail key={`${session.user.id}:${taskId}`} id={taskId} onTask={onTask} onResult={onResult} /> : <Home key={session.user.id} userId={session.user.id} credential={credential} github={github} onCreated={onTask} />}</div></div>;
+  const accountName = session.user.email?.split("@")[0] || "Your account";
+  const closeMobileSidebar = () => { if (window.innerWidth <= 650) setSidebarOpen(false); };
+  return <div className={`shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}`}>
+    {sidebarOpen ? <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} /> : null}
+    <aside className="sidebar" id="workspace-sidebar" aria-label="Workspace navigation" inert={!sidebarOpen}>
+      <div className="sidebar-brand"><a className="brand" href="#/" onClick={closeMobileSidebar}><span className="brand-mark" aria-hidden="true"><Icon name="logo" /></span><span className="brand-name">gg workspace</span></a><span className="online-badge" title={`${activeTasks} active tasks`}><span className="online-dot" />{activeTasks} active</span><button className="icon-button" aria-label="Search tasks" aria-expanded={searchOpen} onClick={() => { setSearchOpen((value) => !value); setSearch(""); }}><Icon name="search" /></button><button className="icon-button" aria-label="Hide sidebar" onClick={() => setSidebarOpen(false)}><Icon name="panel" /></button></div>
+      <nav className="primary-nav" aria-label="Main navigation">
+        <a className={`nav-item ${!taskId && page === "home" ? "selected" : ""}`} aria-current={!taskId && page === "home" ? "page" : undefined} href="#/" onClick={closeMobileSidebar}><Icon name="home" />Home</a>
+        <a className={`nav-item ${page === "tasks" || taskId ? "selected" : ""}`} aria-current={page === "tasks" ? "page" : undefined} href="#/tasks" onClick={closeMobileSidebar}><Icon name="tasks" />Tasks<span className="nav-count">{tasks.length}</span></a>
+        <a className={`nav-item ${page === "settings" ? "selected" : ""}`} aria-current={page === "settings" ? "page" : undefined} href="#/settings" onClick={closeMobileSidebar}><Icon name="settings" />Settings</a>
+      </nav>
+      <div className="sidebar-heading"><span>Workspaces</span><a href="#/" className="icon-button" aria-label="New task" title="New task" onClick={closeMobileSidebar}><Icon name="plus" /></a></div>
+      {searchOpen ? <div className="sidebar-search"><Icon name="search" /><input autoFocus aria-label="Search task history" placeholder="Search tasks…" value={search} onChange={(event) => setSearch(event.target.value)} /></div> : null}
+      <nav className="task-nav" aria-label="Task history">
+        {loadingTasks ? <p className="no-tasks" role="status">Loading history…</p> : listError ? <p className="sidebar-error" role="alert">Could not load history. Retrying…</p> : !visibleTasks.length ? <p className="no-tasks">{search ? "No matching tasks." : "Your workspaces will appear here."}</p> : [...groups].map(([repository, items]) => <section className="history-group" key={repository} aria-label={repository}>
+          <button className="workspace-heading" aria-expanded={!collapsedGroups.has(repository)} onClick={() => setCollapsedGroups((previous) => { const next = new Set(previous); if (next.has(repository)) next.delete(repository); else next.add(repository); return next; })}><Icon name="chevron" /><span title={repository}>{repository}</span><span className="workspace-count">{items.length}</span></button>
+          {!collapsedGroups.has(repository) ? items.map((task) => <a className={`task-nav-item ${taskId === task.id ? "selected" : ""}`} href={`#/tasks/${encodeURIComponent(task.id)}`} key={task.id} onClick={closeMobileSidebar} aria-current={taskId === task.id ? "page" : undefined}><span className={`task-indicator ${task.state}`} aria-hidden="true" /><span className="nav-prompt">{task.prompt}</span><span className="history-status"><StatusChip status={statusLabel(task, results[task.id])} /></span></a>) : null}
+        </section>)}
+      </nav>
+      {!credential?.configured || github?.status !== "connected" ? <div className="getting-started"><strong>Getting started</strong><a href="#/settings" onClick={closeMobileSidebar}>Add your OpenRouter key<Icon name={credential?.configured ? "check" : "circle"} /></a><a href="#/settings" onClick={closeMobileSidebar}>Connect GitHub<Icon name={github?.status === "connected" ? "check" : "circle"} /></a><a href="#/" onClick={closeMobileSidebar}>Create your first task<Icon name={tasks.length ? "check" : "circle"} /></a></div> : null}
+      <div className="sidebar-account"><a className="profile-link" href="#/settings" onClick={closeMobileSidebar}><span className="avatar">{accountName[0].toUpperCase()}</span><span><strong title={session.user.email || accountName}>{session.user.email || accountName}</strong><small>Personal workspace</small></span></a><button type="button" className="icon-button" aria-label="Sign out" title="Sign out" onClick={() => void logout()}><Icon name="logout" /></button></div>
+    </aside>
+    <div className="content"><header className="topbar"><button className="icon-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} aria-controls="workspace-sidebar" onClick={() => setSidebarOpen((value) => !value)}><Icon name="panel" /></button><span>{taskId ? "Task workspace" : page === "settings" ? "Settings" : page === "tasks" ? "All tasks" : ""}</span></header>
+      {setupError ? <div className="alert setup-error" role="alert">{setupError}</div> : null}
+      {taskId ? <Detail key={`${session.user.id}:${taskId}`} id={taskId} onTask={onTask} onResult={onResult} /> : page === "settings" ? <main className="main settings-main"><div className="page-intro"><h1>Settings</h1><p>Connect the tools your agent needs.</p></div><AccountSetup key={session.user.id} session={session} credential={credential} github={github} onCredential={setCredential} onGitHub={setGitHub} onLogout={() => void logout()} /></main> : page === "tasks" ? <main className="main tasks-main"><div className="page-intro"><div><h1>Your tasks</h1><p>Pick up where you left off.</p></div><a className="spawn-button" href="#/"><Icon name="plus" />New task</a></div>{loadingTasks ? <div className="empty-panel" role="status">Loading tasks…</div> : listError ? <div className="alert" role="alert">{listError}</div> : !tasks.length ? <div className="empty-panel">No tasks yet. <a href="#/">Start your first task →</a></div> : <div className="task-list">{tasks.map((task) => <a className="task-row" key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`}><div><strong>{task.prompt}</strong><span>{task.repository || "Blank workspace"} · {formatDate(task.created_at)}</span></div><StatusChip status={statusLabel(task, results[task.id])} /><Icon name="arrow" /></a>)}</div>}</main> : <Home key={session.user.id} userId={session.user.id} credential={credential} github={github} onCreated={onTask} />}
+    </div>
+  </div>;
 }

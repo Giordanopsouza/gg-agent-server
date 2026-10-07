@@ -18,6 +18,7 @@ let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -50,7 +51,7 @@ describe("desktop session and history", () => {
     )));
     await renderApp();
     expect(host.textContent).toContain("a@example.com");
-    const signOut = [...host.querySelectorAll("button")].find((item) => item.textContent === "Sign out")!;
+    const signOut = host.querySelector<HTMLButtonElement>('button[aria-label="Sign out"]')!;
     await act(async () => signOut.click());
     expect(host.textContent).toContain("Continue with Google");
     expect(host.textContent).not.toContain("a@example.com");
@@ -123,6 +124,112 @@ describe("desktop session and history", () => {
     )));
     await renderApp();
     expect((host.querySelector("#prompt") as HTMLTextAreaElement).value).toBe("Private draft");
+  });
+});
+
+async function navigate(hash: string) {
+  await act(async () => {
+    window.location.hash = hash;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+}
+
+async function enterText(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  await act(async () => {
+    const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function workspaceFetch(configured = true) {
+  const fetch = vi.fn((url: string, init?: RequestInit) => Promise.resolve(
+    url === "/auth/session" ? response({ user: { id: "user-a", email: "a@example.com" } })
+      : url === "/auth/openrouter-credential" ? response({ configured })
+        : url === "/auth/github" ? response({ status: "connected", installations: [], login: "owner" })
+          : url === "/tasks/models" ? response({ default: "model-a", models: ["model-a", "model-b"] })
+            : url === "/tasks/repositories" ? response([{ id: 1, full_name: "owner/repo", default_branch: "main", private: false }])
+              : url.endsWith("/branches") ? response([{ name: "main", sha: "abc" }])
+                : url === "/tasks" ? init?.method === "POST" ? response(task("task-3", "owner/repo")) : response([task("task-1", "owner/repo"), task("task-2", null)])
+                  : url === "/tasks/task-3" ? response(task("task-3", "owner/repo"))
+                    : url.endsWith("/result") ? response({ state: "running", manifest: null })
+                      : response([]),
+  ));
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+describe("workspace interface", () => {
+  it("searches task history and expands or collapses workspace groups", async () => {
+    workspaceFetch();
+    await renderApp();
+    const group = host.querySelector<HTMLButtonElement>('.history-group[aria-label="owner/repo"] button')!;
+    await act(async () => group.click());
+    expect(group.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('a[href="#/tasks/task-1"]')).toBeNull();
+    await act(async () => group.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Search tasks"]')!.click());
+    await enterText(host.querySelector<HTMLInputElement>('input[aria-label="Search task history"]')!, "task-2");
+    expect(host.querySelector('nav[aria-label="Task history"]')?.textContent).toContain("Task task-2");
+    expect(host.querySelector('nav[aria-label="Task history"]')?.textContent).not.toContain("Task task-1");
+    await enterText(host.querySelector<HTMLInputElement>('input[aria-label="Search task history"]')!, "missing");
+    expect(host.textContent).toContain("No matching tasks.");
+  });
+
+  it("keeps the draft when moving between Home, Tasks, and Settings", async () => {
+    workspaceFetch();
+    await renderApp();
+    await enterText(host.querySelector<HTMLTextAreaElement>("#prompt")!, "Finish this later");
+    await navigate("#/settings");
+    expect(host.querySelector(".settings-main")?.textContent).toContain("OpenRouter");
+    expect(host.querySelector(".settings-main")?.textContent).toContain("GitHub");
+    await navigate("#/tasks");
+    expect(host.querySelectorAll(".task-row")).toHaveLength(2);
+    await navigate("#/");
+    expect(host.querySelector<HTMLTextAreaElement>("#prompt")!.value).toBe("Finish this later");
+  });
+
+  it("submits the selected repository, branch, and model with the keyboard shortcut", async () => {
+    const fetch = workspaceFetch();
+    await renderApp();
+    await enterText(host.querySelector<HTMLTextAreaElement>("#prompt")!, "Build a small tool");
+    await act(async () => {
+      const select = host.querySelector<HTMLSelectElement>(".repository-control select")!;
+      select.value = "owner/repo";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      const model = host.querySelector<HTMLSelectElement>(".model-control select")!;
+      model.value = "model-b";
+      model.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector<HTMLSelectElement>(".branch-control select")!.value).toBe("main");
+    await act(async () => host.querySelector<HTMLTextAreaElement>("#prompt")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true })));
+    const submitted = fetch.mock.calls.find(([url, init]) => url === "/tasks" && init?.method === "POST")!;
+    expect(JSON.parse(submitted[1]!.body as string)).toMatchObject({ prompt: "Build a small tool", repository: "owner/repo", base_ref: "main", model: "model-b" });
+    expect(sessionStorage.getItem("gg.task-draft.user-a")).toBeNull();
+    expect(window.location.hash).toBe("#/tasks/task-3");
+    await navigate(window.location.hash);
+    expect(host.querySelector(".detail-header h1")?.textContent).toBe("Task task-3");
+  });
+
+  it("blocks keyboard submission until a credential is configured", async () => {
+    const fetch = workspaceFetch(false);
+    await renderApp();
+    await enterText(host.querySelector<HTMLTextAreaElement>("#prompt")!, "Build a small tool");
+    expect(host.querySelector<HTMLButtonElement>(".send-button")!.disabled).toBe(true);
+    await act(async () => host.querySelector<HTMLTextAreaElement>("#prompt")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })));
+    expect(fetch.mock.calls.filter(([url, init]) => url === "/tasks" && init?.method === "POST")).toHaveLength(0);
+    expect(host.querySelector('.home-note a')?.getAttribute("href")).toBe("#/settings");
+  });
+
+  it("opens mobile navigation and closes it after selecting a page", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    workspaceFetch();
+    await renderApp();
+    expect(host.querySelector(".shell")?.classList.contains("sidebar-closed")).toBe(true);
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open sidebar"]')!.click());
+    expect(host.querySelector(".shell")?.classList.contains("sidebar-open")).toBe(true);
+    await act(async () => host.querySelector<HTMLAnchorElement>('.primary-nav a[href="#/settings"]')!.click());
+    expect(host.querySelector(".shell")?.classList.contains("sidebar-closed")).toBe(true);
   });
 });
 
