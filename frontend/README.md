@@ -22,18 +22,14 @@ the send button or Cmd/Ctrl+Enter. The OpenRouter key is sent to the vault API a
 never stored in browser storage. With the default setup, Vite proxies `/tasks`
 and `/auth` to `http://127.0.0.1:8001`, so the browser stays on one origin.
 For local OAuth and mutation requests, set `GG_WEB_ORIGIN` to the exact Vite
-origin (for example `http://127.0.0.1:5173`) and configure the Supabase and
+origin (for example `http://127.0.0.1:5173`) and configure the Google and
 GitHub callback URLs for that origin. The backend must have its Auth, GitHub
-App, Postgres, and vault settings configured.
+App, SQLite, and vault settings configured.
 
 ## Configuration
 
 - `VITE_DEV_API_PROXY`: development proxy target. Defaults to
   `http://127.0.0.1:8001`.
-- `GG_BACKEND_URL`: private backend HTTP URL for the production Node server,
-  including port. Locally use `http://127.0.0.1:8001`. On Railway use
-  `http://${{gg-runtime.RAILWAY_PRIVATE_DOMAIN}}:8001` as a service reference.
-- `PORT`: port listened to by the Node server; defaults to `3000` locally.
 - Browser API calls use relative URLs so cookies and OAuth callbacks stay on
   the frontend origin.
 
@@ -42,12 +38,12 @@ Build and verify:
 ```bash
 npm test
 npm run build
-GG_BACKEND_URL=http://127.0.0.1:8001 npm start
+
 ```
 
 From the repository root, `make frontend-install`, `make frontend-test`, and
 `make frontend-build` delegate to the frontend Makefile. The last target runs
-`build` and produces the `dist/` browser files and `dist-server/` Node files.
+`build` and produces `dist/`, served by FastAPI with `GG_WEB_DIST_PATH`.
 
 Desktop QA: at 768px and 1440px, sign in and confirm the sidebar groups every
 task by repository with status. Search tasks, collapse workspace groups, and
@@ -59,15 +55,13 @@ draft returns; another account must see an empty composer. Sign out and confirm
 the account, history, and draft clear. Tab through links, form controls, and
 task history to check focus and labels.
 
-The production Node server serves `dist/` at `/` and `/assets`, exposes
-`/web_health`, and forwards `/auth`, `/tasks`, `/webhooks`, `/ready`, and
-`/health` to the Python runtime. It also forwards task WebSocket upgrades.
-Direct navigation uses hash URLs (`#/`, `#/tasks`, `#/settings`, and
-`#/tasks/<id>`), so no server fallback route
-is required. On Railway, build `gg-web` from `/frontend` using Node 22 and
-keep `gg-runtime` building from the repository root for the shared Python
-workspace. The frontend public domain is the sole browser origin; the runtime
-domain can be removed after the new frontend has passed cutover checks.
+Production runs one FastAPI process serving `dist/`, API and WebSockets.
+Set `GG_WEB_DIST_PATH` to the absolute build directory and `GG_WEB_ORIGIN`
+to the public HTTPS origin (loopback HTTP is allowed for local demos).
+Use `GG_RUNTIME_DB_PATH` for the active local SQLite database and
+`GG_RUNTIME_SNAPSHOT_PATH` for its validated snapshot; initialize state
+explicitly with `python -m gg.runtime.db_cli init` before first startup.
+Node is only needed for the Vite build and development proxy.
 
 The API owns task state and results. The UI shows the Task API's lifecycle
 state (`queued`, `starting`, `running`, `finalizing`, `completed`, `failed`, or

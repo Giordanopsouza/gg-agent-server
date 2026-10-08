@@ -53,6 +53,7 @@ class RuntimeSettings(BaseModel):
     web_cookie_key: str | None = None
     openrouter_vault_key: str | None = None
     web_origin: str | None = None
+    web_dist_path: str | None = None
     web_cookie_secure: bool = True
     cors_origins: tuple[str, ...] = ()
     host: str = DEFAULT_HOST
@@ -69,6 +70,7 @@ class RuntimeSettings(BaseModel):
     max_idempotency_key_chars: int = Field(
         default=DEFAULT_MAX_IDEMPOTENCY_KEY_CHARS, ge=1
     )
+    modal_environment: str | None = None
     modal_app_name: str = DEFAULT_MODAL_APP_NAME
     modal_deployment: str = DEFAULT_MODAL_DEPLOYMENT
     modal_image_name: str = DEFAULT_MODAL_IMAGE_NAME
@@ -268,6 +270,7 @@ def load_settings() -> RuntimeSettings:
         web_cookie_key=_optional_secret(os.getenv("GG_WEB_COOKIE_KEY")),
         openrouter_vault_key=_optional_secret(os.getenv("GG_OPENROUTER_VAULT_KEY")),
         web_origin=_optional_secret(os.getenv("GG_WEB_ORIGIN")),
+        web_dist_path=_optional_secret(os.getenv("GG_WEB_DIST_PATH")),
         web_cookie_secure=_parse_bool(os.getenv("GG_WEB_COOKIE_SECURE"), True),
         cors_origins=tuple(
             origin.strip()
@@ -295,6 +298,7 @@ def load_settings() -> RuntimeSettings:
             os.getenv("GG_MAX_IDEMPOTENCY_KEY_CHARS"),
             DEFAULT_MAX_IDEMPOTENCY_KEY_CHARS,
         ),
+        modal_environment=_optional_secret(os.getenv("GG_MODAL_ENVIRONMENT")),
         modal_app_name=os.getenv("GG_MODAL_APP_NAME", DEFAULT_MODAL_APP_NAME),
         modal_deployment=os.getenv("GG_MODAL_DEPLOYMENT", DEFAULT_MODAL_DEPLOYMENT),
         modal_image_name=os.getenv("GG_MODAL_IMAGE_NAME", DEFAULT_MODAL_IMAGE_NAME),

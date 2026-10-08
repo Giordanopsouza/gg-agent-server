@@ -34,6 +34,7 @@ from gg.runtime.readiness import readiness_from_scheduler
 from gg.runtime.repository_authorization import RepositoryAuthorization
 from gg.runtime.scheduler import TaskScheduler, default_lock_path
 from gg.runtime.sqlite_db import SQLiteDB
+from gg.runtime.static_web import OriginGuard, StaticWeb
 from gg.runtime.storage import StorageLimits
 from gg.runtime.task_auth import task_access
 from gg.runtime.task_routes import event_socket_router, router as task_router
@@ -71,6 +72,8 @@ def create_app(
     github_client: GitHubClient | None = None,
     repository_authorization: RepositoryAuthorization | None = None,
     checkpoints: CheckpointCoordinator | None = None,
+    snapshot_commit=local_commit,
+    internal_proxy: bool = False,
 ) -> FastAPI:
     ledger = task_ledger
     auth_provider = None
@@ -101,7 +104,7 @@ def create_app(
                 restore(Path(snapshot), Path(path))
             db = SQLiteDB(Path(path))
             ledger = TaskLedger(
-                db, CheckpointCoordinator(db, Path(snapshot), local_commit)
+                db, CheckpointCoordinator(db, Path(snapshot), snapshot_commit)
             )
         if isinstance(ledger, TaskLedger):
             checkpoints = (
@@ -203,6 +206,8 @@ def create_app(
                 github_client or GitHubClient(settings),
             )
         )
+        if settings.web_dist_path:
+            app.mount("/", StaticWeb(Path(settings.web_dist_path)))
 
     @asynccontextmanager
     async def lifespan(app):
@@ -242,6 +247,12 @@ def create_app(
                 ledger.close()
 
     app = FastAPI(title="gg-runtime", lifespan=lifespan)
+    if settings.web_dist_path:
+        if not settings.web_origin:
+            raise ValueError("web_origin is required when serving React")
+        app.add_middleware(
+            OriginGuard, origin=settings.web_origin, internal_proxy=internal_proxy
+        )
     app.state.settings = settings
     app.state.recovering = True
     if settings.cors_origins:
@@ -290,6 +301,8 @@ def create_app(
                     content={"detail": "provider reconciliation incomplete"},
                 )
         response = await call_next(request)
+        if request.url.path.startswith(("/auth", "/tasks")):
+            response.headers["Cache-Control"] = "no-store"
         if not exempt and checkpoints is not None and response.status_code < 400:
             try:
                 await durable(checkpoints, checkpoints.db.revision)

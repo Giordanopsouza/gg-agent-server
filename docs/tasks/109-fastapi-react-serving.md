@@ -1,7 +1,7 @@
 ---
 id: 109-fastapi-react-serving
 feature: sqlite-modal
-status: pending
+status: done
 depends_on: ["101-sqlite-runtime-wiring"]
 ---
 
@@ -11,15 +11,15 @@ depends_on: ["101-sqlite-runtime-wiring"]
 
 **Critérios de aceitação:**
 
-- [ ] Rotas API/auth/webhook/health/ready e WebSocket têm precedência; endpoint API inexistente não retorna index.html.
-- [ ] Assets válidos e deep links servem build; paths inválidos/traversal são rejeitados; cache não vaza respostas de sessão.
-- [ ] URL/callbacks usam web_origin HTTPS; hostname encaminhado aceito somente quando corresponde à origem configurada.
+- [x] Rotas API/auth/webhook/health/ready e WebSocket têm precedência; endpoint API inexistente não retorna index.html.
+- [x] Assets válidos e deep links servem build; paths inválidos/traversal são rejeitados; cache não vaza respostas de sessão.
+- [x] URL/callbacks usam web_origin HTTPS; hostname encaminhado aceito somente quando corresponde à origem configurada.
 
 **Verificação:**
 
-- [ ] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_static_web.py`.
-- [ ] Demo/check operacional: Abrir deep link, recarregar, consultar /auth/session e testar header forwarded/host forjado com o build real.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
+- [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_static_web.py`.
+- [x] Demo/check operacional: Abrir deep link, recarregar, consultar /auth/session e testar header forwarded/host forjado com o build real.
+- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [101-sqlite-runtime-wiring](101-sqlite-runtime-wiring.md).
 
@@ -33,3 +33,9 @@ depends_on: ["101-sqlite-runtime-wiring"]
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
 
 **Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
+
+## Evidência de conclusão
+
+Implementação, QA, demos reais, restore/recreate e limites documentados em
+[109–111: verificação](evidence/109-111-verification.md). Onboarding público
+Google permanece no escopo da 123; nenhum corte de produção realizado.

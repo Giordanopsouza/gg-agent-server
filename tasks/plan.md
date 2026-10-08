@@ -200,9 +200,9 @@ flowchart TD
 
 ### Após 109–111: Mesma origem no Modal
 
-- [ ] React/FastAPI e escritor único; restore antes de admissão.
-- [ ] Testes focados/build aplicável passam; evidência nas tasks; registrar primeiro bloqueio e boundary exato.
-- [ ] Revisão humana antes do próximo grupo; status sozinho não prova entrega.
+- [x] React/FastAPI e writer único; restore antes de admissão; recreate real e replay sem nova execução.
+- [x] QA 368 passed/78 skipped/2 deselected; 11 focados, 15 frontend e builds aprovados; [provas](../docs/tasks/evidence/109-111-verification.md).
+- [ ] Revisão humana antes do próximo grupo. Onboarding Google público ainda pertence à 123; nenhum corte de produção.
 
 ### Após 112–114: Operação e fixtures
 
@@ -366,3 +366,15 @@ resposta útil e manifest. Restart preservou uma execução/mensagem/PR;
 workspace encerrado com reserved=0 e pending=0. Ver
 [106–107](../docs/tasks/evidence/106-107-verification.md) e
 [108](evidence/108-sandbox-demo.md).
+
+## Execução autorizada 109–111 (2026-10-08)
+
+Worktree 091 confirmada e reutilizada. Fatias sequenciais, até cinco arquivos
+de implementação por fatia:
+- 109: serving/guard de origem, settings, wiring e testes HTTP/WS.
+- 110a: scripts frontend e remoção dos três arquivos do proxy Node;
+  110b: referências operacionais e prova com build real.
+- 111a: imagem e servidor Modal com restore/commit e testes;
+  111b: deploy isolado recreate, restart e provas operacionais.
+QA em ordem, builds e demo real; registrar primeiro bloqueio sem declarar
+aceite live quando algum pré-requisito não estiver disponível.

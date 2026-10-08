@@ -709,6 +709,7 @@ def lifecycle_from_settings(
     modal_provider = provider or ModalProvider(
         app_name=settings.modal_app_name,
         image_name=settings.modal_image_name,
+        environment_name=settings.modal_environment,
     )
     return ModalSandboxLifecycle(
         ledger=ledger,
