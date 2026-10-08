@@ -1,7 +1,7 @@
 ---
 id: 119-remove-alembic-revisions
 feature: sqlite-modal
-status: pending
+status: done
 depends_on: ["118-remove-postgres-dependencies"]
 ---
 
@@ -11,15 +11,15 @@ depends_on: ["118-remove-postgres-dependencies"]
 
 **Critérios de aceitação:**
 
-- [ ] Remover 0001–0004/env.py sem código runtime dependente.
-- [ ] Schema SQLite cobre constraints necessárias sem copiar dados antigos.
-- [ ] Migrações SQLite não importam SQLAlchemy/Alembic; ADRs guardam contexto histórico.
+- [x] Remover 0001–0004/env.py sem código runtime dependente.
+- [x] Schema SQLite cobre constraints necessárias sem copiar dados antigos.
+- [x] Migrações SQLite não importam SQLAlchemy/Alembic; ADRs guardam contexto histórico.
 
 **Verificação:**
 
-- [ ] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_sqlite_db.py backend/tests/test_sqlite_configuration.py; git diff --check`.
-- [ ] Demo/check operacional: Verificar migrações SQLite/user_version como única autoridade ativa.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
+- [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_sqlite_db.py backend/tests/test_sqlite_configuration.py; git diff --check`.
+- [x] Demo/check operacional: Verificar migrações SQLite/user_version como única autoridade ativa.
+- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [118-remove-postgres-dependencies](118-remove-postgres-dependencies.md).
 
@@ -34,3 +34,5 @@ depends_on: ["118-remove-postgres-dependencies"]
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
 
 **Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
+
+**Resultado (2026-10-08):** Revisões/env Alembic removidos; `sqlite_migrations.py` usa `PRAGMA user_version` e os testes focados de migração/configuração passaram. Ver [provas 118–120](evidence/118-120-verification.md).

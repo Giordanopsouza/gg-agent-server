@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import sqlite3
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
@@ -52,9 +53,7 @@ class FakeStore:
     def connect(self, owner, github_id, login, token, installations):
         for other, record in self.accounts.items():
             if other != owner and record[0] == github_id:
-                from sqlalchemy.exc import IntegrityError
-
-                raise IntegrityError("unique GitHub user", {}, Exception())
+                raise sqlite3.IntegrityError("unique GitHub user")
         self.accounts[owner] = (github_id, login, token, "connected", installations)
 
     def current(self, owner):

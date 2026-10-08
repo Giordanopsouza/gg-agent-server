@@ -14,13 +14,11 @@ from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 import httpx
-import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from joserfc import jwk, jwt
 from joserfc.errors import InvalidKeyIdError, MissingKeyError
-from sqlalchemy.exc import SQLAlchemyError
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.local_sessions import LocalSessions
@@ -280,7 +278,7 @@ async def authenticated_web_user(
         active = await asyncio.to_thread(
             sessions.active, user["id"], user["session_id"]
         )
-    except (sqlite3.Error, SQLAlchemyError, psycopg.Error):
+    except sqlite3.Error:
         raise HTTPException(
             status_code=503, detail="session store unavailable"
         ) from None
@@ -357,7 +355,7 @@ def web_auth_router(
                         profile_ready = await asyncio.to_thread(
                             sessions.ensure_profile, user["id"], user["session_id"]
                         )
-                    except (sqlite3.Error, SQLAlchemyError, psycopg.Error):
+                    except sqlite3.Error:
                         raise HTTPException(
                             status_code=503, detail="session store unavailable"
                         ) from None

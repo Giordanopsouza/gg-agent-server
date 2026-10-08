@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import httpx
 import pytest
-from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.readiness import readiness_from_scheduler
@@ -37,7 +37,7 @@ class QueuedLedger:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("failure", [PoolTimeout, RuntimeError])
+@pytest.mark.parametrize("failure", [sqlite3.OperationalError, RuntimeError])
 async def test_failed_cycle_is_reported_and_retried(tmp_path, caplog, failure):
     ledger = QueuedLedger()
     scheduler = TaskScheduler(

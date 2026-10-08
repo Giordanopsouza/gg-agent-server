@@ -19,7 +19,6 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from gg.runtime.checkpoints import CheckpointCoordinator
 from gg.runtime.config import RuntimeSettings
@@ -426,7 +425,7 @@ def github_connection_router(
         assert store is not None
         try:
             await asyncio.to_thread(store.begin, user["id"], user["session_id"], state)
-        except (SQLAlchemyError, sqlite3.Error):
+        except sqlite3.Error:
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
@@ -480,7 +479,7 @@ def github_connection_router(
             consumed = await asyncio.to_thread(
                 store.consume, user["id"], user["session_id"], state
             )
-        except (SQLAlchemyError, sqlite3.Error):
+        except sqlite3.Error:
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
@@ -521,13 +520,13 @@ def github_connection_router(
                 raise HTTPException(
                     status_code=503, detail="GitHub unavailable", headers=NO_STORE
                 ) from None
-            except (IntegrityError, sqlite3.IntegrityError):
+            except sqlite3.IntegrityError:
                 raise HTTPException(
                     status_code=409,
                     detail="GitHub account already linked",
                     headers=NO_STORE,
                 ) from None
-            except (SQLAlchemyError, sqlite3.Error):
+            except sqlite3.Error:
                 raise HTTPException(
                     status_code=503,
                     detail="GitHub connection unavailable",
@@ -577,7 +576,7 @@ def github_connection_router(
             raise HTTPException(
                 status_code=503, detail="GitHub unavailable", headers=NO_STORE
             ) from None
-        except (SQLAlchemyError, sqlite3.Error):
+        except sqlite3.Error:
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
@@ -591,7 +590,7 @@ def github_connection_router(
         assert store is not None
         try:
             await asyncio.to_thread(store.disconnect, user["id"])
-        except (SQLAlchemyError, sqlite3.Error):
+        except sqlite3.Error:
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
@@ -653,7 +652,7 @@ def github_connection_router(
             applied = await asyncio.to_thread(
                 store.webhook, delivery, event, action, installation_id, github_id
             )
-        except (SQLAlchemyError, sqlite3.Error):
+        except sqlite3.Error:
             raise HTTPException(status_code=503, detail="webhook unavailable") from None
         await barrier()
         return {"applied": applied}

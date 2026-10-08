@@ -14,10 +14,6 @@ calls the control plane API directly.
   Pi, local workspaces, and conversation persistence.
 - `packages/gg-sdk/` — shared Pydantic HTTP contracts, Python task client,
   and `gg-task` CLI. It imports neither backend nor sandbox code.
-- `supabase/` — Supabase local configuration and the frozen pre-Alembic
-  migration history.
-- `backend/alembic/` — authoritative application-schema migrations.
-- `scripts/` — operational smoke checks.
 - `docs/` — architecture, decisions, and task history.
 - `tests/` — repository-wide boundary and image checks.
 
@@ -51,26 +47,10 @@ npm run dev
 
 ## Database migrations
 
-The backend uses SQLAlchemy 2.x with the psycopg driver. Alembic owns every new
-change to `app_private`, `runtime_private`, and `vault_private`; do not add new
-application DDL under `supabase/migrations/`. Supabase still owns Auth and the
-Postgres service. Step-by-step workflow for agents and humans:
-[`.agents/skills/alembic-migration/SKILL.md`](.agents/skills/alembic-migration/SKILL.md).
-
-Use a server-only migrator connection, never the `gg_runtime` URL:
-
-```bash
-GG_MIGRATION_DATABASE_URL='postgresql://...' make db-current
-GG_MIGRATION_DATABASE_URL='postgresql://...' make db-check
-GG_MIGRATION_DATABASE_URL='postgresql://...' make db-upgrade
-```
-
-Revision `0001_application_baseline` adopts an existing version-7 schema after
-validating all required tables, or creates the application schemas in a fresh
-Supabase database. It does not drop an adopted schema on downgrade; recovery
-from the baseline requires a verified backup. Local `supabase-local-reset`
-applies the frozen Supabase history and then records/verifies the Alembic
-baseline.
+The runtime stores state in SQLite. Sequential migrations in
+`backend/gg/runtime/sqlite_migrations.py` advance `PRAGMA user_version` and
+validate the schema. The Modal init, migration, backup, and restore commands
+are documented in [the state operations runbook](docs/modal-state-operations.md).
 
 ## Docs
 

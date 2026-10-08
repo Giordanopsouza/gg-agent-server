@@ -1,7 +1,7 @@
 ---
 id: 120-remove-legacy-db-tooling
 feature: sqlite-modal
-status: pending
+status: done
 depends_on: ["119-remove-alembic-revisions","112-modal-state-operations"]
 ---
 
@@ -11,15 +11,15 @@ depends_on: ["119-remove-alembic-revisions","112-modal-state-operations"]
 
 **Critérios de aceitação:**
 
-- [ ] Excluir script.py.mako/alembic.ini e raiz package.json/package-lock.json usados só para Supabase.
-- [ ] Root Makefile remove verbs/scripts Supabase/Postgres/Alembic e mantém comandos SQLite/Modal.
-- [ ] Frontend npm permanece; builds dos pacotes e frontend continuam disponíveis.
+- [x] Excluir script.py.mako/alembic.ini e raiz package.json/package-lock.json usados só para Supabase.
+- [x] Root Makefile remove verbs/scripts Supabase/Postgres/Alembic e mantém comandos SQLite/Modal.
+- [x] Frontend npm permanece; builds dos pacotes e frontend continuam disponíveis.
 
 **Verificação:**
 
-- [ ] Teste/comando focado: `make help; make build; make frontend-build; git diff --check`.
-- [ ] Demo/check operacional: Inventariar scripts/supabase presentes e remover referências quebradas sem recriar arquivos ausentes.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
+- [x] Teste/comando focado: `make help; make build; make frontend-build; git diff --check`.
+- [x] Demo/check operacional: Inventariar scripts/supabase presentes e remover referências quebradas sem recriar arquivos ausentes.
+- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [119-remove-alembic-revisions](119-remove-alembic-revisions.md), [112-modal-state-operations](112-modal-state-operations.md).
 
@@ -34,3 +34,5 @@ depends_on: ["119-remove-alembic-revisions","112-modal-state-operations"]
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
 
 **Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
+
+**Resultado (2026-10-08):** Targets quebrados removidos; `scripts/` e `supabase/` não estavam presentes. `make help`, builds Python e frontend passaram; README agora aponta para migrações SQLite e runbook Modal. Ver [provas 118–120](evidence/118-120-verification.md).

@@ -7,7 +7,7 @@ TESTS := backend/tests
 SOURCES := backend/gg backend/tests
 
 .PHONY: help install test unit-tests integration-tests lint-check lint-fix
-.PHONY: format-check format-fix pre-commit build run docker-build production-smoke-tests
+.PHONY: format-check format-fix pre-commit build run docker-build
 
 help:
 	@printf '%s\n' 'backend: install test unit-tests lint-check format-check build run'
@@ -44,9 +44,6 @@ build:
 
 run:
 	$(UV_RUN) python -m gg.runtime --host 127.0.0.1 --port 8001
-
-production-smoke-tests:
-	$(UV_RUN) python scripts/runtime_postgres_tests.py backend/tests/test_production_operations.py
 
 .PHONY: modal-init modal-migrate modal-backup modal-restore modal-deploy modal-rollover modal-stop modal-verify
 
