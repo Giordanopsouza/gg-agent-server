@@ -1,103 +1,64 @@
 ---
 name: local-stack
 description: >-
-  Run the task frontend and gg.runtime control plane locally, then exercise a
-  changed feature through the real UI or API before shipping it. Use after
-  implementing a platform feature or when diagnosing frontend/backend integration.
+  Run the React task UI and SQLite gg.runtime locally with a Google session,
+  then prove a changed platform feature through a real dispatched task.
 ---
 
 # Local task stack
 
-The task UI talks to `gg.runtime` on port 8001. `make run` starts `gg.server`
-on port 8000, which is a different service. Work from the repository root.
+Work from the task worktree. `make run` starts the separate sandbox server
+`gg.server` on port 8000. `make run-runtime` starts the task API `gg.runtime`
+on port 8001. The development UI runs on Vite port 5173. Follow
+`docs/sqlite-modal-operations.md` for local and published settings.
 
 ## Start and verify
 
 1. Check whether `http://127.0.0.1:8001/health` and
-   `http://127.0.0.1:5173/` already respond. Reuse a working process; start
-   only what is down. Install missing dependencies with `uv sync --no-editable`
-   at the root or `npm ci` in `frontend/`. Local Postgres must already be up
-   (`npm ci` at the root if needed, then `make supabase-local-start`). `.env`
-   must set `GG_RUNTIME_DATABASE_URL`
-   and `GG_RUNTIME_API_KEY`. Do not print those values.
-2. For an end-to-end run, load the local credentials without printing them and
-   start the control plane with dispatch enabled. The runtime reads the local
-   Supabase ledger (`runtime_private`); there is no SQLite file and no
-   `GG_TASK_DB_PATH`. Before enabling dispatch, confirm no unrelated task is
-   already `queued`:
+   `http://127.0.0.1:5173/` already respond; reuse healthy processes. Install
+   missing dependencies with `uv sync --no-editable` or
+   `make frontend-install`. Use private DB/snapshot paths outside the repo.
+   Explicitly initialize once with:
 
-   ```bash
-   set -a && source .env && set +a
-   GG_TASK_DISPATCH_ENABLED=true \
-   GG_TASK_CAPACITY=1 \
-   make run-runtime
+   ```sh
+   uv run --no-editable python -m gg.runtime.db_cli init \
+     --db "$GG_RUNTIME_DB_PATH" --snapshot "$GG_RUNTIME_SNAPSHOT_PATH"
    ```
 
-   This provisions one Modal sandbox per submitted task. The local `.env`
-   needs a working `OPENROUTER_API_KEY`, and Modal must already be configured
-   with its app and published image. Do not submit a task until the proxy
-   check below succeeds.
+   Never initialize over existing state. Startup restores a missing local DB
+   only from a valid snapshot. A missing or invalid snapshot fails closed.
 
-3. In a second terminal, run Vite with an explicit local proxy:
+2. Load private settings without printing them. `GG_RUNTIME_DB_PATH`,
+   `GG_RUNTIME_SNAPSHOT_PATH`, `GG_RUNTIME_API_KEY`, Google client ID/secret,
+   cookie and vault keys, GitHub App settings and Modal credentials/image must
+   be available. Set `GG_WEB_ORIGIN=http://127.0.0.1:5173` and
+   `GG_WEB_COOKIE_SECURE=false` only for loopback HTTP. Register the matching
+   Google and GitHub callbacks. Before dispatch, inspect the queue for
+   unrelated tasks; start the runtime with
+   `GG_TASK_DISPATCH_ENABLED=true make run-runtime` when it is safe. This
+   provisions a Modal sandbox per task.
 
-   ```bash
-   cd frontend
-   VITE_TASK_API_URL= \
-   VITE_DEV_API_PROXY=http://127.0.0.1:8001 \
-   npm run dev -- --host 127.0.0.1 --port 5173
+3. In a second terminal, override any private Vite proxy setting explicitly:
+
+   ```sh
+   VITE_DEV_API_PROXY=http://127.0.0.1:8001 make frontend-dev
    ```
 
-   `frontend/.env.local` can point `VITE_DEV_API_PROXY` at Railway. The explicit
-   override prevents a local browser test from calling the remote runtime.
-   Keep `VITE_TASK_API_URL` empty so browser requests use Vite's `/tasks`
-   proxy.
+   Check `/health` on 8001 and through Vite. The browser uses relative URLs,
+   so OAuth, cookies, task API and WebSocket share the Vite origin. Do not enter
+   the runtime operations key into the UI or browser storage.
 
-4. Require all three checks before using the UI. Use the key already loaded
-   from `.env`; do not echo it:
+## Exercise the feature
 
-   ```bash
-   curl -fsS http://127.0.0.1:8001/health
-   curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5173/
-   curl -fsS -o /dev/null -w '%{http_code}\n' \
-     -H "X-API-Key: $GG_RUNTIME_API_KEY" http://127.0.0.1:5173/tasks
-   ```
+Open `http://127.0.0.1:5173/`, sign in through Google and set personal
+OpenRouter and GitHub credentials in Settings. Select an authorized repository
+and base branch for code tasks; a sandbox cannot inspect the local checkout.
+Submit a task the sandbox can perform and verify its activity events, final
+agent response, result manifest and checks. Confirm
+`GET /tasks/dispatch/status` shows the reservation released. A queued task,
+admission-only result or `succeeded` label alone does not prove fulfillment.
+For an API-only change, also exercise its route and stored effect.
 
-   Expect `{"status":"ok"}`, `200`, and `200`. A `401` from the proxy while
-   the backend accepts the key usually means Vite is targeting another
-   runtime. Fix that before entering a key or submitting a task in the UI.
-
-If the environment blocks a local bind or loopback request, use its supported
-permission escalation. If uv cannot write its default cache, set
-`UV_CACHE_DIR` to a writable temporary directory.
-
-## Exercise the changed feature
-
-Open `http://127.0.0.1:5173/` in a browser, enter the `GG_RUNTIME_API_KEY`
-value in the sidebar, and save it. The UI keeps this key in browser
-`localStorage` as `gg.runtime.apiKey`. Walk the changed flow by clicking,
-typing, submitting, and navigating. Use a task the sandbox can actually perform.
-With blank repository fields, give it a self-contained task such as creating a small file
-and reading it back. To validate work on this codebase inside the sandbox,
-provide an accessible GitHub repository and base branch, with the needed clone
-credential configured. A blank sandbox cannot inspect the local checkout.
-
-Verify the task appears in the sidebar, opens its detail page, and moves
-through `queued` and `running` to a terminal state. Require actual activity
-events, `result.manifest.agent_outcome`, and a final agent response that
-fulfills the prompt. `succeeded` alone is insufficient: an agent can finish
-successfully while reporting that it lacked the repository needed for the
-requested validation. Confirm `GET /tasks/dispatch/status` has no remaining
-reservation after completion. A `check_outcome` of `not_run` means no check
-command ran. Check relevant empty and error states when the feature changes
-them.
-
-For an admission-only check, explicitly run with
-`GG_TASK_DISPATCH_ENABLED=false`; a resulting `queued` task proves UI, proxy,
-API, and durable admission only. For an API-only feature, also exercise its
-route with `X-API-Key` and verify the response and stored effect.
-
-## Finish
-
-Report the URL, action taken, observed state, and any boundary the check did
-not cover. Leave the processes running while the user is testing. Otherwise
-stop only processes started for this check.
+If OAuth, credentials, Modal access, or local bind prevent the real run, record
+the first unmet prerequisite and the exact boundary tested. Stop only
+processes started for this check unless the user is actively testing them.

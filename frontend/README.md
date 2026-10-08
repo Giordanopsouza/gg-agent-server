@@ -6,8 +6,10 @@ session cookie, submits tasks, and polls durable event copies with
 
 ## Run locally
 
-Start the control plane as described in the [root README](../README.md). Its
-default URL is `http://127.0.0.1:8001`. Then:
+Initialize SQLite and start the control plane as described in the
+[local runbook](../docs/sqlite-modal-operations.md). Its default URL is
+`http://127.0.0.1:8001`; `make run` starts the separate sandbox server on
+port 8000. Then:
 
 ```bash
 cd frontend
@@ -22,9 +24,10 @@ the send button or Cmd/Ctrl+Enter. The OpenRouter key is sent to the vault API a
 never stored in browser storage. With the default setup, Vite proxies `/tasks`
 and `/auth` to `http://127.0.0.1:8001`, so the browser stays on one origin.
 For local OAuth and mutation requests, set `GG_WEB_ORIGIN` to the exact Vite
-origin (for example `http://127.0.0.1:5173`) and configure the Google and
-GitHub callback URLs for that origin. The backend must have its Auth, GitHub
-App, SQLite, and vault settings configured.
+origin (for example `http://127.0.0.1:5173`). Register
+`/auth/google/callback` and `/auth/github/callback` on that origin with the
+providers. Use a Google session and per-user OpenRouter/GitHub credentials;
+do not put the private runtime operations key in browser storage.
 
 ## Configuration
 
@@ -38,7 +41,6 @@ Build and verify:
 ```bash
 npm test
 npm run build
-
 ```
 
 From the repository root, `make frontend-install`, `make frontend-test`, and

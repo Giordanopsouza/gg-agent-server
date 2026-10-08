@@ -9,6 +9,16 @@ depends_on: ["108-sandbox-sqlite-live-demo","111-modal-runtime-server","112-moda
 
 **Descrição:** Configurar recursos reais e callbacks na URL HTTPS descoberta do Modal, depois validar login e conexões do produto publicado.
 
+**Decisão do usuário — 2026-10-08:** Manter Google OAuth com público External
+e status **Testing** enquanto o produto é usado apenas pelo proprietário.
+A publicação do OAuth e a preparação de documentos para o lançamento público
+ficam adiadas. Isso não impede configurar callbacks Modal nem executar as
+provas reais de login, conexões e tarefas. O login atual pede apenas
+`openid email`, abrangidos pela exceção do Google para autenticação básica:
+usuários não precisam constar da lista de testes. A task continua pendente;
+esta decisão não comprova os demais critérios abaixo. Ver
+[evidência e regra oficial](evidence/123-modal-onboarding.md).
+
 **Critérios de aceitação:**
 
 - [ ] Google OAuth externo/publicado admite contas fora da lista de teste; origins/callbacks e GitHub webhook apontam exatamente à URL Modal.

@@ -1,7 +1,7 @@
 ---
 id: 121-sqlite-architecture-record
 feature: sqlite-modal
-status: pending
+status: done
 depends_on: ["102-durable-effect-barriers","107-incremental-event-sync","111-modal-runtime-server","118-remove-postgres-dependencies","120-remove-legacy-db-tooling"]
 ---
 
@@ -11,15 +11,15 @@ depends_on: ["102-durable-effect-barriers","107-incremental-event-sync","111-mod
 
 **Critérios de aceitação:**
 
-- [ ] Novo ADR cobre SQLite local/snapshots, um escritor, durabilidade por revisão, Google sub e identidade externa.
-- [ ] ADRs 0005/0006 marcados como substituídos com link, sem apagar raciocínio histórico.
-- [ ] README e AGENTS.md descrevem fronteiras, comandos e persistência atual; novas instruções não mandam usar Postgres.
+- [x] Novo ADR cobre SQLite local/snapshots, um escritor, durabilidade por revisão, Google sub e identidade externa.
+- [x] ADRs 0005/0006 marcados como substituídos com link, sem apagar raciocínio histórico.
+- [x] README e AGENTS.md descrevem fronteiras, comandos e persistência atual; novas instruções não mandam usar Postgres.
 
 **Verificação:**
 
-- [ ] Teste/comando focado: `git diff --check`.
-- [ ] Demo/check operacional: Revisar decisões contra spec.md e comandos efetivamente implementados; carregar skill domain-modeling ao implementar ADR.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
+- [x] Teste/comando focado: `git diff --check`.
+- [x] Demo/check operacional: Revisar decisões contra spec.md e comandos efetivamente implementados; carregar skill domain-modeling ao implementar ADR.
+- [x] Sem mudança de código nesta task; resultados em [evidência 121–122](evidence/121-122-verification.md).
 
 **Dependências:** [102-durable-effect-barriers](102-durable-effect-barriers.md), [107-incremental-event-sync](107-incremental-event-sync.md), [111-modal-runtime-server](111-modal-runtime-server.md), [118-remove-postgres-dependencies](118-remove-postgres-dependencies.md), [120-remove-legacy-db-tooling](120-remove-legacy-db-tooling.md).
 

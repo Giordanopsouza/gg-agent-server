@@ -34,7 +34,11 @@ make format-check
 make run-runtime
 ```
 
-The control plane starts on port 8001. To work on the frontend:
+The control plane starts on port 8001 and requires an explicitly initialized
+SQLite database and snapshot, local Google OAuth settings, and a private
+`GG_RUNTIME_API_KEY` for operations. Follow the
+[local and Modal runbook](docs/sqlite-modal-operations.md) before starting it.
+To work on the frontend:
 
 ```bash
 cd frontend
@@ -47,15 +51,18 @@ npm run dev
 
 ## Database migrations
 
-The runtime stores state in SQLite. Sequential migrations in
+The runtime stores state in local SQLite and publishes validated snapshots to
+the Modal Volume. Sequential migrations in
 `backend/gg/runtime/sqlite_migrations.py` advance `PRAGMA user_version` and
-validate the schema. The Modal init, migration, backup, and restore commands
-are documented in [the state operations runbook](docs/modal-state-operations.md).
+validate the schema. Google OIDC identifies users by verified `sub` and local
+sessions live in the same database. The Modal init, migration, backup, and
+restore commands are documented in [the state operations runbook](docs/modal-state-operations.md).
 
 ## Docs
 
 - [Component layout decision](docs/adr/0004-component-layout.md)
-- [SQLAlchemy and Alembic decision](docs/adr/0006-sqlalchemy-alembic.md)
+- [SQLite, Modal and Google decision](docs/adr/0008-sqlite-modal-google.md)
+- [Local and published operations](docs/sqlite-modal-operations.md)
 - [MVP web plan](docs/mvp-web-plan.md)
 - [Task web UI](frontend/README.md)
 - [Task tracker](docs/tasks/README.md)

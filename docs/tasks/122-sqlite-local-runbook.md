@@ -1,7 +1,7 @@
 ---
 id: 122-sqlite-local-runbook
 feature: sqlite-modal
-status: pending
+status: done
 depends_on: ["108-sandbox-sqlite-live-demo","112-modal-state-operations","120-remove-legacy-db-tooling","121-sqlite-architecture-record"]
 ---
 
@@ -11,15 +11,15 @@ depends_on: ["108-sandbox-sqlite-live-demo","112-modal-state-operations","120-re
 
 **Critérios de aceitação:**
 
-- [ ] Completar limpeza de comandos backend/exemplos locais iniciada na 120; frontend npm mantém build/testes sem servidor Node.
-- [ ] local-stack usa SQLite explicitamente inicializado, sessões Google e credenciais individuais; sem chave administrativa em localStorage.
-- [ ] Documentar requisitos live, callback local, proxy Vite explícito e sequência QA; manter tracker anterior com status/tarefas incompletas preservados.
+- [x] Completar limpeza de comandos backend/exemplos locais iniciada na 120; frontend npm mantém build/testes sem servidor Node.
+- [x] local-stack usa SQLite explicitamente inicializado, sessões Google e credenciais individuais; sem chave administrativa em localStorage.
+- [x] Documentar requisitos live, callback local, proxy Vite explícito e sequência QA; manter tracker anterior com status/tarefas incompletas preservados.
 
 **Verificação:**
 
-- [ ] Teste/comando focado: `make help; make frontend-test; make frontend-build; git diff --check`.
-- [ ] Demo/check operacional: Aplicar runbook/skill SQLite no fluxo real; skill ignorada pelo Git exige localização/handoff registrados, sem editar checkout principal nesta task.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
+- [x] Teste/comando focado: `make help; make frontend-test; make frontend-build; git diff --check`.
+- [x] Demo/check operacional: Inicialização SQLite e health HTTP do runtime real; skill atualizada na worktree e versionada, conforme [evidência 121–122](evidence/121-122-verification.md).
+- [x] Sem mudança de código nesta task; resultados e limite do login humano em [evidência 121–122](evidence/121-122-verification.md).
 
 **Dependências:** [108-sandbox-sqlite-live-demo](108-sandbox-sqlite-live-demo.md), [112-modal-state-operations](112-modal-state-operations.md), [120-remove-legacy-db-tooling](120-remove-legacy-db-tooling.md), [121-sqlite-architecture-record](121-sqlite-architecture-record.md).
 

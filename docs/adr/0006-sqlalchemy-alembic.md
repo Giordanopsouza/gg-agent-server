@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded by ADR-0008
 ---
 
 # Use SQLAlchemy metadata and Alembic for application schemas
+
+Superseded by [ADR 0008](0008-sqlite-modal-google.md). The decision below
+records the former Postgres schema workflow.
 
 The backend uses one bounded synchronous SQLAlchemy engine over psycopg and
 keeps explicit SQL for the ledger's concurrency-sensitive operations. Alembic
