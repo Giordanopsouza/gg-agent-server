@@ -15,6 +15,7 @@ from httpx import ASGITransport
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.ledger import SandboxProviderState, TaskLedger
 from gg.runtime.modal_sandbox import SandboxConnection, SandboxSnapshot
+from gg.runtime.sqlite_db import SQLiteDB, initialize
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.domain import Event, EventKind, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.task_execution import (
@@ -26,7 +27,6 @@ from gg.sdk.task_execution import (
     TaskResultManifest,
 )
 from gg.sdk.tasks import TaskState
-from test_support.postgres_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -49,7 +49,6 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
 
     @app.post("/api/task-executions/start")
     async def start(body: StartTaskExecutionRequest) -> TaskExecutionRecord:
-        state.start_models.append(body.model)
         existing = next(
             (
                 item
@@ -60,6 +59,7 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
         )
         if existing is not None:
             return existing
+        state.start_models.append(body.model)
         conversation_id = (
             f"conv-{body.task_id}" if state.conversation_on_start else None
         )
@@ -130,8 +130,14 @@ def _build_fake_agent(state: FakeAgentState) -> FastAPI:
         return state.manifests[execution_id]
 
     @app.get("/api/conversations/{conversation_id}/events")
-    async def list_events(conversation_id: str) -> list[Event]:
-        return state.events.get(conversation_id, [])
+    async def list_events(
+        conversation_id: str, after: int = 0, limit: int = 200
+    ) -> list[Event]:
+        return [
+            event
+            for event in state.events.get(conversation_id, [])
+            if event.seq > after
+        ][:limit]
 
     @app.post("/api/conversations/{conversation_id}/messages")
     async def steer(conversation_id: str, body: dict[str, str]) -> MessageReceipt:
@@ -240,7 +246,8 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
 ) -> None:
     state = FakeAgentState()
     agent_app = _build_fake_agent(state)
-    ledger = new_ledger()
+    initialize(tmp_path / "runtime.db")
+    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent_app)
     settings = RuntimeSettings(
@@ -297,9 +304,10 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
 
 
 @pytest.mark.anyio
-async def test_followup_runs_in_the_same_workspace(tmp_path) -> None:
+async def test_followup_runs_in_the_same_workspace(tmp_path, monkeypatch) -> None:
     state = FakeAgentState()
-    ledger = new_ledger()
+    initialize(tmp_path / "runtime.db")
+    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(
         ledger=ledger, agent_app=_build_fake_agent(state)
@@ -315,6 +323,8 @@ async def test_followup_runs_in_the_same_workspace(tmp_path) -> None:
         settings=settings,
     )
 
+    # Drive each turn explicitly; avoid racing the background supervision loop.
+    monkeypatch.setattr(supervision, "_ensure_loop", lambda task_id: None)
     app = create_app(
         settings,
         task_ledger=ledger,
@@ -333,6 +343,9 @@ async def test_followup_runs_in_the_same_workspace(tmp_path) -> None:
             task_id = created.json()["id"]
             for _ in range(50):
                 await app.state.task_scheduler.dispatch_once()
+                await supervision._drive_running(task_id)
+                if ledger.get(task_id).state is TaskState.FINALIZING:
+                    await supervision._finalize(task_id)
                 record = ledger.get(task_id)
                 assert record is not None
                 if record.state is TaskState.IDLE:
@@ -347,6 +360,9 @@ async def test_followup_runs_in_the_same_workspace(tmp_path) -> None:
             assert sent.status_code == 200
             for _ in range(50):
                 await app.state.task_scheduler.dispatch_once()
+                await supervision._drive_running(task_id)
+                if ledger.get(task_id).state is TaskState.FINALIZING:
+                    await supervision._finalize(task_id)
                 receipt = ledger.get_task_message_receipt(task_id, "message-1")
                 if (
                     len(state.executions) == 2
@@ -356,10 +372,11 @@ async def test_followup_runs_in_the_same_workspace(tmp_path) -> None:
                     break
                 await asyncio.sleep(0.05)
             result = await client.get(f"/tasks/{task_id}/result", headers=_AUTH)
-            ledger._conn.execute(
-                "UPDATE tasks SET workspace_last_activity_at = %s WHERE id = %s",
-                ((datetime.now(UTC) - timedelta(minutes=46)).isoformat(), task_id),
-            )
+            with ledger.db.write() as tx:
+                tx.connection.execute(
+                    "UPDATE tasks SET workspace_last_activity_at = ? WHERE id = ?",
+                    ((datetime.now(UTC) - timedelta(minutes=46)).isoformat(), task_id),
+                )
             await supervision._drive_running(task_id)
             assert ledger.get(task_id).state is TaskState.SLEEPING
             assert ledger.get_reservation(task_id) is None
@@ -371,21 +388,27 @@ async def test_followup_runs_in_the_same_workspace(tmp_path) -> None:
             assert queued.status_code == 200
             for _ in range(50):
                 await app.state.task_scheduler.dispatch_once()
+                await supervision._drive_running(task_id)
+                if ledger.get(task_id).state is TaskState.FINALIZING:
+                    await supervision._finalize(task_id)
                 if (
                     len(state.executions) == 3
                     and ledger.get(task_id).state is TaskState.IDLE
                 ):
                     break
                 await asyncio.sleep(0.05)
-            ledger._conn.execute(
-                "UPDATE tasks SET workspace_last_activity_at = %s WHERE id = %s",
-                ((datetime.now(UTC) - timedelta(minutes=46)).isoformat(), task_id),
-            )
+            with ledger.db.write() as tx:
+                tx.connection.execute(
+                    "UPDATE tasks SET workspace_last_activity_at = ? WHERE id = ?",
+                    ((datetime.now(UTC) - timedelta(minutes=46)).isoformat(), task_id),
+                )
             await supervision._drive_running(task_id)
-            ledger._conn.execute(
-                "UPDATE tasks SET workspace_last_activity_at = %s WHERE id = %s",
-                ((datetime.now(UTC) - timedelta(days=8)).isoformat(), task_id),
-            )
+            with ledger.db.write() as tx:
+                tx.connection.execute(
+                    "UPDATE tasks SET workspace_last_activity_at = ? WHERE id = ?",
+                    ((datetime.now(UTC) - timedelta(days=8)).isoformat(), task_id),
+                )
+            app.state.task_scheduler._last_maintenance = None
             await app.state.task_scheduler.dispatch_once()
             expired_result = await client.get(f"/tasks/{task_id}/result", headers=_AUTH)
 
@@ -404,7 +427,8 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
 ) -> None:
     state = FakeAgentState(conversation_on_start=False, distinct_execution_id=True)
     agent_app = _build_fake_agent(state)
-    ledger = new_ledger()
+    initialize(tmp_path / "runtime.db")
+    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent_app)
     settings = RuntimeSettings(
@@ -463,7 +487,8 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
 
 @pytest.mark.anyio
 async def test_cancel_queued_task_is_idempotent(tmp_path) -> None:
-    ledger = new_ledger()
+    initialize(tmp_path / "runtime.db")
+    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
     ledger.open()
     settings = RuntimeSettings(
         api_key="control-secret",

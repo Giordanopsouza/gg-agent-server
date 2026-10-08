@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from gg.sdk import Event, SendMessageRequest
 from gg.server.agent import (
@@ -46,10 +46,12 @@ async def send_message(
 @event_router.get("")
 async def list_events(
     conversation_id: str,
+    after: int = Query(default=0, ge=0),
+    limit: int | None = Query(default=None, ge=1),
     service: ConversationService = Depends(get_conversation_service),
 ) -> list[Event]:
     """Return persisted events in seq order."""
     try:
-        return service.list_events(conversation_id)
+        return service.list_events(conversation_id, after=after, limit=limit)
     except ConversationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

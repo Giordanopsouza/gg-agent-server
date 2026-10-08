@@ -1,7 +1,7 @@
 ---
 id: 107-incremental-event-sync
 feature: sqlite-modal
-status: pending
+status: done
 depends_on: ["096-sqlite-task-evidence","106-sandbox-event-pagination"]
 ---
 
@@ -11,15 +11,15 @@ depends_on: ["096-sqlite-task-evidence","106-sandbox-event-pagination"]
 
 **Critérios de aceitação:**
 
-- [ ] Cursor de origem e eventos da página são commitados juntos; deduplicação preserva cursor público monotônico.
-- [ ] Respeitar limites de evidência; truncar payload sem interromper avanço do cursor; trocar conversa abre cursor independente.
-- [ ] Após rollback/restart/retry, retomar da última página completa; WebSocket notifica somente eventos inseridos.
+- [x] Cursor de origem e eventos da página são commitados juntos; deduplicação preserva cursor público monotônico.
+- [x] Respeitar limites de evidência; truncar payload sem interromper avanço do cursor; trocar conversa abre cursor independente.
+- [x] Após rollback/restart/retry, retomar da última página completa; WebSocket notifica somente eventos inseridos.
 
 **Verificação:**
 
-- [ ] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_incremental_event_sync.py backend/tests/test_task_supervision_integration.py`.
-- [ ] Demo/check operacional: Sincronizar 450 eventos, reiniciar no limite de página e confirmar igualdade de evidência sem reler todo o histórico.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
+- [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_incremental_event_sync.py backend/tests/test_task_supervision_integration.py`.
+- [x] Demo/check operacional: Sincronizar 450 eventos, reiniciar no limite de página e confirmar igualdade de evidência sem reler todo o histórico.
+- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [096-sqlite-task-evidence](096-sqlite-task-evidence.md), [106-sandbox-event-pagination](106-sandbox-event-pagination.md).
 
@@ -34,3 +34,8 @@ depends_on: ["096-sqlite-task-evidence","106-sandbox-event-pagination"]
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
 
 **Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
+
+## Resultado — 2026-10-08
+
+Implementação e aceite automatizado concluídos na worktree 091.
+Ver [provas 106–107](evidence/106-107-verification.md).

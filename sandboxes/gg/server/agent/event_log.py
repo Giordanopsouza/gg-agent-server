@@ -113,12 +113,19 @@ class EventLog:
                 (self.key,),
             ).fetchone()[0]
 
-    def list(self) -> list[Event]:
+    def list(self, *, after: int = 0, limit: int | None = None) -> list[Event]:
+        if after < 0 or (limit is not None and limit < 1):
+            raise ValueError("after must be nonnegative and limit positive")
         with self.store.connection() as connection:
-            rows = connection.execute(
-                "SELECT payload FROM events WHERE conversation = ? ORDER BY seq",
-                (self.key,),
-            ).fetchall()
+            query = (
+                "SELECT payload FROM events WHERE conversation = ? "
+                "AND seq > ? ORDER BY seq"
+            )
+            parameters = (self.key, after)
+            if limit is not None:
+                query += " LIMIT ?"
+                parameters += (limit,)
+            rows = connection.execute(query, parameters).fetchall()
         return [Event.model_validate_json(row[0]) for row in rows]
 
 

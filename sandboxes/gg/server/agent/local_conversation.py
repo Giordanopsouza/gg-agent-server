@@ -208,9 +208,9 @@ class LocalConversation:
             self._cancelling = True
         self._agent_backend.cancel()
 
-    def list_events(self) -> list[Event]:
+    def list_events(self, *, after: int = 0, limit: int | None = None) -> list[Event]:
         """Return persisted events in seq order."""
-        return self._event_log.list()
+        return self._event_log.list(after=after, limit=limit)
 
     def set_persisted_event_listener(
         self, listener: PersistedEventListener | None

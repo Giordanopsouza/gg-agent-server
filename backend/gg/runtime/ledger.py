@@ -933,43 +933,114 @@ class TaskLedger:
         """Insert one copied event; return cursor or None when deduplicated."""
         payload = event_json if event_json is not None else event.model_dump_json()
         with self._write_connection() as connection:
-            existing = connection.execute(
-                """
-            SELECT cursor_seq FROM task_event_identities WHERE task_id = ? AND
-            source_id = ? AND source_seq = ?
-            """,
-                (task_id, source_id, source_seq),
-            ).fetchone()
-            if existing is not None:
-                return None
-            self._require_payload(connection, task_id)
-            connection.execute(
-                """
-            INSERT INTO task_event_counters(task_id, value) VALUES (?, 0) ON
-            CONFLICT DO NOTHING
-            """,
-                (task_id,),
+            return self._insert_task_event(
+                connection, task_id, source_id, source_seq, payload
             )
-            cursor = connection.execute(
-                """
-            UPDATE task_event_counters SET value = value + 1 WHERE task_id = ?
-            RETURNING value
-            """,
-                (task_id,),
-            ).fetchone()["value"]
-            connection.execute(
-                "INSERT INTO task_event_identities VALUES (?, ?, ?, ?)",
-                (task_id, source_id, source_seq, cursor),
-            )
-            now = _utcnow_iso()
-            connection.execute(
-                """
-            INSERT INTO task_event_copies ( task_id, cursor_seq, source_id,
-            source_seq, event_json, created_at ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (task_id, cursor, source_id, source_seq, payload, now),
-            )
+
+    def _insert_task_event(
+        self,
+        connection: sqlite3.Connection,
+        task_id: str,
+        source_id: str,
+        source_seq: int,
+        payload: str,
+    ) -> int | None:
+        existing = connection.execute(
+            """
+        SELECT cursor_seq FROM task_event_identities WHERE task_id = ? AND
+        source_id = ? AND source_seq = ?
+        """,
+            (task_id, source_id, source_seq),
+        ).fetchone()
+        if existing is not None:
+            return None
+        self._require_payload(connection, task_id)
+        connection.execute(
+            """
+        INSERT INTO task_event_counters(task_id, value) VALUES (?, 0) ON
+        CONFLICT DO NOTHING
+        """,
+            (task_id,),
+        )
+        cursor = connection.execute(
+            """
+        UPDATE task_event_counters SET value = value + 1 WHERE task_id = ?
+        RETURNING value
+        """,
+            (task_id,),
+        ).fetchone()["value"]
+        connection.execute(
+            "INSERT INTO task_event_identities VALUES (?, ?, ?, ?)",
+            (task_id, source_id, source_seq, cursor),
+        )
+        now = _utcnow_iso()
+        connection.execute(
+            """
+        INSERT INTO task_event_copies ( task_id, cursor_seq, source_id,
+        source_seq, event_json, created_at ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (task_id, cursor, source_id, source_seq, payload, now),
+        )
         return cursor
+
+    def event_source_cursor(self, task_id: str, source_id: str) -> int:
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT source_seq FROM task_event_source_cursors "
+                "WHERE task_id = ? AND source_id = ?",
+                (task_id, source_id),
+            ).fetchone()
+        return 0 if row is None else row["source_seq"]
+
+    def copy_task_event_page(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        events: list[Event],
+        max_log_bytes: int | None = None,
+    ) -> list[tuple[int, Event]]:
+        """Commit source watermark, identities and bounded evidence atomically."""
+        from gg.runtime.storage import truncate_event_json
+
+        if not events:
+            return []
+        if len(events) > 200 or any(
+            event.seq <= 0 or (index and event.seq <= events[index - 1].seq)
+            for index, event in enumerate(events)
+        ):
+            raise ValueError(
+                "event page must contain at most 200 ordered source events"
+            )
+        inserted = []
+        with self._write_connection() as connection:
+            self._require_payload(connection, task_id)
+            log_bytes = connection.execute(
+                "SELECT COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS bytes "
+                "FROM task_event_copies WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()["bytes"]
+            for event in events:
+                payload = event.model_dump_json()
+                if max_log_bytes is not None:
+                    payload, _ = truncate_event_json(
+                        event,
+                        max_task_log_bytes=max_log_bytes,
+                        current_log_bytes=log_bytes,
+                    )
+                cursor = self._insert_task_event(
+                    connection, task_id, source_id, event.seq, payload
+                )
+                if cursor is not None:
+                    log_bytes += len(payload.encode("utf-8"))
+                    inserted.append((cursor, Event.model_validate_json(payload)))
+            connection.execute(
+                """INSERT INTO task_event_source_cursors VALUES (?, ?, ?)
+                ON CONFLICT(task_id, source_id) DO UPDATE SET
+                source_seq = MAX(source_seq, excluded.source_seq)""",
+                (task_id, source_id, events[-1].seq),
+            )
+        return inserted
 
     def list_task_events(
         self, task_id: str, *, after_cursor: int = 0

@@ -124,9 +124,11 @@ class ConversationService:
         """Append a user message. Does not start the agent loop."""
         return self.get(conversation_id).send_message(content)
 
-    def list_events(self, conversation_id: str) -> list[Event]:
+    def list_events(
+        self, conversation_id: str, *, after: int = 0, limit: int | None = None
+    ) -> list[Event]:
         """Return persisted events in seq order."""
-        return self.get(conversation_id).list_events()
+        return self.get(conversation_id).list_events(after=after, limit=limit)
 
     async def steer(
         self,

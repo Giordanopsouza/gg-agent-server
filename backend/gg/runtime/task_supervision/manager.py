@@ -24,8 +24,6 @@ from gg.runtime.repository_authorization import (
 )
 from gg.runtime.storage import (
     StorageLimits,
-    measure_task_evidence,
-    truncate_event_json,
     truncate_manifest,
 )
 from gg.runtime.task_supervisor_client import TaskSupervisorClient
@@ -567,46 +565,51 @@ class TaskSupervisionManager:
     async def _sync_events(
         self, task_id: str, connection: object, conversation_id: str
     ) -> None:
+        after = await asyncio.to_thread(
+            self._ledger.event_source_cursor, task_id, conversation_id
+        )
         async with connection.http_client(timeout=30) as client:  # type: ignore[attr-defined]
-            response = await client.get(f"/api/conversations/{conversation_id}/events")
-        if response.status_code == 404:
-            return
-        response.raise_for_status()
-        for payload in response.json():
-            event = Event.model_validate(payload)
-            event_json = event.model_dump_json()
-            if self._storage_limits is not None:
-                evidence = await asyncio.to_thread(
-                    measure_task_evidence, self._ledger, task_id
+            while True:
+                response = await client.get(
+                    f"/api/conversations/{conversation_id}/events",
+                    params={"after": after, "limit": 200},
                 )
-                event_json, _ = truncate_event_json(
-                    event,
-                    max_task_log_bytes=self._storage_limits.max_log_evidence_bytes,
-                    current_log_bytes=evidence.log_bytes,
+                if response.status_code == 404:
+                    return
+                response.raise_for_status()
+                events = [Event.model_validate(payload) for payload in response.json()]
+                if not events:
+                    return
+                if events[0].seq <= after:
+                    raise ValueError("sandbox event page did not advance source cursor")
+                inserted = await asyncio.to_thread(
+                    self._ledger.copy_task_event_page,
+                    task_id=task_id,
+                    source_id=conversation_id,
+                    events=events,
+                    max_log_bytes=(
+                        None
+                        if self._storage_limits is None
+                        else self._storage_limits.max_log_evidence_bytes
+                    ),
                 )
-            cursor = await asyncio.to_thread(
-                self._ledger.copy_task_event,
-                task_id=task_id,
-                source_id=conversation_id,
-                source_seq=event.seq,
-                event=event,
-                event_json=event_json,
-            )
-            if cursor is None:
-                continue
-            copy = TaskEventCopy(
-                cursor=cursor,
-                source_id=conversation_id,
-                source_seq=event.seq,
-                event=event,
-            )
-            if self._callbacks.on_event_copied:
-                self._callbacks.on_event_copied(task_id, cursor, event)
-            for queue in self._live.get(task_id, []):
-                try:
-                    queue.put_nowait(copy)
-                except asyncio.QueueFull:
-                    pass
+                for cursor, event in inserted:
+                    copy = TaskEventCopy(
+                        cursor=cursor,
+                        source_id=conversation_id,
+                        source_seq=event.seq,
+                        event=event,
+                    )
+                    if self._callbacks.on_event_copied:
+                        self._callbacks.on_event_copied(task_id, cursor, event)
+                    for queue in self._live.get(task_id, []):
+                        try:
+                            queue.put_nowait(copy)
+                        except asyncio.QueueFull:
+                            pass
+                after = events[-1].seq
+                if len(events) < 200:
+                    return
 
     async def _cancel_execution(
         self,

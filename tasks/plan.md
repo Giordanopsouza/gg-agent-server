@@ -348,3 +348,21 @@ Cada fatia limita as edições de implementação a cinco arquivos relevantes.
 O banco sandbox fica em conversations_dir/sandbox.db e é compartilhado pelo
 supervisor e helper. Arquivos nativos Pi e workspace permanecem no filesystem.
 Não importar JSON legado: a especificação exige banco novo.
+
+
+## Execução autorizada 106–108 (2026-10-08)
+
+Worktree 091 reutilizada, inicialmente limpa. Implementação em fatias por superfície:
+- 106a: EventLog SQL e propagação em LocalConversation/ConversationService (3 arquivos).
+- 106b: parâmetros HTTP e prova de páginas/validação (2 arquivos).
+- 107: migração 10, ledger, manager e duas suítes de testes (5 arquivos).
+- 108a: nome de imagem versionado, Dockerfile e teste da imagem (3 arquivos).
+- 108b: smoke live SQLite e demo API isolado com restart/PR draft.
+- 108c: login Google/GitHub App, demo pelo frontend, restart e evidências finais.
+
+106–108 concluídas. Imagem publicada, smoke live e QA aprovados. O demo pelo
+frontend autenticado com Google/GitHub App produziu a PR draft #82, checks,
+resposta útil e manifest. Restart preservou uma execução/mensagem/PR;
+workspace encerrado com reserved=0 e pending=0. Ver
+[106–107](../docs/tasks/evidence/106-107-verification.md) e
+[108](evidence/108-sandbox-demo.md).

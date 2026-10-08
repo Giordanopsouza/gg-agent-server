@@ -222,6 +222,15 @@ MIGRATIONS = (
                 ON task_reservations(reserved_at, task_id)""",
         ),
     ),
+    Migration(
+        10,
+        (
+            """CREATE TABLE task_event_source_cursors (
+                task_id TEXT NOT NULL, source_id TEXT NOT NULL,
+                source_seq INTEGER NOT NULL CHECK (source_seq >= 0),
+                PRIMARY KEY(task_id, source_id)) STRICT""",
+        ),
+    ),
 )
 SCHEMA_VERSION = MIGRATIONS[-1].version
 
