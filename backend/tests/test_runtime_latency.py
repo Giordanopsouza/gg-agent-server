@@ -134,7 +134,10 @@ async def test_slow_scheduler_database_does_not_block_event_loop(tmp_path):
         def list_reservations(self):
             return []
 
-        def list(self):
+        def count_queued(self):
+            return 0
+
+        def sleeping_workspace_candidates(self, **kwargs):
             return []
 
     scheduler = TaskScheduler(
@@ -241,7 +244,10 @@ async def test_idle_scheduler_throttles_retention_and_skips_storage_scan(
         def list_reservations(self):
             return []
 
-        def list(self):
+        def count_queued(self):
+            return 0
+
+        def sleeping_workspace_candidates(self, **kwargs):
             return []
 
     calls = []

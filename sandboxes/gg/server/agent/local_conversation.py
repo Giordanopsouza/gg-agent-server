@@ -21,12 +21,12 @@ from gg.server.agent.agent_backend import (
     create_agent_backend,
 )
 from gg.server.agent.event_log import (
+    BaseState,
     EventLog,
     MessageReceiptStore,
     load_base_state,
     load_meta,
-    save_base_state,
-    save_meta,
+    save_conversation_state,
 )
 from gg.server.agent.exceptions import (
     AgentCancelledError,
@@ -81,14 +81,6 @@ class LocalConversation:
         self._cancelling = False
         self.id = conversation_id or str(self.conversation_dir.name)
 
-        save_meta(
-            self.conversation_dir,
-            ConversationRecord(
-                id=self.id,
-                status=self._status,
-                working_dir=str(self.workspace.working_dir),
-            ),
-        )
         self._persist_status()
 
     @classmethod
@@ -281,29 +273,25 @@ class LocalConversation:
         self._persist_status()
         self._append_event(EventKind.STATUS, {"status": self._status})
 
-    # Write status and working_dir to base_state.json and meta.json.
+    # Persist catalog and base state together.
     def _persist_status(self) -> None:
-        save_base_state(
-            self.conversation_dir,
-            status=self._status,
-            working_dir=str(self.workspace.working_dir),
-            agent=self._agent,
-        )
-        save_meta(
+        save_conversation_state(
             self.conversation_dir,
             ConversationRecord(
                 id=self.id,
                 status=self._status,
                 working_dir=str(self.workspace.working_dir),
             ),
+            BaseState(
+                status=self._status,
+                working_dir=str(self.workspace.working_dir),
+                agent=self._agent,
+            ),
         )
 
     # Return the next event sequence number (one greater than the last on disk).
     def _next_seq(self) -> int:
-        events = self._event_log.list()
-        if not events:
-            return 1
-        return events[-1].seq + 1
+        return self._event_log.next_seq()
 
     # Build an event with the next seq and append it to the event log.
     def _append_event(self, kind: EventKind, payload: dict[str, Any]) -> Event:

@@ -1,6 +1,6 @@
 # Plano de implementação: SQLite e Google direto no Modal
 
-Status: tarefas 091–093 implementadas e validadas localmente; 094–128 pendentes.
+Status: tarefas 091–096 implementadas e validadas localmente; 097–128 pendentes.
 Data: 2026-10-07.
 Worktree: `.agents/worktrees/091-sqlite-modal`.
 Branch: `091-sqlite-modal`; base `2d1e2cc`.
@@ -164,30 +164,32 @@ flowchart TD
 
 - [x] WAL, rollback, revisão do snapshot e recuperação fechada comprovados (37 testes focados).
 - [x] QA e builds Python passaram; evidência nas tasks. Suite ampla: 258 passed, 92 skipped, 2 deselected; casos Postgres legados sem cobertura integral. Prova isolada sem wiring UI/runtime ou Volume real.
-- [ ] Revisão humana antes do próximo grupo; status sozinho não prova entrega.
+- [x] Usuário autorizou executar 094–096 em 2026-10-07 após o checkpoint 091–093.
 
 ### Após 94–96: Ledger de tarefas
 
-- [ ] Admissão, identidades externas, evidência e retenção passam contra SQLite.
-- [ ] Testes focados/build aplicável passam; evidência nas tasks; registrar primeiro bloqueio e boundary exato.
-- [ ] Revisão humana antes do próximo grupo; status sozinho não prova entrega.
+- [x] Admissão, identidades externas, evidência e retenção passam contra SQLite (26 testes novos).
+- [x] 63 testes focados 091–096; QA em ordem; builds Python aprovados. Suite ampla: 284 passed, 92 skipped, 2 deselected. Prova isolada no candidato, sem wiring UI/runtime (pré-requisito 101); evidência nas tasks.
+- [x] Usuário autorizou executar 097–099 em 2026-10-08.
 
 ### Após 97–99: Login e cofre pessoal
 
-- [ ] Google/sessão/OpenRouter isolam dois usuários; confirmação aguarda checkpoint.
-- [ ] Testes focados/build aplicável passam; evidência nas tasks; registrar primeiro bloqueio e boundary exato.
-- [ ] Revisão humana antes do próximo grupo; status sozinho não prova entrega.
+- [x] Google/sessão/OpenRouter isolam dois usuários; confirmação aguarda checkpoint (30 testes novos).
+- [x] QA em ordem e builds Python aprovados: 314 passed, 92 skipped, 2 deselected. Evidência nas tasks; prova candidata isolada/HTTP com Google e Modal simulados. E2E aguarda 101 (dependência 100), sem login humano/Volume real.
+- [ ] Revisão humana antes do próximo grupo; Usuário autorizou executar 100–102 na worktree 091 em 2026-10-08; o código deste grupo foi implementado, com prova humana Google da 101 pendente.
 
 ### Após 100–102: Runtime integrado
 
-- [ ] GitHub/API em SQLite; login local e barreiras de efeitos verificados.
-- [ ] Testes focados/build aplicável passam; evidência nas tasks; registrar primeiro bloqueio e boundary exato.
+- [x] GitHub/API em SQLite; cookies/ownership e barreiras verificados com provedores controlados; tarefa administrativa real no Modal, restart e mensagem idempotente aprovados.
+- [ ] Login humano local de duas contas da 101: primeiro bloqueio `GG_GOOGLE_CLIENT_ID` ausente; detalhes nas [provas](../docs/tasks/evidence/100-102-runtime-verification.md).
+- [x] Testes focados/build aplicável passam; 328 passed, 92 skipped, 2 deselected; fronteira e pré-requisitos nas provas.
 - [ ] Revisão humana antes do próximo grupo; status sozinho não prova entrega.
 
 ### Após 103–105: Scheduler e estado do sandbox
 
-- [ ] Candidatos SQL; conversas e execução/helper Pi recuperam sem duplicação.
-- [ ] Testes focados/build aplicável passam; evidência nas tasks; registrar primeiro bloqueio e boundary exato.
+- [x] Candidatos SQL; conversas e execução/helper Pi recuperam sem duplicação nos testes locais controlados.
+- [x] Testes focados/build aplicável passam; [provas e limites](../docs/tasks/evidence/103-105-sqlite-sandbox-verification.md).
+- [x] E2E Pi/Modal após autorização explícita: prompt cumprido, restart central e recriação no mesmo Volume, replay sem duplicação; reserva liberada (reserved=0, pending=0). Evidências e limites no registro 103–105.
 - [ ] Revisão humana antes do próximo grupo; status sozinho não prova entrega.
 
 ### Após 106–108: Sincronização e tarefa real
@@ -315,4 +317,34 @@ Depois de 091, sandbox 104–106 pode ser trabalhado independentemente de auth/l
 - [x] 38 tarefas com aceitação, prova, dependências, arquivos e escopo.
 - [x] Checkpoints após grupos de duas ou três tarefas.
 - [x] Riscos, dependências e primeiros fluxos locais/publicados identificados.
-- [x] Usuário autorizou implementar 091–093; autorização dos próximos grupos permanece no respectivo checkpoint.
+- [x] Usuário autorizou implementar 091–093, 094–096, 097–099 e 100–102 na worktree 091. Outros grupos aguardam autorização no respectivo checkpoint.
+
+## Execução autorizada 100–102 (2026-10-08)
+
+Worktree 091 reutilizada; preservar alterações anteriores. Fatias sequenciais:
+- 100a: schema e store GitHub; 100b: rotas com checkpoint e isolamento/token de repo.
+- 101a: incorporar ledger SQLite e remover stores substituídos/imports ativos;
+  101b: lifespan, banco/coordenador compartilhados e barreiras HTTP;
+  101c: testes API/cookies/WebSocket e compatibilidade dos testes anteriores.
+- 102a: checkpoint antes de provisão/run/mensagem/publicação;
+  102b: recuperação, readiness e checkpoint periódico;
+  102c: injeção de falhas e identidades estáveis, QA e prova operacional.
+
+As fatias limitam as edições por subsistema; a prova humana Google/Modal depende
+ das credenciais locais, e falhas de pré-requisitos serão registradas.
+
+## Execução autorizada 103–105 (2026-10-08)
+
+Worktree 091 reutilizada, preservando mudanças anteriores. Fatias sequenciais:
+- 103a: consultas de fila/expiração e índices; 103b: scheduler e provas SQLite
+  de histórico volumoso, recuperação e planos de consulta.
+- 104a: banco sandbox e stores de metadados/eventos/recibos;
+  104b: catálogo/hidratação e testes de restart/HTTP.
+- 105a: admissão e manifests SQLite (store/service/testes);
+  105b: intenção SQLite no helper/CLI Pi e provas de conflito/timeout/replay;
+  105c: QA agregado e prova operacional, registrando pré-requisitos ausentes.
+
+Cada fatia limita as edições de implementação a cinco arquivos relevantes.
+O banco sandbox fica em conversations_dir/sandbox.db e é compartilhado pelo
+supervisor e helper. Arquivos nativos Pi e workspace permanecem no filesystem.
+Não importar JSON legado: a especificação exige banco novo.

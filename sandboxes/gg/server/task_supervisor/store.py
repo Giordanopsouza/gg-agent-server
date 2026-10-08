@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
-import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from gg.sdk.agent_backend import DEFAULT_PI_MODEL
 from gg.sdk.task_execution import (
@@ -15,6 +13,7 @@ from gg.sdk.task_execution import (
     TaskExecutionRecord,
     TaskResultManifest,
 )
+from gg.server.sqlite_state import SandboxState
 
 
 class StartKeyConflictError(Exception):
@@ -22,12 +21,24 @@ class StartKeyConflictError(Exception):
 
 
 class ExecutionStore:
-    """File-backed store for one sandbox supervisor process."""
+    """SQLite execution identity and evidence shared across supervisor restarts."""
 
-    def __init__(self, root: Path) -> None:
-        self._root = root
-        self._root.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+    def __init__(self, root: Path, *, state_db: SandboxState | None = None) -> None:
+        self.state_db = state_db or SandboxState(root / "sandbox.db")
+
+    def conversation_id(self) -> str:
+        """Bind the workspace generation to one conversation, atomically."""
+        with self.state_db.write() as connection:
+            row = connection.execute(
+                "SELECT value FROM sandbox_metadata WHERE name = 'conversation-id'"
+            ).fetchone()
+            if row is not None:
+                return row[0]
+            value = str(uuid4())
+            connection.execute(
+                "INSERT INTO sandbox_metadata VALUES ('conversation-id', ?)", (value,)
+            )
+        return value
 
     def admit_or_get(
         self,
@@ -40,24 +51,26 @@ class ExecutionStore:
         deadline_at: datetime,
         model: str = DEFAULT_PI_MODEL,
     ) -> tuple[TaskExecutionRecord, bool]:
-        with self._lock:
-            existing_id = self._read_start_key(start_key)
-            if existing_id is not None:
-                record = self.load_execution(existing_id)
+        with self.state_db.write() as connection:
+            row = connection.execute(
+                "SELECT payload FROM executions WHERE start_key = ?", (start_key,)
+            ).fetchone()
+            if row is not None:
+                record = TaskExecutionRecord.model_validate_json(row[0])
                 if (
-                    record.task_id != task_id
-                    or record.task_branch != task_branch
-                    or record.repository != repository
-                    or record.model != model
-                ):
+                    record.task_id,
+                    record.repository,
+                    record.task_branch,
+                    record.base_ref,
+                    record.model,
+                ) != (task_id, repository, task_branch, base_ref, model):
                     raise StartKeyConflictError(
                         f"start_key {start_key!r} already bound to another execution"
                     )
                 return record, False
-            execution_id = self._new_execution_id(task_id, start_key)
             now = datetime.now(UTC)
             record = TaskExecutionRecord(
-                execution_id=execution_id,
+                execution_id=self._new_execution_id(task_id, start_key),
                 task_id=task_id,
                 repository=repository,
                 start_key=start_key,
@@ -68,83 +81,89 @@ class ExecutionStore:
                 created_at=now,
                 updated_at=now,
             )
-            self._write_execution(record)
-            self._bind_start_key(start_key, execution_id)
-            return record, True
+            connection.execute(
+                "INSERT INTO executions VALUES (?, ?, ?, ?)",
+                (
+                    record.execution_id,
+                    start_key,
+                    record.phase.value,
+                    record.model_dump_json(),
+                ),
+            )
+        return record, True
 
     def load_execution(self, execution_id: str) -> TaskExecutionRecord:
-        path = self._execution_path(execution_id)
-        if not path.is_file():
+        with self.state_db.connection() as connection:
+            row = connection.execute(
+                "SELECT payload FROM executions WHERE execution_id = ?", (execution_id,)
+            ).fetchone()
+        if row is None:
             raise KeyError(f"unknown execution {execution_id}")
-        return TaskExecutionRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        return TaskExecutionRecord.model_validate_json(row[0])
 
     def save_execution(self, record: TaskExecutionRecord) -> None:
-        with self._lock:
-            self._write_execution(record)
+        with self.state_db.write() as connection:
+            row = connection.execute(
+                "SELECT payload FROM executions WHERE execution_id = ?",
+                (record.execution_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown execution {record.execution_id}")
+            existing = TaskExecutionRecord.model_validate_json(row[0])
+            if (
+                existing.start_key,
+                existing.task_id,
+                existing.repository,
+                existing.task_branch,
+                existing.base_ref,
+                existing.model,
+            ) != (
+                record.start_key,
+                record.task_id,
+                record.repository,
+                record.task_branch,
+                record.base_ref,
+                record.model,
+            ):
+                raise StartKeyConflictError("cannot change execution identity")
+            connection.execute(
+                "UPDATE executions SET phase = ?, payload = ? WHERE execution_id = ?",
+                (record.phase.value, record.model_dump_json(), record.execution_id),
+            )
 
-    def save_manifest(self, manifest: TaskResultManifest) -> Path:
-        path = self._manifest_path(manifest.execution_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            self._atomic_write(path, manifest.model_dump_json(indent=2))
-        return path
+    def save_manifest(self, manifest: TaskResultManifest) -> str:
+        with self.state_db.write() as connection:
+            connection.execute(
+                """INSERT INTO manifests VALUES (?, ?) ON CONFLICT(execution_id)
+                   DO UPDATE SET payload = excluded.payload""",
+                (manifest.execution_id, manifest.model_dump_json()),
+            )
+        return self.manifest_reference(manifest.execution_id)
+
+    def manifest_reference(self, execution_id: str) -> str:
+        return f"sqlite:{self.state_db.path}#manifest/{execution_id}"
 
     def load_manifest(self, execution_id: str) -> TaskResultManifest:
-        path = self._manifest_path(execution_id)
-        if not path.is_file():
+        with self.state_db.connection() as connection:
+            row = connection.execute(
+                "SELECT payload FROM manifests WHERE execution_id = ?", (execution_id,)
+            ).fetchone()
+        if row is None:
             raise KeyError(f"no manifest for execution {execution_id}")
-        return TaskResultManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        return TaskResultManifest.model_validate_json(row[0])
 
     def list_non_terminal(self) -> list[TaskExecutionRecord]:
-        records: list[TaskExecutionRecord] = []
-        for path in sorted(self._root.glob("executions/*.json")):
-            record = TaskExecutionRecord.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
-            if record.phase not in {
-                TaskExecutionPhase.COMPLETED,
-                TaskExecutionPhase.FAILED,
-            }:
-                records.append(record)
-        return records
-
-    def _execution_path(self, execution_id: str) -> Path:
-        return self._root / "executions" / f"{execution_id}.json"
-
-    def _manifest_path(self, execution_id: str) -> Path:
-        return self._root / "manifests" / f"{execution_id}.json"
-
-    def _start_key_path(self, start_key: str) -> Path:
-        digest = hashlib.sha256(start_key.encode()).hexdigest()
-        return self._root / "start_keys" / f"{digest}.json"
-
-    def _read_start_key(self, start_key: str) -> str | None:
-        path = self._start_key_path(start_key)
-        if not path.is_file():
-            return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return payload["execution_id"]
-
-    def _bind_start_key(self, start_key: str, execution_id: str) -> None:
-        path = self._start_key_path(start_key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._atomic_write(path, json.dumps({"execution_id": execution_id}))
-
-    def _write_execution(self, record: TaskExecutionRecord) -> None:
-        path = self._execution_path(record.execution_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._atomic_write(path, record.model_dump_json(indent=2))
+        with self.state_db.connection() as connection:
+            rows = connection.execute(
+                """SELECT payload FROM executions WHERE phase NOT IN (?, ?)
+                   ORDER BY execution_id""",
+                (TaskExecutionPhase.COMPLETED.value, TaskExecutionPhase.FAILED.value),
+            ).fetchall()
+        return [TaskExecutionRecord.model_validate_json(row[0]) for row in rows]
 
     @staticmethod
     def _new_execution_id(task_id: str, start_key: str) -> str:
-        digest = hashlib.sha256(f"{task_id}:{start_key}".encode()).hexdigest()[:32]
-        return digest
-
-    @staticmethod
-    def _atomic_write(path: Path, content: str) -> None:
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        os.replace(tmp, path)
+        return hashlib.sha256(f"{task_id}:{start_key}".encode()).hexdigest()[:32]
 
 
 __all__ = ["ExecutionStore", "StartKeyConflictError"]

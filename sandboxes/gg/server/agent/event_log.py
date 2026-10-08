@@ -11,12 +11,7 @@ from gg.sdk.domain import (
     Event,
     MessageReceipt,
 )
-
-
-EVENTS_DIR = "events"
-META_FILE = "meta.json"
-BASE_STATE_FILE = "base_state.json"
-MESSAGE_RECEIPTS_DIR = "message-receipts"
+from gg.server.sqlite_state import SandboxState, conversation_database
 
 
 class BaseState(BaseModel):
@@ -27,26 +22,41 @@ class BaseState(BaseModel):
     agent: AgentConfig = Field(default_factory=PiAgentConfig)
 
 
-# Ensure the conversation directory exists and return it as a Path
-def _ensure_conversation_dir(conversation_dir: Path | str) -> Path:
+def _store(conversation_dir: Path | str) -> tuple[SandboxState, str]:
     path = Path(conversation_dir)
     path.mkdir(parents=True, exist_ok=True)
-    return path
+    return SandboxState(conversation_database(path)), path.name
 
 
-# Write ConversationRecord to meta.json
+def _save(conversation_dir: Path | str, column: str, payload: str) -> None:
+    store, key = _store(conversation_dir)
+    with store.write() as connection:
+        connection.execute(
+            f"INSERT INTO conversations(directory, {column}) VALUES (?, ?) "
+            f"ON CONFLICT(directory) DO UPDATE SET {column} = excluded.{column}",
+            (key, payload),
+        )
+
+
+def _load(conversation_dir: Path | str, column: str) -> str:
+    store, key = _store(conversation_dir)
+    with store.connection() as connection:
+        row = connection.execute(
+            f"SELECT {column} FROM conversations WHERE directory = ?", (key,)
+        ).fetchone()
+    if row is None or row[0] is None:
+        raise FileNotFoundError(f"missing {column} for {key}")
+    return row[0]
+
+
 def save_meta(conversation_dir: Path | str, record: ConversationRecord) -> None:
-    path = _ensure_conversation_dir(conversation_dir) / META_FILE
-    path.write_text(record.model_dump_json(), encoding="utf-8")
+    _save(conversation_dir, "meta_json", record.model_dump_json())
 
 
-# Read ConversationRecord from meta.json
 def load_meta(conversation_dir: Path | str) -> ConversationRecord:
-    path = Path(conversation_dir) / META_FILE
-    return ConversationRecord.model_validate_json(path.read_text(encoding="utf-8"))
+    return ConversationRecord.model_validate_json(_load(conversation_dir, "meta_json"))
 
 
-# Write status and working_dir to base_state.json
 def save_base_state(
     conversation_dir: Path | str,
     *,
@@ -55,73 +65,87 @@ def save_base_state(
     agent: AgentConfig | None = None,
 ) -> None:
     state = BaseState(
-        status=status,
-        working_dir=working_dir,
-        agent=agent or PiAgentConfig(),
+        status=status, working_dir=working_dir, agent=agent or PiAgentConfig()
     )
-    path = _ensure_conversation_dir(conversation_dir) / BASE_STATE_FILE
-    path.write_text(state.model_dump_json(), encoding="utf-8")
+    _save(conversation_dir, "base_json", state.model_dump_json())
 
 
-# Read status and working_dir from base_state.json
 def load_base_state(conversation_dir: Path | str) -> BaseState:
-    path = Path(conversation_dir) / BASE_STATE_FILE
-    return BaseState.model_validate_json(path.read_text(encoding="utf-8"))
+    return BaseState.model_validate_json(_load(conversation_dir, "base_json"))
 
 
-# Build the event filename: event-00001-{id}.json
-def _event_filename(event: Event) -> str:
-    return f"event-{event.seq:05d}-{event.id}.json"
+def save_conversation_state(
+    conversation_dir: Path | str, record: ConversationRecord, state: BaseState
+) -> None:
+    """Keep catalog metadata and agent base state consistent on crash."""
+    store, key = _store(conversation_dir)
+    with store.write() as connection:
+        connection.execute(
+            """INSERT INTO conversations VALUES (?, ?, ?)
+               ON CONFLICT(directory) DO UPDATE SET
+               meta_json = excluded.meta_json, base_json = excluded.base_json""",
+            (key, record.model_dump_json(), state.model_dump_json()),
+        )
 
 
 class EventLog:
-    """Append-only event log backed by one JSON file per event."""
+    """Append-only SQLite events in sequence order."""
 
-    # Store the conversation path and create events/ if missing
     def __init__(self, conversation_dir: Path | str) -> None:
         self.conversation_dir = Path(conversation_dir)
-        self.events_dir = self.conversation_dir / EVENTS_DIR
-        self.events_dir.mkdir(parents=True, exist_ok=True)
+        self.store, self.key = _store(conversation_dir)
+        with self.store.write() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO conversations(directory) VALUES (?)", (self.key,)
+            )
 
-    # Write one event as a JSON file under events/
     def append(self, event: Event) -> None:
-        path = self.events_dir / _event_filename(event)
-        path.write_text(event.model_dump_json(), encoding="utf-8")
+        with self.store.write() as connection:
+            connection.execute(
+                "INSERT INTO events VALUES (?, ?, ?, ?)",
+                (self.key, event.seq, event.id, event.model_dump_json()),
+            )
 
-    # Read all events from disk and return them sorted by seq
+    def next_seq(self) -> int:
+        with self.store.connection() as connection:
+            return connection.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE conversation = ?",
+                (self.key,),
+            ).fetchone()[0]
+
     def list(self) -> list[Event]:
-        events: list[Event] = []
-        for path in sorted(self.events_dir.glob("event-*.json")):
-            events.append(Event.model_validate_json(path.read_text(encoding="utf-8")))
-        events.sort(key=lambda event: event.seq)
-        return events
+        with self.store.connection() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM events WHERE conversation = ? ORDER BY seq",
+                (self.key,),
+            ).fetchall()
+        return [Event.model_validate_json(row[0]) for row in rows]
 
 
 class MessageReceiptStore:
-    """Atomic per-message receipt persistence with path-safe filenames."""
+    """SQLite receipts keyed by the original message identity."""
 
     def __init__(self, conversation_dir: Path | str) -> None:
-        import hashlib
-
-        self._hash = hashlib.sha256
-        self.receipts_dir = Path(conversation_dir) / MESSAGE_RECEIPTS_DIR
-        self.receipts_dir.mkdir(parents=True, exist_ok=True)
+        self.store, self.key = _store(conversation_dir)
+        with self.store.write() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO conversations(directory) VALUES (?)", (self.key,)
+            )
 
     def load(self, message_id: str) -> MessageReceipt | None:
-        path = self._path(message_id)
-        if not path.is_file():
-            return None
-        receipt = MessageReceipt.model_validate_json(path.read_text(encoding="utf-8"))
-        if receipt.id != message_id:
-            raise RuntimeError("message receipt hash collision")
-        return receipt
+        with self.store.connection() as connection:
+            row = connection.execute(
+                """SELECT payload FROM message_receipts
+                   WHERE conversation = ? AND message_id = ?""",
+                (self.key, message_id),
+            ).fetchone()
+        return None if row is None else MessageReceipt.model_validate_json(row[0])
 
     def save(self, receipt: MessageReceipt) -> None:
-        path = self._path(receipt.id)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(receipt.model_dump_json(), encoding="utf-8")
-        temporary.replace(path)
-
-    def _path(self, message_id: str) -> Path:
-        digest = self._hash(message_id.encode("utf-8")).hexdigest()
-        return self.receipts_dir / f"{digest}.json"
+        with self.store.write() as connection:
+            connection.execute(
+                """INSERT INTO message_receipts VALUES (?, ?, ?)
+                   ON CONFLICT(conversation, message_id)
+                   DO UPDATE SET payload = excluded.payload""",
+                (self.key, receipt.id, receipt.model_dump_json()),
+            )

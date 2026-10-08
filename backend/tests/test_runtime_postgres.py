@@ -89,9 +89,10 @@ def test_hosted_engine_uses_bounded_pool_and_bundled_ca() -> None:
         engine.dispose()
 
 
-def test_runtime_refuses_missing_postgres_without_test_ledger(
+def test_runtime_refuses_missing_sqlite_paths_without_test_ledger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GG_RUNTIME_DATABASE_URL", raising=False)
-    with pytest.raises(RuntimeError, match="GG_RUNTIME_DATABASE_URL is required"):
+    monkeypatch.delenv("GG_RUNTIME_DB_PATH", raising=False)
+    monkeypatch.delenv("GG_RUNTIME_SNAPSHOT_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="GG_RUNTIME_DB_PATH"):
         create_app(RuntimeSettings(api_key="control-secret"))

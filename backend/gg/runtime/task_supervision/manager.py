@@ -177,6 +177,8 @@ class TaskSupervisionManager:
             if existing is not None:
                 if existing.content != content:
                     raise RuntimeError("message id already belongs to another message")
+                if isinstance(self._ledger, TaskLedger):
+                    await self._ledger.ensure_durable()
                 return existing
             accepted = MessageReceipt(
                 id=message_id,
@@ -191,6 +193,8 @@ class TaskSupervisionManager:
                 await asyncio.to_thread(self._ledger.get, task_id)
             ).state is TaskState.SLEEPING:
                 await asyncio.to_thread(self._ledger.queue_workspace_message, task_id)
+            if isinstance(self._ledger, TaskLedger):
+                await self._ledger.ensure_durable()
             self._ensure_loop(task_id)
             return accepted
 
@@ -248,7 +252,7 @@ class TaskSupervisionManager:
                 self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.RUNNING,
-                condition=f"supervision error: {exc}",
+                condition=f"supervision error: {type(exc).__name__}",
             )
 
     async def _drive_running(self, task_id: str) -> None:
@@ -395,6 +399,7 @@ class TaskSupervisionManager:
             deadline_at=datetime.now(UTC) + DEFAULT_TASK_DEADLINE,
             model=task.model,
         )
+        await self._authorize_execution(task, supervision.task_branch)
         record, _ = await client.start(request, github_token=github_token)
         delivered = receipt.model_copy(
             update={
@@ -447,6 +452,23 @@ class TaskSupervisionManager:
         )
         return credential.token
 
+    async def _authorize_execution(self, task: TaskRecord, branch: str):
+        # Run and publication identities are confirmed before a write token reaches Pi.
+        if task.repository and task.owner_id:
+            await asyncio.to_thread(
+                self._ledger.begin_publication,
+                task_id=task.id,
+                repository=task.repository,
+                task_branch=branch,
+                base_ref=task.base_ref or "main",
+                task_marker=task.id,
+                commit_sha=None,
+                check_outcome=CheckOutcome.NOT_RUN,
+                agent_outcome=AgentOutcome.NOT_RUN,
+            )
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
+
     async def _start_execution(
         self, task_id: str, task: TaskRecord, client: TaskSupervisorClient
     ) -> SupervisionRecord | None:
@@ -480,6 +502,7 @@ class TaskSupervisionManager:
             deadline_at=deadline_at,
             model=task.model,
         )
+        await self._authorize_execution(task, task_branch)
         try:
             record, _ = await client.start(
                 request, github_token=await self._fresh_github_token(task)
@@ -592,6 +615,8 @@ class TaskSupervisionManager:
         supervision: SupervisionRecord,
         client: TaskSupervisorClient,
     ) -> None:
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         if supervision.conversation_id:
             async with connection.http_client(timeout=30) as client_http:  # type: ignore[attr-defined]
                 await client_http.post(

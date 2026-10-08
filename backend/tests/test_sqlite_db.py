@@ -11,6 +11,7 @@ import pytest
 from gg.runtime.sqlite_db import SQLiteDB, connect, initialize
 from gg.runtime.sqlite_migrations import (
     MIGRATIONS,
+    SCHEMA_VERSION,
     InvalidDatabase,
     Migration,
     apply_migrations,
@@ -110,11 +111,13 @@ def test_migration_failure_is_atomic_and_retryable(tmp_path):
     connection = connect(path)
     try:
         broken = MIGRATIONS + (
-            Migration(2, ("CREATE TABLE demo (id INTEGER)", "INVALID SQL")),
+            Migration(
+                SCHEMA_VERSION + 1, ("CREATE TABLE demo (id INTEGER)", "INVALID SQL")
+            ),
         )
         with pytest.raises(sqlite3.OperationalError):
             apply_migrations(connection, broken)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert (
             connection.execute(
                 "SELECT name FROM sqlite_master WHERE name = 'demo'"
@@ -125,9 +128,14 @@ def test_migration_failure_is_atomic_and_retryable(tmp_path):
             connection.execute("SELECT revision FROM runtime_metadata").fetchone()[0]
             == 0
         )
-        fixed = MIGRATIONS + (Migration(2, ("CREATE TABLE demo (id INTEGER)",)),)
+        fixed = MIGRATIONS + (
+            Migration(SCHEMA_VERSION + 1, ("CREATE TABLE demo (id INTEGER)",)),
+        )
         apply_migrations(connection, fixed)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == SCHEMA_VERSION + 1
+        )
         assert (
             connection.execute("SELECT revision FROM runtime_metadata").fetchone()[0]
             == 1
@@ -196,7 +204,7 @@ os._exit(17)
     assert result.returncode == 17
     with SQLiteDB(path) as db, db.read() as connection:
         assert db.revision == 0
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert (
             connection.execute(
                 "SELECT name FROM sqlite_master WHERE name = 'interrupted'"

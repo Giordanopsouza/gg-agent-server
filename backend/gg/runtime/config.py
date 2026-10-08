@@ -48,6 +48,8 @@ class RuntimeSettings(BaseModel):
     api_key: str
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
     web_cookie_key: str | None = None
     openrouter_vault_key: str | None = None
     web_origin: str | None = None
@@ -261,6 +263,8 @@ def load_settings() -> RuntimeSettings:
         supabase_publishable_key=_optional_secret(
             os.getenv("GG_SUPABASE_PUBLISHABLE_KEY")
         ),
+        google_client_id=_optional_secret(os.getenv("GG_GOOGLE_CLIENT_ID")),
+        google_client_secret=_optional_secret(os.getenv("GG_GOOGLE_CLIENT_SECRET")),
         web_cookie_key=_optional_secret(os.getenv("GG_WEB_COOKIE_KEY")),
         openrouter_vault_key=_optional_secret(os.getenv("GG_OPENROUTER_VAULT_KEY")),
         web_origin=_optional_secret(os.getenv("GG_WEB_ORIGIN")),

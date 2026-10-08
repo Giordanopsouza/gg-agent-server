@@ -9,22 +9,24 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
+import time
 from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID
 
 import httpx
-import psycopg
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from gg.runtime.checkpoints import CheckpointCoordinator
 from gg.runtime.config import RuntimeSettings
+from gg.runtime.local_sessions import LocalSessions, durable, token_hash
+from gg.runtime.sqlite_db import SQLiteDB
 from gg.runtime.web_auth import (
     SESSION_COOKIE,
-    PostgresWebSessions,
     SupabaseAuth,
     _require_origin,
     authenticated_web_user,
@@ -192,40 +194,54 @@ class GitHubClient:
             raise GitHubUnavailable  # Fail closed if pagination exceeds the bounded scan.
 
 
-class PostgresGitHubConnections:
-    def __init__(self, engine: Engine, encryption_key: str) -> None:
-        self.engine = engine
+class SQLiteGitHubConnections:
+    def __init__(
+        self, db: SQLiteDB, checkpoints: CheckpointCoordinator, encryption_key: str
+    ):
+        if checkpoints.db is not db:
+            raise ValueError("connections and checkpoints must share a database")
+        self.db, self.checkpoints = db, checkpoints
         self.cipher = Fernet(encryption_key)
 
-    @staticmethod
-    def _owner(connection: Any, owner_id: str) -> None:
-        connection.exec_driver_sql(
-            "select set_config('app.user_id', %s, true)", (owner_id,)
-        )
+    async def ensure_durable(self):
+        await durable(self.checkpoints, self.db.revision)
 
     def begin(self, owner_id: str, session_id: str, state: str) -> None:
-        digest = hashlib.sha256(state.encode()).digest()
-        with self.engine.begin() as connection:
-            self._owner(connection, owner_id)
-            connection.exec_driver_sql(
-                "insert into app_private.github_oauth_flows(state_hash,owner_id,session_id,expires_at) "
-                "values (%s,%s,%s,now() + interval '10 minutes')",
-                (digest, UUID(owner_id), UUID(session_id)),
+        with self.db.write() as tx:
+            session = tx.connection.execute(
+                "SELECT 1 FROM local_sessions WHERE token_hash=? AND owner_id=? "
+                "AND revoked=0 AND expires_at>?",
+                (session_id, owner_id, int(time.time())),
+            ).fetchone()
+            if session is None:
+                raise HTTPException(status_code=401, detail="session expired or absent")
+            tx.connection.execute(
+                "INSERT INTO github_oauth_flows VALUES (?, ?, ?, ?)",
+                (
+                    token_hash(state),
+                    owner_id,
+                    session_id,
+                    int(time.time()) + FLOW_SECONDS,
+                ),
             )
 
     def consume(self, owner_id: str, session_id: str, state: str) -> bool:
-        with self.engine.begin() as connection:
-            self._owner(connection, owner_id)
-            row = connection.exec_driver_sql(
-                "delete from app_private.github_oauth_flows where state_hash = %s "
-                "and owner_id = %s and session_id = %s and expires_at > now() returning state_hash",
+        with self.db.write() as tx:
+            row = tx.connection.execute(
+                "DELETE FROM github_oauth_flows WHERE state_hash = ? AND owner_id = ? "
+                "AND session_id = ? AND expires_at > ? AND EXISTS (SELECT 1 FROM "
+                "local_sessions s WHERE s.token_hash=github_oauth_flows.session_id "
+                "AND s.owner_id=github_oauth_flows.owner_id AND s.revoked=0 "
+                "AND s.expires_at>?) RETURNING state_hash",
                 (
-                    hashlib.sha256(state.encode()).digest(),
-                    UUID(owner_id),
-                    UUID(session_id),
+                    token_hash(state),
+                    owner_id,
+                    session_id,
+                    int(time.time()),
+                    int(time.time()),
                 ),
             ).fetchone()
-            return row is not None
+        return row is not None
 
     def connect(
         self,
@@ -235,55 +251,40 @@ class PostgresGitHubConnections:
         token: str,
         installations: list[dict[str, Any]],
     ) -> None:
-        ciphertext = self.cipher.encrypt(token.encode())
-        with self.engine.begin() as connection:
-            self._owner(connection, owner_id)
-            # A GitHub identity cannot silently move between product accounts.
-            connection.exec_driver_sql(
-                "insert into vault_private.github_connections "
-                "(owner_id,github_user_id,login,token_ciphertext,status) values (%s,%s,%s,%s,%s) "
-                "on conflict (owner_id) do update set github_user_id=excluded.github_user_id, "
-                "login=excluded.login, token_ciphertext=excluded.token_ciphertext, "
-                "status=excluded.status, updated_at=now()",
+        with self.db.write() as tx:
+            tx.connection.execute(
+                "INSERT INTO github_connections VALUES (?, ?, ?, ?, ?) ON CONFLICT(owner_id) "
+                "DO UPDATE SET github_user_id=excluded.github_user_id, login=excluded.login, "
+                "token_ciphertext=excluded.token_ciphertext, status=excluded.status",
                 (
-                    UUID(owner_id),
+                    owner_id,
                     github_id,
                     login,
-                    ciphertext,
+                    self.cipher.encrypt(token.encode()),
                     "connected" if installations else "pending",
                 ),
             )
-            self._replace_installations(connection, owner_id, installations)
+            self._replace_installations(tx.connection, owner_id, installations)
 
-    def _replace_installations(
-        self, connection: Any, owner_id: str, installations: list[dict[str, Any]]
-    ) -> None:
-        connection.exec_driver_sql(
-            "update app_private.github_installations set status='removed', updated_at=now() where owner_id=%s",
-            (UUID(owner_id),),
+    def _replace_installations(self, connection, owner_id, installations):
+        connection.execute(
+            "UPDATE github_installations SET status='removed' WHERE owner_id=?",
+            (owner_id,),
         )
         for item in installations:
-            connection.exec_driver_sql(
-                "insert into app_private.github_installations "
-                "(owner_id,installation_id,account_login,account_type,status) "
-                "values (%s,%s,%s,%s,'active') on conflict (owner_id,installation_id) do update set "
-                "account_login=excluded.account_login, account_type=excluded.account_type, "
-                "status='active', updated_at=now()",
-                (
-                    UUID(owner_id),
-                    item["id"],
-                    item["account_login"],
-                    item["account_type"],
-                ),
+            connection.execute(
+                "INSERT INTO github_installations VALUES (?, ?, ?, ?, 'active') "
+                "ON CONFLICT(owner_id,installation_id) DO UPDATE SET "
+                "account_login=excluded.account_login,account_type=excluded.account_type,status='active'",
+                (owner_id, item["id"], item["account_login"], item["account_type"]),
             )
 
-    def current(self, owner_id: str) -> tuple[int, str, str | None, str] | None:
-        with self.engine.begin() as connection:
-            self._owner(connection, owner_id)
-            row = connection.exec_driver_sql(
-                "select github_user_id, login, token_ciphertext, status "
-                "from vault_private.github_connections where owner_id=%s",
-                (UUID(owner_id),),
+    def current(self, owner_id: str):
+        with self.db.read() as connection:
+            row = connection.execute(
+                "SELECT github_user_id,login,token_ciphertext,status "
+                "FROM github_connections WHERE owner_id=?",
+                (owner_id,),
             ).fetchone()
         return (
             (
@@ -298,46 +299,40 @@ class PostgresGitHubConnections:
 
     def refresh(
         self, owner_id: str, github_id: int, installations: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        with self.engine.begin() as connection:
-            self._owner(connection, owner_id)
-            row = connection.exec_driver_sql(
-                "select github_user_id,status,login from vault_private.github_connections "
-                "where owner_id=%s for update",
-                (UUID(owner_id),),
+    ):
+        with self.db.write() as tx:
+            row = tx.connection.execute(
+                "SELECT github_user_id,status,login FROM github_connections WHERE owner_id=?",
+                (owner_id,),
             ).fetchone()
             if not row or row[0] != github_id or row[1] == "revoked":
                 return {"status": "revoked", "login": None, "installations": []}
-            self._replace_installations(connection, owner_id, installations)
+            self._replace_installations(tx.connection, owner_id, installations)
             status = "connected" if installations else "pending"
-            connection.exec_driver_sql(
-                "update vault_private.github_connections set status=%s, updated_at=now() where owner_id=%s",
-                (status, UUID(owner_id)),
+            tx.connection.execute(
+                "UPDATE github_connections SET status=? WHERE owner_id=?",
+                (status, owner_id),
             )
-            return {"status": status, "login": row[2], "installations": installations}
+        return {"status": status, "login": row[2], "installations": installations}
 
-    def mark_revoked(self, owner_id: str) -> None:
-        with self.engine.begin() as connection:
-            self._owner(connection, owner_id)
-            connection.exec_driver_sql(
-                "update vault_private.github_connections set status='revoked', token_ciphertext=null, updated_at=now() where owner_id=%s",
-                (UUID(owner_id),),
+    def mark_revoked(self, owner_id: str):
+        with self.db.write() as tx:
+            tx.connection.execute(
+                "UPDATE github_connections SET status='revoked',token_ciphertext=NULL WHERE owner_id=?",
+                (owner_id,),
             )
-            connection.exec_driver_sql(
-                "update app_private.github_installations set status='removed', updated_at=now() where owner_id=%s",
-                (UUID(owner_id),),
+            tx.connection.execute(
+                "UPDATE github_installations SET status='removed' WHERE owner_id=?",
+                (owner_id,),
             )
 
-    def disconnect(self, owner_id: str) -> None:
-        with self.engine.begin() as connection:
-            self._owner(connection, owner_id)
-            connection.exec_driver_sql(
-                "delete from app_private.github_installations where owner_id=%s",
-                (UUID(owner_id),),
+    def disconnect(self, owner_id: str):
+        with self.db.write() as tx:
+            tx.connection.execute(
+                "DELETE FROM github_connections WHERE owner_id=?", (owner_id,)
             )
-            connection.exec_driver_sql(
-                "delete from vault_private.github_connections where owner_id=%s",
-                (UUID(owner_id),),
+            tx.connection.execute(
+                "DELETE FROM github_oauth_flows WHERE owner_id=?", (owner_id,)
             )
 
     def webhook(
@@ -348,22 +343,61 @@ class PostgresGitHubConnections:
         installation_id: int | None,
         github_id: int | None,
     ) -> bool:
-        with self.engine.begin() as connection:
-            row = connection.exec_driver_sql(
-                "select app_private.invalidate_github_webhook(%s,%s,%s,%s,%s)",
-                (delivery_id, event, action, installation_id, github_id),
-            ).fetchone()
-            return bool(row and row[0])
+        with self.db.write() as tx:
+            added = tx.connection.execute(
+                "INSERT INTO github_webhook_deliveries VALUES (?) ON CONFLICT DO NOTHING",
+                (str(delivery_id),),
+            ).rowcount
+            if not added:
+                return False
+            if event == "installation" and action in ("deleted", "suspend"):
+                tx.connection.execute(
+                    "UPDATE github_installations SET status=? WHERE installation_id=?",
+                    (
+                        "removed" if action == "deleted" else "suspended",
+                        installation_id,
+                    ),
+                )
+                tx.connection.execute(
+                    "UPDATE github_connections SET status='pending' WHERE status='connected' AND NOT EXISTS (SELECT 1 FROM github_installations i WHERE i.owner_id=github_connections.owner_id AND i.status='active')"
+                )
+            if event == "github_app_authorization" and action == "revoked":
+                tx.connection.execute(
+                    "UPDATE github_installations SET status='removed' WHERE owner_id IN (SELECT owner_id FROM github_connections WHERE github_user_id=?)",
+                    (github_id,),
+                )
+                tx.connection.execute(
+                    "UPDATE github_connections SET status='revoked',token_ciphertext=NULL WHERE github_user_id=?",
+                    (github_id,),
+                )
+        return True
 
 
 def github_connection_router(
     settings: RuntimeSettings,
     auth: SupabaseAuth,
-    sessions: PostgresWebSessions | None,
-    store: PostgresGitHubConnections | None,
+    sessions: LocalSessions | None,
+    store: SQLiteGitHubConnections | None,
     github: GitHubClient,
 ) -> APIRouter:
     router = APIRouter()
+    cipher = Fernet(settings.web_cookie_key) if settings.web_cookie_key else None
+
+    async def barrier():
+        if isinstance(store, SQLiteGitHubConnections):
+            await store.ensure_durable()
+
+    def seal(value):
+        assert cipher is not None
+        return cipher.encrypt(json.dumps(value).encode()).decode()
+
+    def open_flow(value):
+        if cipher is None:
+            return None
+        try:
+            return json.loads(cipher.decrypt(value.encode(), ttl=FLOW_SECONDS))
+        except (InvalidToken, ValueError, TypeError):
+            return None
 
     async def owner(request: Request, response: Response) -> dict[str, str | None]:
         response.headers["Cache-Control"] = "no-store"
@@ -392,13 +426,14 @@ def github_connection_router(
         assert store is not None
         try:
             await asyncio.to_thread(store.begin, user["id"], user["session_id"], state)
-        except (SQLAlchemyError, psycopg.Error):
+        except (SQLAlchemyError, sqlite3.Error):
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
                 headers=NO_STORE,
             ) from None
-        flow = auth.seal(
+        await barrier()
+        flow = seal(
             {
                 "state": state,
                 "verifier": verifier,
@@ -428,7 +463,7 @@ def github_connection_router(
     async def callback(request: Request) -> RedirectResponse:
         session_response = Response()
         user = await owner(request, session_response)
-        flow = auth.open(request.cookies.get(FLOW_COOKIE, ""), ttl=FLOW_SECONDS)
+        flow = open_flow(request.cookies.get(FLOW_COOKIE, ""))
         state = request.query_params.get("state", "")
         if (
             not flow
@@ -445,12 +480,13 @@ def github_connection_router(
             consumed = await asyncio.to_thread(
                 store.consume, user["id"], user["session_id"], state
             )
-        except (SQLAlchemyError, psycopg.Error):
+        except (SQLAlchemyError, sqlite3.Error):
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
                 headers=NO_STORE,
             ) from None
+        await barrier()
         if not consumed:
             raise HTTPException(
                 status_code=400, detail="invalid GitHub callback", headers=NO_STORE
@@ -485,18 +521,19 @@ def github_connection_router(
                 raise HTTPException(
                     status_code=503, detail="GitHub unavailable", headers=NO_STORE
                 ) from None
-            except IntegrityError:
+            except (IntegrityError, sqlite3.IntegrityError):
                 raise HTTPException(
                     status_code=409,
                     detail="GitHub account already linked",
                     headers=NO_STORE,
                 ) from None
-            except (SQLAlchemyError, psycopg.Error):
+            except (SQLAlchemyError, sqlite3.Error):
                 raise HTTPException(
                     status_code=503,
                     detail="GitHub connection unavailable",
                     headers=NO_STORE,
                 ) from None
+            await barrier()
             redirect = RedirectResponse(
                 "/?github=connected", status_code=303, headers=NO_STORE
             )
@@ -512,6 +549,7 @@ def github_connection_router(
         user = await owner(request, response)
         assert store is not None
         try:
+            await barrier()
             current = await asyncio.to_thread(store.current, user["id"])
             if current is None:
                 return {"status": "disconnected", "login": None, "installations": []}
@@ -524,18 +562,22 @@ def github_connection_router(
                 )
             except (GitHubUnauthorized, GitHubPending):
                 await asyncio.to_thread(store.mark_revoked, user["id"])
+                await barrier()
                 return {"status": "revoked", "login": login, "installations": []}
             if verified_id != github_id:
                 await asyncio.to_thread(store.mark_revoked, user["id"])
+                await barrier()
                 return {"status": "revoked", "login": login, "installations": []}
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 store.refresh, user["id"], github_id, installations
             )
+            await barrier()
+            return result
         except GitHubUnavailable:
             raise HTTPException(
                 status_code=503, detail="GitHub unavailable", headers=NO_STORE
             ) from None
-        except (SQLAlchemyError, psycopg.Error):
+        except (SQLAlchemyError, sqlite3.Error):
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
@@ -549,12 +591,13 @@ def github_connection_router(
         assert store is not None
         try:
             await asyncio.to_thread(store.disconnect, user["id"])
-        except (SQLAlchemyError, psycopg.Error):
+        except (SQLAlchemyError, sqlite3.Error):
             raise HTTPException(
                 status_code=503,
                 detail="GitHub connection unavailable",
                 headers=NO_STORE,
             ) from None
+        await barrier()
         return {"status": "disconnected", "login": None, "installations": []}
 
     @router.post("/webhooks/github")
@@ -610,8 +653,9 @@ def github_connection_router(
             applied = await asyncio.to_thread(
                 store.webhook, delivery, event, action, installation_id, github_id
             )
-        except (SQLAlchemyError, psycopg.Error):
+        except (SQLAlchemyError, sqlite3.Error):
             raise HTTPException(status_code=503, detail="webhook unavailable") from None
+        await barrier()
         return {"applied": applied}
 
     return router

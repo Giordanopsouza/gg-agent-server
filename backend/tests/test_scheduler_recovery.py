@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -10,7 +9,6 @@ from sqlalchemy.exc import TimeoutError as PoolTimeout
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.readiness import readiness_from_scheduler
 from gg.runtime.scheduler import TaskScheduler
-from gg.sdk.tasks import TaskState
 
 
 class QueuedLedger:
@@ -31,8 +29,11 @@ class QueuedLedger:
     def list_reservations(self):
         return []
 
-    def list(self):
-        return [SimpleNamespace(state=TaskState.QUEUED)]
+    def count_queued(self):
+        return 1
+
+    def sleeping_workspace_candidates(self, **kwargs):
+        return []
 
 
 @pytest.mark.anyio

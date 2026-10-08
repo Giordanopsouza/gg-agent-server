@@ -60,6 +60,9 @@ def initialize(path: Path) -> None:
             connection = connect(path)
             try:
                 apply_migrations(connection)
+                # A newly created, unobserved database starts at revision zero.
+                # Upgrading existing state still advances revisions per migration.
+                connection.execute("UPDATE runtime_metadata SET revision = 0")
             finally:
                 connection.close()
         except BaseException:

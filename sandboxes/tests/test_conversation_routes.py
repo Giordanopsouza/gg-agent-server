@@ -95,7 +95,7 @@ async def test_post_pi_persists_configuration_and_reattaches(tmp_path: Path) -> 
     assert created.status_code == 201
     assert reattached.status_code == 200
     assert state.agent == PiAgentConfig(model="test/model", timeout_seconds=19)
-    raw = (settings.conversations_dir / conversation_id / "base_state.json").read_text()
+    raw = state.model_dump_json()
     assert "api_key" not in raw
 
 

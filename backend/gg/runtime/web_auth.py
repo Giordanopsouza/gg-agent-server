@@ -7,8 +7,9 @@ import base64
 import hashlib
 import json
 import secrets
+import sqlite3
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
@@ -22,7 +23,11 @@ from joserfc.errors import InvalidKeyIdError, MissingKeyError
 from sqlalchemy.exc import SQLAlchemyError
 
 from gg.runtime.config import RuntimeSettings
-from gg.runtime.web_sessions import PostgresWebSessions
+from gg.runtime.local_sessions import LocalSessions
+
+
+if TYPE_CHECKING:
+    from gg.runtime.google_auth import GoogleAuth
 
 
 SESSION_COOKIE = "gg_session"
@@ -53,9 +58,7 @@ def _require_origin(request: Request, settings: RuntimeSettings) -> None:
         raise HTTPException(status_code=403, detail="invalid origin")
 
 
-def _configured(
-    settings: RuntimeSettings, sessions: PostgresWebSessions | None
-) -> None:
+def _configured(settings: RuntimeSettings, sessions: LocalSessions | None) -> None:
     if not all(
         (
             settings.supabase_url,
@@ -227,12 +230,22 @@ class SupabaseAuth:
 
 
 async def authenticated_web_user(
-    provider: SupabaseAuth,
-    sessions: PostgresWebSessions | None,
+    provider: SupabaseAuth | GoogleAuth,
+    sessions: LocalSessions | None,
     cookie: str,
     response: Response | None = None,
 ) -> dict[str, str | None]:
-    """Verify the signed cookie, Auth identity, and live server-side session."""
+    """Verify the configured browser session backend."""
+    if isinstance(sessions, LocalSessions):
+        try:
+            user = await sessions.user(cookie)
+            from gg.runtime.local_sessions import token_hash
+
+            return {**user, "session_id": token_hash(cookie)}
+        except sqlite3.Error:
+            raise HTTPException(
+                status_code=503, detail="session store unavailable"
+            ) from None
     if sessions is None:
         raise HTTPException(status_code=503, detail="web login is not configured")
     payload = provider.open(cookie, ttl=SESSION_SECONDS)
@@ -278,9 +291,13 @@ async def authenticated_web_user(
 
 def web_auth_router(
     settings: RuntimeSettings,
-    provider: SupabaseAuth,
-    sessions: PostgresWebSessions | None,
+    provider: SupabaseAuth | GoogleAuth,
+    sessions: LocalSessions | None,
 ) -> APIRouter:
+    if isinstance(sessions, LocalSessions):
+        from gg.runtime.google_auth import google_auth_router
+
+        return google_auth_router(settings, provider, sessions)
     router = APIRouter(prefix="/auth")
 
     @router.get("/google/start")

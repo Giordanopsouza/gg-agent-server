@@ -22,9 +22,10 @@ from gg.server.agent import (
     load_meta,
 )
 from gg.server.agent.agent_backend import create_agent_backend
-from gg.server.agent.event_log import META_FILE, load_base_state
+from gg.server.agent.event_log import load_base_state
 from gg.server.config import Settings
 from gg.server.pubsub import PubSub
+from gg.server.sqlite_state import SandboxState
 
 
 class ConversationService:
@@ -34,6 +35,7 @@ class ConversationService:
         self._settings = settings
         self._conversations_dir = settings.conversations_dir
         self._conversations_dir.mkdir(parents=True, exist_ok=True)
+        self.state_db = SandboxState(self._conversations_dir / "sandbox.db")
         self._live: dict[str, LocalConversation] = {}
         self._run_lock = asyncio.Lock()
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
@@ -87,7 +89,7 @@ class ConversationService:
             return self._live[conversation_id]
 
         conversation_dir = self._conversations_dir / conversation_id
-        if not (conversation_dir / META_FILE).is_file():
+        if not self._exists(conversation_id):
             raise ConversationNotFoundError(conversation_id)
 
         state = load_base_state(conversation_dir)
@@ -109,15 +111,12 @@ class ConversationService:
         self.get(conversation_id).set_github_token(token)
 
     def list(self) -> list[ConversationRecord]:
-        """Return catalog records from ``conversations_dir/*/meta.json``."""
-        if not self._conversations_dir.is_dir():
-            return []
-
-        records: list[ConversationRecord] = []
-        for child in self._conversations_dir.iterdir():
-            meta_path = child / META_FILE
-            if meta_path.is_file():
-                records.append(load_meta(child))
+        """Return the persisted SQLite conversation catalog."""
+        with self.state_db.connection() as connection:
+            rows = connection.execute(
+                "SELECT meta_json FROM conversations WHERE meta_json IS NOT NULL"
+            ).fetchall()
+        records = [ConversationRecord.model_validate_json(row[0]) for row in rows]
         records.sort(key=lambda record: record.created_at)
         return records
 
@@ -206,7 +205,15 @@ class ConversationService:
     def _exists(self, conversation_id: str) -> bool:
         if conversation_id in self._live:
             return True
-        return (self._conversations_dir / conversation_id / META_FILE).is_file()
+        with self.state_db.connection() as connection:
+            return (
+                connection.execute(
+                    """SELECT 1 FROM conversations WHERE directory = ?
+                       AND meta_json IS NOT NULL""",
+                    (conversation_id,),
+                ).fetchone()
+                is not None
+            )
 
     def _resolve_working_dir(self, working_dir: Path | str) -> Path:
         path = Path(working_dir)

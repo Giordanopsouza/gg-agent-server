@@ -106,6 +106,7 @@ class CheckpointCoordinator:
         self.snapshot = snapshot
         self.commit = commit
         self.confirmed_revision = -1
+        self.last_error: str | None = None
         self._lock = asyncio.Lock()
         self._confirmed = asyncio.Condition()
 
@@ -113,7 +114,24 @@ class CheckpointCoordinator:
     def pending(self) -> bool:
         return self.db.revision > self.confirmed_revision
 
+    async def run(self):
+        """Background activity checkpoint; failures suspend new effects until retry."""
+        while True:
+            await asyncio.sleep(2)
+            if self.pending or self.last_error:
+                try:
+                    await self.checkpoint()
+                except Exception:
+                    pass  # checkpoint records only a sanitized failure category.
+
     async def checkpoint(self) -> int:
+        try:
+            return await self._checkpoint()
+        except BaseException as exc:
+            self.last_error = type(exc).__name__
+            raise
+
+    async def _checkpoint(self) -> int:
         async with self._lock:
             revision = publish_snapshot(self.db, self.snapshot)
             commit = asyncio.create_task(self.commit())
@@ -135,13 +153,14 @@ class CheckpointCoordinator:
                 raise
             async with self._confirmed:
                 self.confirmed_revision = revision
+                self.last_error = None
                 self._confirmed.notify_all()
             return revision
 
     async def ensure_durable(self, revision: int) -> None:
         if revision < 0 or revision > self.db.revision:
             raise ValueError("revision must name a committed local write")
-        while self.confirmed_revision < revision:
+        while self.confirmed_revision < revision or self.last_error:
             await self.checkpoint()
 
     async def wait_until_confirmed(self, revision: int) -> None:

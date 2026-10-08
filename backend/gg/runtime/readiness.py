@@ -29,6 +29,8 @@ class RuntimeReadiness(BaseModel):
     scheduler_error: str | None = None
     admission_blocked_reason: str | None = None
     conditions: tuple[ReadinessCondition, ...] = ()
+    recovering: bool = False
+    persistence_error: str | None = None
 
 
 def _classify_condition(phase: ReservationPhase, detail: str) -> str:
@@ -91,12 +93,23 @@ def build_readiness(
 
 
 def readiness_from_scheduler(
-    scheduler: TaskScheduler, *, database_available: bool
+    scheduler: TaskScheduler,
+    *,
+    database_available: bool,
+    recovering: bool = False,
+    persistence_error: str | None = None,
 ) -> RuntimeReadiness:
-    return build_readiness(
+    report = build_readiness(
         database_available=database_available,
         dispatch_owner=scheduler.owns_dispatch_lock(),
         dispatch=scheduler.status(),
+    )
+    return report.model_copy(
+        update={
+            "recovering": recovering,
+            "persistence_error": persistence_error,
+            "status": "not_ready" if recovering or persistence_error else report.status,
+        }
     )
 
 
