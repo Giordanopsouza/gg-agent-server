@@ -116,10 +116,9 @@ def test_retention_expires_terminal_payload_but_keeps_idempotency(
         )
         ledger.finish_task(record.id, state=TaskState.COMPLETED)
         old = datetime.now(UTC) - timedelta(days=8)
-        assert ledger._conn is not None
-        with ledger._lock:
-            ledger._conn.execute(
-                "UPDATE tasks SET updated_at = %s WHERE id = %s",
+        with ledger.db.write() as tx:
+            tx.connection.execute(
+                "UPDATE tasks SET updated_at = ? WHERE id = ?",
                 (old.isoformat(), record.id),
             )
         limits = StorageLimits(

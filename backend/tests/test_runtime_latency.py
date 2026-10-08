@@ -6,14 +6,12 @@ import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from uuid import UUID
 
 import httpx
 import pytest
 from cryptography.fernet import Fernet
 from joserfc import jwk, jwt
-from sqlalchemy import text
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.scheduler import TaskScheduler
@@ -168,7 +166,7 @@ def test_history_outcomes_are_batched_and_owner_scoped():
             owner_id=owner,
         )
         ledger.archive_task_result(
-            task.id,
+            task_id=task.id,
             execution_id=None,
             manifest=TaskResultManifest(
                 task_id=task.id,
@@ -183,24 +181,23 @@ def test_history_outcomes_are_batched_and_owner_scoped():
         assert len(tasks) == 1
         assert tasks[0].agent_outcome == "no_changes"
         assert ledger.list(owner_id=UUID(SESSION)) == []
-        # Dict rows on raw ledger connections must not leak into SQLAlchemy's
-        # shared engine, used by auth sessions and credential services.
-        with ledger.engine.connect() as connection:
-            assert connection.execute(text("select 1")).scalar_one() == 1
+        # Ledger row mapping must not leak into the shared SQLite connection.
+        with ledger.db.read() as connection:
+            assert connection.execute("select 1").fetchone() == (1,)
 
 
 def test_history_reads_do_not_wait_for_the_writer_lock():
     with new_ledger() as ledger:
         with ThreadPoolExecutor(max_workers=1) as worker:
-            with ledger._lock:
+            with ledger.db.write():
                 assert worker.submit(ledger.list).result(timeout=2) == []
 
 
-def test_single_connection_configuration_keeps_working():
-    ledger = new_ledger()
-    ledger._database = replace(ledger._database, max_size=1)
-    with ledger:
+def test_reopened_connection_keeps_working():
+    with new_ledger() as ledger:
         assert ledger.list() == []
+    with new_ledger() as reopened:
+        assert reopened.list() == []
 
 
 @pytest.mark.anyio

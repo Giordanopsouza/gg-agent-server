@@ -91,10 +91,10 @@ def _ledger() -> TaskLedger:
         retry_of=None,
     )
     # Stable id keeps fake-provider assertions clear while preserving the FK.
-    assert ledger._conn is not None  # noqa: SLF001
-    ledger._conn.execute(  # noqa: SLF001
-        "UPDATE tasks SET id = 'task-1' WHERE id = %s", (record.id,)
-    )
+    with ledger.db.write() as tx:
+        tx.connection.execute(
+            "UPDATE tasks SET id = 'task-1' WHERE id = ?", (record.id,)
+        )
     return ledger
 
 

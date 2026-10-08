@@ -8,7 +8,7 @@ from gg.runtime import RuntimeSettings, create_app
 from gg.sdk.task_client import TaskClient
 from gg.sdk.task_settings import TaskClientSettings
 from gg.sdk.tasks import CreateTaskRequest, TaskState
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 def _settings(tmp_path) -> RuntimeSettings:
@@ -74,11 +74,7 @@ def test_follow_up_submit_uses_prior_branch_without_mutating_original(
                     idempotency_key="k-original",
                 )
             )
-            assert ledger._conn is not None
-            ledger._conn.execute(
-                "UPDATE tasks SET state = %s WHERE id = %s",
-                (TaskState.COMPLETED.value, original.record.id),
-            )
+            ledger.finish_task(original.record.id, state=TaskState.COMPLETED)
             ledger.record_base_sha(original.record.id, "deadbeef")
             follow_up = client.submit(
                 CreateTaskRequest(

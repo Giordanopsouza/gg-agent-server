@@ -161,3 +161,19 @@ def test_snapshot_rejects_wal_header_without_sidecars(tmp_path):
     connection.close()
     with pytest.raises(InvalidDatabase, match="WAL-dependent"):
         validate_snapshot(snapshot)
+
+
+def test_remote_migrate_restores_supported_older_snapshot_only(tmp_path):
+    from gg.runtime.modal_operations import offline_state
+    from gg.runtime.sqlite_migrations import MIGRATIONS, apply_migrations
+
+    snapshot = tmp_path / "runtime.snapshot"
+    with sqlite3.connect(snapshot, isolation_level=None) as connection:
+        apply_migrations(connection, MIGRATIONS[:1])
+    with pytest.raises(InvalidDatabase, match="version"):
+        restore(snapshot, tmp_path / "startup.db")
+    assert validate_snapshot(snapshot, allow_older=True) == 0
+    revision = offline_state("migrate", snapshot)
+    assert revision == len(MIGRATIONS) - 1
+    assert validate_snapshot(snapshot) == revision
+    assert validate_snapshot(snapshot.with_suffix(".previous"), allow_older=True) == 0

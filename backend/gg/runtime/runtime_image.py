@@ -1,8 +1,34 @@
 """Build React into the runtime image; Node is used only during image build."""
 
+import hashlib
+
 import modal
 
 from gg.runtime.modal_image import find_repository_root
+
+
+def runtime_version() -> str:
+    root = find_repository_root()
+    digest = hashlib.sha256()
+    paths = sorted(
+        path
+        for directory in ("backend/gg", "packages/gg-sdk/gg", "frontend/src")
+        for path in (root / directory).rglob("*")
+        if path.is_file() and path.suffix in {".py", ".ts", ".tsx", ".css"}
+    )
+    paths += [
+        root / "frontend" / name
+        for name in (
+            "package.json",
+            "package-lock.json",
+            "index.html",
+            "vite.config.ts",
+        )
+    ]
+    for path in paths:
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def runtime_image() -> modal.Image:
@@ -39,5 +65,10 @@ def runtime_image() -> modal.Image:
             ignore=["build", "*.egg-info", "__pycache__", "tests", ".*cache"],
         )
         .pip_install("/app/packages/gg-sdk", "/app/backend")
-        .env({"GG_WEB_DIST_PATH": "/app/frontend/dist"})
+        .env(
+            {
+                "GG_WEB_DIST_PATH": "/app/frontend/dist",
+                "GG_RUNTIME_VERSION": runtime_version(),
+            }
+        )
     )

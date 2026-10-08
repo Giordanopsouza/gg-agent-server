@@ -90,3 +90,29 @@ db-current:
 db-check:
 	@test -n "$(GG_MIGRATION_DATABASE_URL)" || { echo "Set GG_MIGRATION_DATABASE_URL to the migrator Postgres URL"; exit 1; }
 	GG_MIGRATION_DATABASE_URL='$(GG_MIGRATION_DATABASE_URL)' $(ALEMBIC) check
+
+.PHONY: modal-init modal-migrate modal-backup modal-restore modal-deploy modal-rollover modal-stop modal-verify
+
+modal-init:
+	$(MAKE) -C backend $@
+
+modal-migrate:
+	$(MAKE) -C backend $@
+
+modal-backup:
+	$(MAKE) -C backend $@
+
+modal-restore:
+	$(MAKE) -C backend $@
+
+modal-deploy:
+	$(MAKE) -C backend $@
+
+modal-rollover:
+	$(MAKE) -C backend $@
+
+modal-stop:
+	$(MAKE) -C backend $@
+
+modal-verify:
+	$(MAKE) -C backend $@

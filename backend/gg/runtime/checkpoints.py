@@ -10,10 +10,14 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from gg.runtime.sqlite_db import SQLiteDB
-from gg.runtime.sqlite_migrations import InvalidDatabase, validate_schema
+from gg.runtime.sqlite_migrations import (
+    SCHEMA_VERSION,
+    InvalidDatabase,
+    validate_schema,
+)
 
 
-def validate_snapshot(path: Path) -> int:
+def validate_snapshot(path: Path, *, allow_older: bool = False) -> int:
     """Read without changing the source or consuming any WAL sidecar."""
     if not path.is_file():
         raise FileNotFoundError(path)
@@ -33,6 +37,9 @@ def validate_snapshot(path: Path) -> int:
             raise InvalidDatabase("snapshot integrity check failed")
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise InvalidDatabase("snapshot has broken foreign keys")
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if allow_older and 1 <= version <= SCHEMA_VERSION:
+            return validate_schema(connection, version=version)
         return validate_schema(connection)
     except sqlite3.DatabaseError as exc:
         raise InvalidDatabase("corrupt snapshot") from exc

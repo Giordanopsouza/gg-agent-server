@@ -211,3 +211,50 @@ os._exit(17)
             ).fetchone()
             is None
         )
+
+
+def test_fixture_reopens_same_file_and_concurrent_instances():
+    from test_support.sqlite_ledger import new_ledger
+
+    with new_ledger() as ledger:
+        path = ledger.db.path
+        first, _ = ledger.submit(
+            prompt="first",
+            idempotency_key="first",
+            repository=None,
+            base_ref=None,
+            retry_of=None,
+        )
+
+    def admit(_):
+        with new_ledger() as other:
+            assert other.db.path == path
+            return other.submit(
+                prompt="race",
+                idempotency_key="race",
+                repository=None,
+                base_ref=None,
+                retry_of=None,
+            )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(admit, range(8)))
+    assert sum(created for _, created in results) == 1
+    with new_ledger() as reopened:
+        assert reopened.db.path == path
+        assert reopened.get(first.id).prompt == "first"
+        assert len(reopened.list()) == 2
+
+
+def test_fixture_cleanup_never_opens_configured_production(monkeypatch, tmp_path):
+    from test_support.sqlite_ledger import clean_test_ledger, new_ledger
+
+    production = tmp_path / "production.db"
+    production.write_bytes(b"untouched")
+    monkeypatch.setenv("GG_RUNTIME_DB_PATH", str(production))
+    monkeypatch.setenv("GG_RUNTIME_DATABASE_URL", "postgresql://production/forbidden")
+    ledger = new_ledger()
+    assert ledger.db.path != production
+    clean_test_ledger()
+    assert ledger.db._closed
+    assert production.read_bytes() == b"untouched"

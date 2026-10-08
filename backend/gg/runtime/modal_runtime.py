@@ -4,7 +4,6 @@ python -m gg.runtime.modal_runtime --environment ENV
 Initialize the environment's gg-runtime-state snapshot explicitly first.
 """
 
-import argparse
 import os
 import tempfile
 import threading
@@ -76,12 +75,11 @@ class Runtime:
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--environment", required=True)
-    args = parser.parse_args()
-    with modal.enable_output():
-        app.deploy(environment_name=args.environment, strategy="recreate")
-        print(Runtime.get_url())
+    import sys
+
+    from gg.runtime.modal_operations import main as operations
+
+    operations(["deploy", *sys.argv[1:]])
 
 
 if __name__ == "__main__":

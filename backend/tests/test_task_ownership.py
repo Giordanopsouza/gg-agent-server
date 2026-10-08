@@ -2,103 +2,50 @@
 
 from __future__ import annotations
 
-import os
+import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
-from datetime import timedelta
-from urllib.parse import urlsplit
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-import psycopg
 import pytest
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-from psycopg import sql
 from starlette.websockets import WebSocketDisconnect
 
 from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
-from gg.runtime.ledger import TaskLedger
-from gg.runtime.postgres import RuntimePostgres
-from gg.runtime.web_auth import SESSION_COOKIE, SupabaseAuth
+from gg.runtime.local_sessions import token_hash
+from gg.runtime.web_auth import SESSION_COOKIE
 from gg.sdk.tasks import TaskState
-
-
-class FakeValidatedAuth(SupabaseAuth):
-    async def verified_user(self, access_token: str) -> dict[str, str]:
-        return {
-            "id": str(UUID(access_token)),
-            "email": "local@example.test",
-            "session_id": str(UUID(int=3)),
-        }
-
-
-class ActiveSessions:
-    def active(self, user_id: str, session_id: str) -> bool:
-        return bool(UUID(user_id) and UUID(session_id))
+from test_support.sqlite_ledger import new_ledger
 
 
 @pytest.fixture
 def owned_app(tmp_path):
-    url = os.getenv("GG_RUNTIME_DATABASE_URL", "")
-    if urlsplit(url).hostname not in {"localhost", "127.0.0.1"}:
-        pytest.skip("requires local Supabase Postgres")
-    database = replace(
-        RuntimePostgres.from_env(),
-        schema=os.getenv("GG_RUNTIME_TEST_SCHEMA", "runtime_private"),
-    )
+    ledger = new_ledger()
     settings = RuntimeSettings(
         api_key="operator-secret",
-        supabase_url="https://local.supabase.test",
-        supabase_publishable_key="local-publishable",
-        web_cookie_key=Fernet.generate_key().decode(),
         web_origin="https://app.example",
         task_dispatch_enabled=False,
         dispatch_lock_path=str(tmp_path / "dispatch.lock"),
     )
-    provider = FakeValidatedAuth(settings)
-    ledger = TaskLedger(database)
-    app = create_app(
-        settings,
-        task_ledger=ledger,
-        web_auth=provider,
-        web_sessions=ActiveSessions(),
-    )
-    task_ids: set[str] = set()
-    try:
-        with TestClient(app, base_url="https://app.example") as client:
-            yield client, provider, ledger, task_ids
-    finally:
-        with psycopg.connect(database.url, **database.connection_kwargs()) as conn:
-            for table in (
-                "sandbox_creations",
-                "task_reservations",
-                "publication_intents",
-                "task_supervisions",
-                "task_event_copies",
-                "task_message_receipts",
-                "task_results",
-                "retention_tombstones",
-            ):
-                conn.execute(
-                    sql.SQL("DELETE FROM {}.{} WHERE task_id = ANY(%s)").format(
-                        sql.Identifier(database.schema), sql.Identifier(table)
-                    ),
-                    (list(task_ids),),
-                )
-            conn.execute(
-                sql.SQL("DELETE FROM {}.tasks WHERE id = ANY(%s)").format(
-                    sql.Identifier(database.schema)
-                ),
-                (list(task_ids),),
-            )
+    app = create_app(settings, task_ledger=ledger)
+    with TestClient(app, base_url="https://app.example") as client:
+        yield client, app.state.web_sessions, ledger, set()
 
 
-def _as_owner(client: TestClient, provider: SupabaseAuth, owner: UUID) -> None:
-    client.cookies.set(
-        SESSION_COOKIE,
-        provider.seal({"access": str(owner), "refresh": "unused"}),
-    )
+def _as_owner(client: TestClient, provider, owner: UUID) -> None:
+    token = str(uuid4())
+    with provider.db.write() as tx:
+        tx.connection.execute(
+            "INSERT OR IGNORE INTO local_users VALUES (?, ?, ?)",
+            (str(owner), str(owner), "local@example.test"),
+        )
+        tx.connection.execute(
+            "INSERT INTO local_sessions(token_hash, owner_id, expires_at) "
+            "VALUES (?, ?, ?)",
+            (token_hash(token), str(owner), int(time.time()) + 3600),
+        )
+    client.cookies.set(SESSION_COOKIE, token)
 
 
 def _submit(client: TestClient, key: str, prompt: str = "hello"):
@@ -216,12 +163,9 @@ def test_expired_payload_keeps_owner_scoped_deduplication(owned_app) -> None:
     task_id = task.json()["id"]
     task_ids.add(task_id)
     ledger.finish_task(task_id, state=TaskState.COMPLETED)
-    assert ledger._conn is not None
-    row = ledger._conn.execute(
-        "SELECT * FROM tasks WHERE id = %s", (task_id,)
-    ).fetchone()
-    ledger._expire_task_payload(
-        task_id, record=row, tombstone_retention=timedelta(days=90)
+    ledger.expire_terminal_payloads(
+        before=datetime.now(UTC) + timedelta(seconds=1),
+        tombstone_retention=timedelta(days=90),
     )
     assert _submit(client, key).json()["id"] == task_id
     _as_owner(client, provider, bob)
@@ -233,12 +177,11 @@ def test_expired_payload_keeps_owner_scoped_deduplication(owned_app) -> None:
 
 def test_concurrent_same_key_uses_one_task_per_owner(owned_app) -> None:
     _, _, ledger, task_ids = owned_app
-    database = ledger._database
     alice, bob = uuid4(), uuid4()
     key = f"concurrent-{uuid4()}"
 
     def admit(owner: UUID, prompt: str):
-        with TaskLedger(database) as connection:
+        with new_ledger() as connection:
             return connection.submit(
                 idempotency_key=key,
                 repository=None,
@@ -255,7 +198,7 @@ def test_concurrent_same_key_uses_one_task_per_owner(owned_app) -> None:
     task_ids.update(record.id for record, _ in submissions)
     assert len(task_ids) == 2
     assert sum(created for _, created in submissions) == 2
-    with TaskLedger(database) as connection:
+    with new_ledger() as connection:
         assert {row.id for row in connection.list(owner_id=alice)} & task_ids == {
             submissions[0][0].id
         }

@@ -378,3 +378,29 @@ de implementação por fatia:
   111b: deploy isolado recreate, restart e provas operacionais.
 QA em ordem, builds e demo real; registrar primeiro bloqueio sem declarar
 aceite live quando algum pré-requisito não estiver disponível.
+
+
+## Execução autorizada 112–114 (2026-10-08)
+
+Worktree 091 reutilizada, inicialmente limpa. Fatias sequenciais:
+- 113: helper SQLite, reexport, fixture autouse e provas de isolamento/reabertura.
+- 114a: cinco consumidores API/SDK; 114b: correção de replay HTTP de payload
+  expirado revelada pelo teste de ownership, preservando a identidade.
+- 112a: endpoint operacional do coordenador e identificação de versão/revisão;
+  112b: comandos Modal isolados e Makefiles; 112c: testes e demo operacional.
+Cada fatia limita as edições por subsistema. Usar somente ambiente Modal isolado
+para a prova operacional; não fazer o corte de produção das tarefas 125–128.
+
+A troca do autouse na 113 fez executar casos antes pulados: três consumidores
+legados (modal_sandbox, production_operations e runtime_latency) acessavam
+_conn/_lock/engine Postgres. Antecipado somente o ajuste dessas operações de
+fixture para SQLite, em uma fatia de três arquivos, para manter o QA verde.
+Não concluir 115/116 por isso; o restante dessas tarefas conserva seu escopo.
+
+112–114 concluídas: operações remotas isoladas com lease compartilhada,
+backup ativo pelo coordenador, fixtures sem Postgres e contratos API/SDK
+preservados. QA final: 456 passed, 3 skips de integração Postgres legada,
+2 deselected; builds e testes frontend aprovados. Demo real no ambiente
+sqlite-111-proof preservou identidade/eventos/manifest após restore e recreate;
+recursos do ensaio encerrados, reserved=0. Ver
+[evidência 112–114](../docs/tasks/evidence/112-114-verification.md).

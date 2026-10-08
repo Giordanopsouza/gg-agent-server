@@ -81,6 +81,7 @@ class StaticWeb:
             "api",
             "auth",
             "webhooks",
+            "ops",
             "health",
             "ready",
             "docs",

@@ -327,9 +327,33 @@ def create_app(
             persistence_error=checkpoints.last_error if checkpoints else None,
         )
         body = report.model_dump(mode="json")
+        body.update(
+            version=os.getenv("GG_RUNTIME_VERSION", "local"),
+            revision=ledger.db.revision if isinstance(ledger, TaskLedger) else None,
+            confirmed_revision=checkpoints.confirmed_revision if checkpoints else None,
+        )
         if body["status"] != "ready":
             response.status_code = 503
         return body
+
+    @app.post("/ops/backup", dependencies=[Depends(_check_api_key)])
+    async def operational_backup():
+        if checkpoints is None or app.state.recovering:
+            raise HTTPException(status_code=503, detail="runtime not ready for backup")
+        try:
+            revision = await checkpoints.checkpoint()
+            # No await between checkpoint and open/read: capture the published file
+            # before another coroutine can replace it. Return a closed snapshot.
+            content = checkpoints.snapshot.read_bytes()
+        except Exception:
+            raise HTTPException(
+                status_code=503, detail="backup persistence failed"
+            ) from None
+        return Response(
+            content,
+            media_type="application/vnd.sqlite3",
+            headers={"X-Runtime-Revision": str(revision), "Cache-Control": "no-store"},
+        )
 
     app.include_router(task_router, dependencies=[Depends(task_access)])
     app.include_router(event_socket_router)

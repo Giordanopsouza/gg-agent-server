@@ -36,9 +36,9 @@ def migrate(path: Path, snapshot: Path) -> int:
             connection.close()
 
 
-def restore(snapshot: Path, destination: Path) -> int:
+def restore(snapshot: Path, destination: Path, *, allow_older: bool = False) -> int:
     """Never edit the source or overwrite state. Restore into a fresh location."""
-    revision = validate_snapshot(snapshot)
+    revision = validate_snapshot(snapshot, allow_older=allow_older)
     destination = destination.resolve()
     with database_lease(destination, exclusive=True):
         if destination.exists() or any(
@@ -52,7 +52,7 @@ def restore(snapshot: Path, destination: Path) -> int:
         temporary = Path(filename)
         try:
             shutil.copyfile(snapshot, temporary)
-            if validate_snapshot(temporary) != revision:
+            if validate_snapshot(temporary, allow_older=allow_older) != revision:
                 raise InvalidDatabase("source snapshot changed during restore")
             with temporary.open("rb") as source:
                 os.fsync(source.fileno())

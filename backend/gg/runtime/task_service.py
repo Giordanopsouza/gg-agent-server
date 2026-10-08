@@ -146,7 +146,11 @@ class TaskService:
             model=request.model,
             owner_id=owner_id,
         )
-        if not created and not self._matches_existing(record, request):
+        if (
+            not created
+            and not record.payload_expired
+            and not self._matches_existing(record, request)
+        ):
             raise TaskConflictError(record)
         if created and base_sha is not None:
             record = self._ledger.record_base_sha(record.id, base_sha)
