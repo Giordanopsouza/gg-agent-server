@@ -12,21 +12,8 @@ from gg.runtime.ledger import (
 )
 from gg.runtime.modal_sandbox import SandboxSnapshot
 from gg.runtime.scheduler import DeploymentLock, DispatchLockError, TaskScheduler
-from gg.runtime.sqlite_db import SQLiteDB, initialize
 from gg.sdk.tasks import TaskState
-
-
-@pytest.fixture(autouse=True)
-def sqlite_ledger(tmp_path, monkeypatch):
-    path = tmp_path / "runtime.db"
-    initialize(path)
-    with SQLiteDB(path) as database:
-        monkeypatch.setitem(globals(), "new_ledger", lambda: TaskLedger(database))
-        yield
-
-
-def new_ledger():
-    raise AssertionError("SQLite fixture must install the ledger")
+from test_support.sqlite_ledger import new_ledger
 
 
 def _submit(ledger: TaskLedger, key: str):

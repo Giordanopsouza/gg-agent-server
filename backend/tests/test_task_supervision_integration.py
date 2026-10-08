@@ -15,7 +15,6 @@ from httpx import ASGITransport
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.ledger import SandboxProviderState, TaskLedger
 from gg.runtime.modal_sandbox import SandboxConnection, SandboxSnapshot
-from gg.runtime.sqlite_db import SQLiteDB, initialize
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.domain import Event, EventKind, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.task_execution import (
@@ -27,6 +26,7 @@ from gg.sdk.task_execution import (
     TaskResultManifest,
 )
 from gg.sdk.tasks import TaskState
+from test_support.sqlite_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -246,8 +246,7 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
 ) -> None:
     state = FakeAgentState()
     agent_app = _build_fake_agent(state)
-    initialize(tmp_path / "runtime.db")
-    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
+    ledger = new_ledger()
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent_app)
     settings = RuntimeSettings(
@@ -306,8 +305,7 @@ async def test_supervision_archives_events_and_completes_no_changes_task(
 @pytest.mark.anyio
 async def test_followup_runs_in_the_same_workspace(tmp_path, monkeypatch) -> None:
     state = FakeAgentState()
-    initialize(tmp_path / "runtime.db")
-    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
+    ledger = new_ledger()
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(
         ledger=ledger, agent_app=_build_fake_agent(state)
@@ -427,8 +425,7 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
 ) -> None:
     state = FakeAgentState(conversation_on_start=False, distinct_execution_id=True)
     agent_app = _build_fake_agent(state)
-    initialize(tmp_path / "runtime.db")
-    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
+    ledger = new_ledger()
     ledger.open()
     lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent_app)
     settings = RuntimeSettings(
@@ -487,8 +484,7 @@ async def test_supervision_copies_events_when_conversation_appears_after_start(
 
 @pytest.mark.anyio
 async def test_cancel_queued_task_is_idempotent(tmp_path) -> None:
-    initialize(tmp_path / "runtime.db")
-    ledger = TaskLedger(SQLiteDB(tmp_path / "runtime.db"))
+    ledger = new_ledger()
     ledger.open()
     settings = RuntimeSettings(
         api_key="control-secret",

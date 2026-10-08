@@ -305,16 +305,17 @@ async def test_sqlite_constraints_flow_expiry_webhook_and_snapshot_recovery(tmp_
     from gg.runtime.checkpoints import CheckpointCoordinator
     from gg.runtime.github_connection import SQLiteGitHubConnections
     from gg.runtime.local_sessions import LocalSessions, token_hash
-    from gg.runtime.sqlite_db import SQLiteDB, initialize
+    from gg.runtime.sqlite_db import SQLiteDB
+    from test_support.sqlite_ledger import new_ledger
 
-    initialize(tmp_path / "db")
     flags = {"fail": False}
 
     async def commit():
         if flags["fail"]:
             raise OSError("private volume error")
 
-    with SQLiteDB(tmp_path / "db") as db:
+    with new_ledger() as ledger:
+        db = ledger.db
         checkpoints = CheckpointCoordinator(db, tmp_path / "snapshot", commit)
         sessions = LocalSessions(db, checkpoints)
         a = await sessions.create("a", "a@example.com")

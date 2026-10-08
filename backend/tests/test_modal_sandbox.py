@@ -16,7 +16,7 @@ from gg.runtime.modal_sandbox import (
     SandboxConnection,
     lifecycle_from_settings,
 )
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 @dataclass

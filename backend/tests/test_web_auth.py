@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import httpx
-import psycopg
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -18,7 +18,7 @@ from gg.runtime.app import create_app
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.openrouter_vault import OpenRouterKeyVerifier
 from gg.runtime.web_auth import SupabaseAuth
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 USER_ID = "d23bfe09-a12b-49c5-845f-315fc9ec10d6"
@@ -51,7 +51,7 @@ def auth_app(tmp_path):
     class FakeSessions:
         def active(self, user_id: str, session_id: str) -> bool:
             if state["session_store_error"]:
-                raise psycopg.OperationalError("database unavailable")
+                raise sqlite3.OperationalError("database unavailable")
             assert user_id == USER_ID
             assert UUID(session_id)
             return not state["revoked"]

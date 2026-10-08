@@ -13,7 +13,7 @@ from gg.runtime.storage import StorageLimits, admission_pressure, run_retention_
 from gg.runtime.task_service import StoragePressureError, TaskService
 from gg.sdk.domain import Event, EventKind
 from gg.sdk.tasks import CreateTaskRequest, TaskState
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}

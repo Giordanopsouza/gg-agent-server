@@ -280,7 +280,7 @@ async def authenticated_web_user(
         active = await asyncio.to_thread(
             sessions.active, user["id"], user["session_id"]
         )
-    except (SQLAlchemyError, psycopg.Error):
+    except (sqlite3.Error, SQLAlchemyError, psycopg.Error):
         raise HTTPException(
             status_code=503, detail="session store unavailable"
         ) from None
@@ -357,7 +357,7 @@ def web_auth_router(
                         profile_ready = await asyncio.to_thread(
                             sessions.ensure_profile, user["id"], user["session_id"]
                         )
-                    except (SQLAlchemyError, psycopg.Error):
+                    except (sqlite3.Error, SQLAlchemyError, psycopg.Error):
                         raise HTTPException(
                             status_code=503, detail="session store unavailable"
                         ) from None
