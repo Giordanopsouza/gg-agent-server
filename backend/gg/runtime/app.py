@@ -40,7 +40,6 @@ from gg.runtime.task_auth import task_access
 from gg.runtime.task_routes import event_socket_router, router as task_router
 from gg.runtime.task_service import TaskService
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
-from gg.runtime.web_auth import SupabaseAuth, web_auth_router
 
 
 _CONTROL_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -64,7 +63,7 @@ def create_app(
     modal_lifecycle: ModalSandboxLifecycle | None = None,
     task_scheduler: TaskScheduler | None = None,
     task_supervision: TaskSupervisionManager | None = None,
-    web_auth: GoogleAuth | SupabaseAuth | None = None,
+    web_auth: GoogleAuth | None = None,
     web_sessions: LocalSessions | None = None,
     openrouter_vault: SQLiteOpenRouterVault | None = None,
     openrouter_verifier: OpenRouterKeyVerifier | None = None,
@@ -184,23 +183,14 @@ def create_app(
         app.state.task_scheduler = scheduler
         app.state.task_supervision = supervision
         app.state.storage_limits = limits
-        app.state.web_auth = auth_provider
         app.state.web_sessions = web_sessions
-        if isinstance(auth_provider, GoogleAuth):
-            app.include_router(
-                google_auth_router(settings, auth_provider, web_sessions)
-            )
-        else:
-            app.include_router(web_auth_router(settings, auth_provider, web_sessions))
+        app.include_router(google_auth_router(settings, auth_provider, web_sessions))
         app.include_router(
-            openrouter_vault_router(
-                settings, auth_provider, web_sessions, openrouter_vault, verifier
-            )
+            openrouter_vault_router(settings, web_sessions, openrouter_vault, verifier)
         )
         app.include_router(
             github_connection_router(
                 settings,
-                auth_provider,
                 web_sessions,
                 github_connections,
                 github_client or GitHubClient(settings),

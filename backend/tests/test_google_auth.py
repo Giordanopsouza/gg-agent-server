@@ -15,10 +15,9 @@ from joserfc.errors import BadSignatureError
 
 from gg.runtime.checkpoints import CheckpointCoordinator
 from gg.runtime.config import RuntimeSettings, load_settings
-from gg.runtime.google_auth import GoogleAuth
+from gg.runtime.google_auth import GoogleAuth, google_auth_router
 from gg.runtime.local_sessions import LocalSessions
 from gg.runtime.sqlite_db import SQLiteDB, initialize
-from gg.runtime.web_auth import web_auth_router
 
 
 @pytest.fixture
@@ -84,7 +83,7 @@ def google_app(tmp_path):
 
     provider = GoogleAuth(settings, sessions, transport=httpx.MockTransport(respond))
     app = FastAPI()
-    app.include_router(web_auth_router(settings, provider, sessions))
+    app.include_router(google_auth_router(settings, provider, sessions))
     with TestClient(app, base_url="https://app.example") as client:
         yield client, settings, state, provider, sessions, checkpoints
     db.close()

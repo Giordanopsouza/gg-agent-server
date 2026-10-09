@@ -87,7 +87,7 @@ def test_http_ownership_redaction_and_checkpoint_failure(google_app):
         httpx.MockTransport(lambda request: httpx.Response(200))
     )
     client.app.include_router(
-        openrouter_vault_router(settings, auth, sessions, vault, verifier)
+        openrouter_vault_router(settings, sessions, vault, verifier)
     )
     path, origin = "/auth/openrouter-credential", {"Origin": settings.web_origin}
     assert client.get(path).status_code == 401

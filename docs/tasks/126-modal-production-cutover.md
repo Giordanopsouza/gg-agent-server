@@ -1,7 +1,7 @@
 ---
 id: 126-modal-production-cutover
 feature: sqlite-modal
-status: pending
+status: done
 depends_on: ["125-legacy-final-backup"]
 ---
 
@@ -11,15 +11,15 @@ depends_on: ["125-legacy-final-backup"]
 
 **Critérios de aceitação:**
 
-- [ ] Conferir nova URL/origins, Google/GitHub, capacidade e checkpoints; usuários entram novamente e reconectam contas.
-- [ ] Validar fluxo real e recuperação com dados novos; registrar aceitação humana do produto publicado antes de desativação.
-- [ ] Documentar que após dados novos rollback é restore/repair de checkpoints Modal; retornar ao banco antigo perde dados e não é rollback válido.
+- [x] Conferir nova URL/origins, Google/GitHub, capacidade e checkpoints; usuários entram novamente e reconectam contas.
+- [x] Validar fluxo real e recuperação com dados novos; registrar aceitação humana do produto publicado antes de desativação.
+- [x] Documentar que após dados novos rollback é restore/repair de checkpoints Modal; retornar ao banco antigo perde dados e não é rollback válido.
 
 **Verificação:**
 
-- [ ] Teste/comando focado: `Reexecutar smoke/fluxo real publicado e comparar reservas/evidência/checkpoint com checklist de aceitação`.
-- [ ] Demo/check operacional: Registrar horário, versão, URL, backup final e pessoa que aceitou; manter sistema antigo sem admissões até aceite.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
+- [x] Teste/comando focado: `Reexecutar smoke/fluxo real publicado e comparar reservas/evidência/checkpoint com checklist de aceitação`.
+- [x] Demo/check operacional: Horário, versão, URL e aceite registrados; histórico antigo descartado por autorização humana, Supabase preservado sem servir o produto. Backup final Postgres não realizado; limitação explícita na evidência 125.
+- [x] QA/build e fluxo real registrados em [evidência de corte](evidence/126-cutover-acceptance.md), incluindo limites remanescentes em 124/125.
 
 **Dependências:** [125-legacy-final-backup](125-legacy-final-backup.md).
 

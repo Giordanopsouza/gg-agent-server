@@ -21,12 +21,7 @@ async def task_access(request: Request, response: Response) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         _require_origin(request, settings)
-    user = await authenticated_web_user(
-        request.app.state.web_auth,
-        request.app.state.web_sessions,
-        cookie,
-        response,
-    )
+    user = await authenticated_web_user(request.app.state.web_sessions, cookie)
     request.state.owner_id = UUID(user["id"])
 
 
@@ -40,9 +35,7 @@ async def socket_owner(websocket: WebSocket) -> UUID | None:
     cookie = websocket.cookies.get(SESSION_COOKIE, "")
     if not cookie or websocket.headers.get("origin") != settings.web_origin:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-    user = await authenticated_web_user(
-        websocket.app.state.web_auth, websocket.app.state.web_sessions, cookie
-    )
+    user = await authenticated_web_user(websocket.app.state.web_sessions, cookie)
     return UUID(user["id"])
 
 

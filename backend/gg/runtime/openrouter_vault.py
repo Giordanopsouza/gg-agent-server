@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -18,14 +18,9 @@ from gg.runtime.local_sessions import LocalSessions, durable
 from gg.runtime.sqlite_db import SQLiteDB
 from gg.runtime.web_auth import (
     SESSION_COOKIE,
-    SupabaseAuth,
     _require_origin,
     authenticated_web_user,
 )
-
-
-if TYPE_CHECKING:
-    from gg.runtime.google_auth import GoogleAuth
 
 
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
@@ -127,7 +122,6 @@ class OpenRouterKeyVerifier:
 
 def openrouter_vault_router(
     settings: RuntimeSettings,
-    auth: SupabaseAuth | GoogleAuth,
     sessions: LocalSessions | None,
     vault: SQLiteOpenRouterVault | None,
     verifier: OpenRouterKeyVerifier,
@@ -137,7 +131,7 @@ def openrouter_vault_router(
     async def owner(request: Request, response: Response) -> str:
         response.headers["Cache-Control"] = "no-store"
         user = await authenticated_web_user(
-            auth, sessions, request.cookies.get(SESSION_COOKIE, ""), response
+            sessions, request.cookies.get(SESSION_COOKIE, "")
         )
         if vault is None:
             raise HTTPException(

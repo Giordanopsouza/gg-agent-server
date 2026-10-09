@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""Link a signed-in Supabase user to a verified GitHub App user authorization."""
+"""Link a signed-in local user to a verified GitHub App authorization."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ from gg.runtime.local_sessions import LocalSessions, durable, token_hash
 from gg.runtime.sqlite_db import SQLiteDB
 from gg.runtime.web_auth import (
     SESSION_COOKIE,
-    SupabaseAuth,
     _require_origin,
     authenticated_web_user,
 )
@@ -374,7 +373,6 @@ class SQLiteGitHubConnections:
 
 def github_connection_router(
     settings: RuntimeSettings,
-    auth: SupabaseAuth,
     sessions: LocalSessions | None,
     store: SQLiteGitHubConnections | None,
     github: GitHubClient,
@@ -414,7 +412,7 @@ def github_connection_router(
                 headers=NO_STORE,
             )
         return await authenticated_web_user(
-            auth, sessions, request.cookies.get(SESSION_COOKIE, ""), response
+            sessions, request.cookies.get(SESSION_COOKIE, "")
         )
 
     @router.get("/auth/github/start")

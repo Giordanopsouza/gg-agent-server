@@ -17,21 +17,16 @@ from fastapi.testclient import TestClient
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.github_connection import GitHubClient, github_connection_router
-from gg.runtime.web_auth import SESSION_COOKIE, SupabaseAuth
+from gg.runtime.local_sessions import LocalSessions
+from gg.runtime.web_auth import SESSION_COOKIE
 
 
-class FakeAuth(SupabaseAuth):
-    async def verified_user(self, access_token):
-        return {
-            "id": access_token,
-            "session_id": "00000000-0000-0000-0000-000000000003",
-            "email": "same@example.test",
-        }
+class FakeSessions(LocalSessions):
+    def __init__(self):
+        pass
 
-
-class FakeSessions:
-    def active(self, user_id, session_id):
-        return True
+    async def user(self, token):
+        return {"id": token, "email": "same@example.test"}
 
 
 class FakeStore:
@@ -137,13 +132,12 @@ def fixture():
             return httpx.Response(200, json={"installations": state["installations"]})
         raise AssertionError(request.url)
 
-    auth = FakeAuth(settings)
+    auth = object()
     store = FakeStore()
     app = FastAPI()
     app.include_router(
         github_connection_router(
             settings,
-            auth,
             FakeSessions(),
             store,
             GitHubClient(settings, httpx.MockTransport(github_response)),
@@ -154,9 +148,7 @@ def fixture():
 
 
 def as_user(client, auth, owner):
-    client.cookies.set(
-        SESSION_COOKIE, auth.seal({"access": owner, "refresh": "unused"})
-    )
+    client.cookies.set(SESSION_COOKIE, owner)
 
 
 def start(client):

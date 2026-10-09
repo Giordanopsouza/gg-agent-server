@@ -46,8 +46,6 @@ class RuntimeSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     api_key: str
-    supabase_url: str | None = None
-    supabase_publishable_key: str | None = None
     google_client_id: str | None = None
     google_client_secret: str | None = None
     web_cookie_key: str | None = None
@@ -112,7 +110,7 @@ class RuntimeSettings(BaseModel):
             )
         return value
 
-    @field_validator("supabase_url", "web_origin")
+    @field_validator("web_origin")
     @classmethod
     def validate_web_url(cls, value: str | None) -> str | None:
         if value is not None:
@@ -261,10 +259,6 @@ def load_settings() -> RuntimeSettings:
 
     return RuntimeSettings(
         api_key=api_key,
-        supabase_url=_optional_secret(os.getenv("GG_SUPABASE_URL")),
-        supabase_publishable_key=_optional_secret(
-            os.getenv("GG_SUPABASE_PUBLISHABLE_KEY")
-        ),
         google_client_id=_optional_secret(os.getenv("GG_GOOGLE_CLIENT_ID")),
         google_client_secret=_optional_secret(os.getenv("GG_GOOGLE_CLIENT_SECRET")),
         web_cookie_key=_optional_secret(os.getenv("GG_WEB_COOKIE_KEY")),
