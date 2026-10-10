@@ -302,3 +302,101 @@ def test_single_task_and_list_preserve_archived_agent_outcome(runtime):
     )
     assert client.get("/tasks/" + task["id"]).json()["agent_outcome"] == "succeeded"
     assert client.get("/tasks").json()[0]["agent_outcome"] == "succeeded"
+
+
+@pytest.mark.anyio
+async def test_socket_subscribes_before_replay_and_deduplicates(monkeypatch):
+    from types import SimpleNamespace
+
+    from gg.runtime import task_routes
+    from gg.sdk.domain import Event, EventKind
+    from gg.sdk.task_supervision import TaskEventCopy
+
+    first = TaskEventCopy(
+        cursor=1,
+        source_id="source",
+        source_seq=1,
+        event=Event(seq=1, kind=EventKind.MESSAGE, payload={"text": "first"}),
+    )
+    second = first.model_copy(update={"cursor": 2, "source_seq": 2})
+    queue = asyncio.Queue()
+    state = {"subscribed": False, "unsubscribed": False}
+
+    class Supervision:
+        def subscribe_events(self, task_id):
+            state["subscribed"] = True
+            return queue
+
+        def list_event_copies(self, task_id, after_cursor):
+            assert state["subscribed"]
+            return [first]
+
+        def unsubscribe_events(self, task_id, target):
+            assert target is queue
+            state["unsubscribed"] = True
+
+    class Socket:
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                task_supervision=Supervision(),
+                task_service=SimpleNamespace(get=lambda *args, **kwargs: True),
+            )
+        )
+        sent = []
+
+        async def accept(self):
+            pass
+
+        async def send_json(self, data):
+            self.sent.append(data["cursor"])
+            if data["cursor"] == 1:
+                queue.put_nowait(first)  # Replay/live overlap.
+                queue.put_nowait(second)  # Event during replay send.
+            else:
+                raise WebSocketDisconnect()
+
+    async def owner(socket):
+        return "a"
+
+    monkeypatch.setattr(task_routes, "socket_owner", owner)
+    socket = Socket()
+    await task_routes.stream_task_events(socket, "task", after=0)
+    assert socket.sent == [1, 2] and state["unsubscribed"]
+
+
+def test_read_routes_do_not_wait_for_unrelated_pending_writes(runtime):
+    client, state, sessions, checkpoints, ledger, _ = runtime
+    token = login(client, state, "reader")
+    created = client.post(
+        "/tasks",
+        headers={"Origin": "https://app.example"},
+        json={"prompt": "hello", "idempotency_key": "reads"},
+    ).json()
+    task_id = created["id"]
+    client.portal.call(client.app.state.task_scheduler.stop)
+    with ledger.db.write() as tx:
+        tx.connection.execute("CREATE TABLE unrelated_read_test (value TEXT)")
+    try:
+        state["fail"] = True
+        commits = state["commits"]
+        for path in (
+            "/auth/session",
+            "/tasks",
+            f"/tasks/{task_id}",
+            f"/tasks/{task_id}/events",
+            f"/tasks/{task_id}/result",
+        ):
+            assert client.get(path).status_code == 200
+        assert state["commits"] == commits and checkpoints.pending
+        client.cookies.set(SESSION_COOKIE, "invalid")
+        assert client.get("/tasks").status_code == 401
+        assert state["commits"] == commits
+        client.cookies.set(SESSION_COOKIE, token)
+        response = client.post(
+            "/tasks",
+            headers={"Origin": "https://app.example"},
+            json={"prompt": "blocked mutation", "idempotency_key": "blocked"},
+        )
+        assert response.status_code == 503 and len(ledger.list()) == 1
+    finally:
+        state["fail"] = False  # Fixture shutdown must be able to checkpoint.

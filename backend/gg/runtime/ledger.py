@@ -236,8 +236,10 @@ class TaskLedger:
             yield connection
 
     @contextmanager
-    def _write_connection(self) -> Iterator[sqlite3.Connection]:
-        with self._database.write() as transaction:
+    def _write_connection(
+        self, *, skip_unchanged: bool = False
+    ) -> Iterator[sqlite3.Connection]:
+        with self._database.write(skip_unchanged=skip_unchanged) as transaction:
             transaction.connection.row_factory = lambda cursor, values: dict(
                 zip((c[0] for c in cursor.description), values)
             )
@@ -646,24 +648,25 @@ class TaskLedger:
         detail: str | None = None,
     ) -> SandboxCreationRecord:
         """Record provider identity/state without exposing stored credentials."""
-        with self._write_connection() as connection:
-            now = _utcnow_iso()
-            if provider_id is None:
-                connection.execute(
-                    """
-            UPDATE sandbox_creations SET provider_state = ?, detail = ?,
-            updated_at = ? WHERE task_id = ?
-            """,
-                    (provider_state.value, detail, now, task_id),
-                )
-            else:
-                connection.execute(
-                    """
-            UPDATE sandbox_creations SET provider_id = ?, provider_state = ?,
-            detail = ?, updated_at = ? WHERE task_id = ?
-            """,
-                    (provider_id, provider_state.value, detail, now, task_id),
-                )
+        with self._write_connection(skip_unchanged=True) as connection:
+            connection.execute(
+                """
+                UPDATE sandbox_creations SET provider_id = COALESCE(?, provider_id),
+                provider_state = ?, detail = ?, updated_at = ? WHERE task_id = ?
+                AND (provider_id IS NOT COALESCE(?, provider_id)
+                     OR provider_state IS NOT ? OR detail IS NOT ?)
+                """,
+                (
+                    provider_id,
+                    provider_state.value,
+                    detail,
+                    _utcnow_iso(),
+                    task_id,
+                    provider_id,
+                    provider_state.value,
+                    detail,
+                ),
+            )
             row = connection.execute(
                 "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
             ).fetchone()

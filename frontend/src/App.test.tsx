@@ -255,7 +255,7 @@ describe("history and detail latency", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it("shows detail before slow evidence and reuses unchanged results", async () => {
+  it("refreshes evidence independently of task and event requests", async () => {
     vi.useFakeTimers();
     window.location.hash = "#/tasks/task-1";
     let finishResult!: (value: Response) => void;
@@ -277,7 +277,7 @@ describe("history and detail latency", () => {
       expect(host.querySelector(".detail-header h1")?.textContent).toBe("Task task-1");
       await act(async () => { finishResult(response({ state: "running", manifest: null, publication: null })); finishEvents(response([])); });
       await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-      expect(fetch.mock.calls.filter(([url]) => url.endsWith("/result"))).toHaveLength(1);
+      expect(fetch.mock.calls.filter(([url]) => url.endsWith("/result"))).toHaveLength(2);
       await act(async () => { finishEvents(response([])); });
       updated = "2026-09-29T10:01:00Z";
       await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
@@ -285,4 +285,31 @@ describe("history and detail latency", () => {
       await act(async () => { finishResult(response({ state: "running", manifest: null, publication: null })); finishEvents(response([])); });
     } finally { vi.useRealTimers(); }
   });
+});
+
+it("refreshes the task immediately after a follow-up and hides cached history on expiry", async () => {
+  window.location.hash = "#/tasks/task-1";
+  let expired = false;
+  const fetch = vi.fn((url: string, init?: RequestInit) => Promise.resolve(
+    url === "/auth/session" ? response({ user: { id: "user-a", email: null } })
+      : url === "/tasks" ? response([task("task-1", null)])
+        : url === "/tasks/task-1" ? response(task("task-1", null))
+          : url.includes("/events") ? response([{ cursor: 1, event: { id: "private", kind: "message", payload: { text: "Private cached history" }, created_at: "2026-10-09" } }])
+            : url.endsWith("/messages") && init?.method === "POST" ? response(expired ? { detail: "expired" } : { id: "m", status: "accepted" }, expired ? 401 : 200)
+              : url.endsWith("/result") ? response({ state: "running", manifest: null, publication: null })
+                : url === "/auth/openrouter-credential" ? response({ configured: false })
+                  : url === "/auth/github" ? response({ status: "disconnected", installations: [] }) : response({}),
+  ));
+  vi.stubGlobal("fetch", fetch);
+  await renderApp();
+  expect(host.textContent).toContain("Private cached history");
+  const before = fetch.mock.calls.filter(([url]) => url.includes("/events")).length;
+  await enterText(host.querySelector<HTMLTextAreaElement>("#followup")!, "Continue");
+  await act(async () => host.querySelector(".followup-composer")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(fetch.mock.calls.filter(([url]) => url.includes("/events"))).toHaveLength(before + 1);
+  expired = true;
+  await enterText(host.querySelector<HTMLTextAreaElement>("#followup")!, "Again");
+  await act(async () => host.querySelector(".followup-composer")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(host.textContent).toContain("Your session expired");
+  expect(host.textContent).not.toContain("Private cached history");
 });

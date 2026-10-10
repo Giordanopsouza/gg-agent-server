@@ -53,7 +53,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     credentials: "include",
-    signal: init?.signal || AbortSignal.timeout(60000),
+    signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
@@ -81,10 +81,15 @@ export const authApi = {
 };
 
 export const taskApi = {
+  eventSocket: (id: string, after: number) => {
+    const url = new URL(`/tasks/sockets/events/${encodeURIComponent(id)}?after=${after}`, window.location.href);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return new WebSocket(url);
+  },
   list: () => request<TaskRecord[]>("/tasks"),
-  get: (id: string) => request<TaskRecord>(`/tasks/${encodeURIComponent(id)}`),
-  events: (id: string, after: number) => request<TaskEventCopy[]>(`/tasks/${encodeURIComponent(id)}/events?after=${after}`),
-  result: (id: string) => request<TaskResult>(`/tasks/${encodeURIComponent(id)}/result`),
+  get: (id: string, signal?: AbortSignal) => request<TaskRecord>(`/tasks/${encodeURIComponent(id)}`, { signal }),
+  events: (id: string, after: number, signal?: AbortSignal) => request<TaskEventCopy[]>(`/tasks/${encodeURIComponent(id)}/events?after=${after}`, { signal }),
+  result: (id: string, signal?: AbortSignal) => request<TaskResult>(`/tasks/${encodeURIComponent(id)}/result`, { signal }),
   message: (id: string, content: string, messageId: string) =>
     request<{ id: string; status: string }>(`/tasks/${encodeURIComponent(id)}/messages`, {
       method: "POST", body: JSON.stringify({ id: messageId, content }),

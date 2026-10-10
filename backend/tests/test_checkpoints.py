@@ -219,3 +219,56 @@ def test_snapshot_cannot_replace_active_sidecars(db, suffix):
     with pytest.raises(ValueError):
         publish_snapshot(db, db.path.with_name(db.path.name + suffix))
     assert db.revision == 1
+
+
+def test_revision_waiters_coalesce_after_acquiring_lock(db, tmp_path):
+    async def demo():
+        calls = 0
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def commit():
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+
+        coordinator = CheckpointCoordinator(db, tmp_path / "snapshot", commit)
+        revision = write(db, "first")
+        waiters = [
+            asyncio.create_task(coordinator.ensure_durable(revision)) for _ in range(4)
+        ]
+        await entered.wait()
+        newer = write(db, "during commit")
+        release.set()
+        await asyncio.gather(*waiters)
+        assert calls == 1 and coordinator.confirmed_revision == revision
+        await coordinator.ensure_durable(newer)
+        assert calls == 2 and coordinator.confirmed_revision == newer
+        await coordinator.checkpoint()  # Explicit publication still commits.
+        assert calls == 3
+
+    asyncio.run(demo())
+
+
+def test_concurrent_revision_waiters_retry_failed_commit(db, tmp_path):
+    async def demo():
+        calls = 0
+
+        async def commit():
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0)
+            if calls == 1:
+                raise OSError("unavailable")
+
+        coordinator = CheckpointCoordinator(db, tmp_path / "snapshot", commit)
+        revision = write(db, "pending")
+        results = await asyncio.gather(
+            *(coordinator.ensure_durable(revision) for _ in range(4)),
+            return_exceptions=True,
+        )
+        assert sum(isinstance(result, OSError) for result in results) == 1
+        assert calls == 2 and coordinator.confirmed_revision == revision
+        assert coordinator.last_error is None
+
+    asyncio.run(demo())

@@ -43,3 +43,51 @@ def test_concurrent_duplicate_submissions_insert_once() -> None:
 
     assert sum(created for _, created in results) == 1
     assert len({record.id for record, _ in results}) == 1
+
+
+def test_provider_observations_only_write_effective_changes():
+    from gg.runtime.ledger import SandboxProviderState
+
+    with new_ledger() as ledger:
+        task, _ = _submit(ledger, "provider-noop")
+        ledger.begin_sandbox_creation(
+            task_id=task.id,
+            deployment="test",
+            sandbox_name="test",
+            tags_json="{}",
+            session_api_key="private",
+        )
+        first = ledger.update_sandbox_creation(
+            task.id,
+            provider_id="sb-first",
+            provider_state=SandboxProviderState.RUNNING,
+        )
+        revision = ledger.db.revision
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            copies = list(
+                pool.map(
+                    lambda _: ledger.update_sandbox_creation(
+                        task.id,
+                        provider_state=SandboxProviderState.RUNNING,
+                    ),
+                    range(4),
+                )
+            )
+        assert ledger.db.revision == revision
+        assert all(
+            copy.updated_at == first.updated_at and copy.provider_id == "sb-first"
+            for copy in copies
+        )
+        error = ledger.update_sandbox_creation(
+            task.id,
+            provider_state=SandboxProviderState.UNKNOWN,
+            detail="lookup failed",
+        )
+        assert ledger.db.revision == revision + 1 and error.detail == "lookup failed"
+        recovered = ledger.update_sandbox_creation(
+            task.id,
+            provider_id="sb-new",
+            provider_state=SandboxProviderState.RUNNING,
+        )
+        assert ledger.db.revision == revision + 2
+        assert recovered.provider_id == "sb-new" and recovered.detail is None

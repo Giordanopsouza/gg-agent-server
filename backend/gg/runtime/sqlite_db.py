@@ -134,7 +134,7 @@ class SQLiteDB:
                 connection.rollback()
 
     @contextmanager
-    def write(self) -> Iterator[WriteTransaction]:
+    def write(self, *, skip_unchanged: bool = False) -> Iterator[WriteTransaction]:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             transaction = WriteTransaction(connection)
@@ -142,10 +142,15 @@ class SQLiteDB:
                 connection.set_authorizer(_authorize_write)
                 yield transaction
                 connection.set_authorizer(None)
-                revision = connection.execute(
-                    "UPDATE runtime_metadata SET revision = revision + 1 "
-                    "RETURNING revision"
-                ).fetchone()[0]
+                if skip_unchanged and connection.total_changes == 0:
+                    revision = connection.execute(
+                        "SELECT revision FROM runtime_metadata"
+                    ).fetchone()[0]
+                else:
+                    revision = connection.execute(
+                        "UPDATE runtime_metadata SET revision = revision + 1 "
+                        "RETURNING revision"
+                    ).fetchone()[0]
                 connection.commit()
                 transaction.revision = revision
             except BaseException:

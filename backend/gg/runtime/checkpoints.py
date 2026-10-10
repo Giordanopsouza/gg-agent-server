@@ -131,15 +131,21 @@ class CheckpointCoordinator:
                 except Exception:
                     pass  # checkpoint records only a sanitized failure category.
 
-    async def checkpoint(self) -> int:
+    async def checkpoint(self, *, required_revision: int | None = None) -> int:
         try:
-            return await self._checkpoint()
+            return await self._checkpoint(required_revision)
         except BaseException as exc:
             self.last_error = type(exc).__name__
             raise
 
-    async def _checkpoint(self) -> int:
+    async def _checkpoint(self, required_revision: int | None) -> int:
         async with self._lock:
+            # Explicit checkpoints always publish; revision waiters coalesce.
+            if (
+                required_revision is not None
+                and self.confirmed_revision >= required_revision
+            ):
+                return self.confirmed_revision
             revision = publish_snapshot(self.db, self.snapshot)
             commit = asyncio.create_task(self.commit())
             try:
@@ -167,8 +173,8 @@ class CheckpointCoordinator:
     async def ensure_durable(self, revision: int) -> None:
         if revision < 0 or revision > self.db.revision:
             raise ValueError("revision must name a committed local write")
-        while self.confirmed_revision < revision or self.last_error:
-            await self.checkpoint()
+        while self.confirmed_revision < revision:
+            await self.checkpoint(required_revision=revision)
 
     async def wait_until_confirmed(self, revision: int) -> None:
         """Passive waiter; failures/cancellation do not release it as successful."""

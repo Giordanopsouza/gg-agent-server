@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
@@ -264,12 +265,21 @@ def create_app(
     @app.middleware("http")
     async def persistence_barrier(request: Request, call_next):
         exempt = request.url.path in {"/health", "/ready"}
+        # These routes only read local state. Session creation and revocation
+        # keep their own barriers; OAuth GET callbacks still use global barriers.
+        read_only = request.method in {"GET", "HEAD"} and (
+            request.url.path in {"/auth/session", "/tasks"}
+            or re.fullmatch(
+                r"/tasks/[0-9a-fA-F-]{36}(?:/(?:events|result))?", request.url.path
+            )
+            is not None
+        )
         if not exempt:
             if app.state.recovering:
                 return JSONResponse(
                     status_code=503, content={"detail": "runtime recovery in progress"}
                 )
-            if checkpoints is not None:
+            if checkpoints is not None and not read_only:
                 try:
                     await durable(checkpoints, checkpoints.db.revision)
                 except HTTPException:
@@ -293,7 +303,12 @@ def create_app(
         response = await call_next(request)
         if request.url.path.startswith(("/auth", "/tasks")):
             response.headers["Cache-Control"] = "no-store"
-        if not exempt and checkpoints is not None and response.status_code < 400:
+        if (
+            not exempt
+            and not read_only
+            and checkpoints is not None
+            and response.status_code < 400
+        ):
             try:
                 await durable(checkpoints, checkpoints.db.revision)
             except HTTPException:

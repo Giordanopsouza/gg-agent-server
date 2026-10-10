@@ -89,3 +89,81 @@ async def test_mutations_wait_for_commit_and_failed_revoke_is_retryable(tmp_path
         with pytest.raises(HTTPException) as error:
             await sessions.user(token)
         assert error.value.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_reads_ignore_unrelated_writes_and_failures_but_not_pending_identity(
+    tmp_path,
+):
+    initialize(tmp_path / "db")
+    calls = 0
+    fail = False
+
+    async def commit():
+        nonlocal calls
+        calls += 1
+        if fail:
+            raise OSError("unavailable")
+
+    with SQLiteDB(tmp_path / "db") as db:
+        checkpoints = CheckpointCoordinator(db, tmp_path / "snapshot", commit)
+        sessions = LocalSessions(db, checkpoints)
+        token = await sessions.create("a", "a@example.com")
+        with db.write() as tx:
+            tx.connection.execute("CREATE TABLE unrelated (value TEXT)")
+        fail = True
+        with pytest.raises(OSError):
+            await checkpoints.checkpoint()
+        before = calls
+        users = await asyncio.gather(*(sessions.user(token) for _ in range(4)))
+        assert all(user["email"] == "a@example.com" for user in users)
+        with pytest.raises(HTTPException) as error:
+            await sessions.user("invalid")
+        assert error.value.status_code == 401 and calls == before
+        with db.write() as tx:
+            sessions.insert(tx.connection, "a", "changed@example.com", "pending")
+        for candidate in (token, "pending"):
+            with pytest.raises(HTTPException) as error:
+                await sessions.user(candidate)
+            assert error.value.status_code == 503
+        fail = False
+        assert (await sessions.user("pending"))["email"] == "changed@example.com"
+        fail = True
+        with pytest.raises(HTTPException):
+            await sessions.revoke(token)
+        before = calls
+        with pytest.raises(HTTPException) as error:
+            await sessions.user(token)
+        assert error.value.status_code == 401 and calls == before
+        with pytest.raises(RuntimeError):
+            with db.write() as tx:
+                sessions.insert(
+                    tx.connection, "a", "rolledback@example.com", "rollback"
+                )
+                raise RuntimeError("rollback")
+        assert (await sessions.user("pending"))["email"] == "changed@example.com"
+
+
+@pytest.mark.anyio
+async def test_revocation_during_session_creation_barrier_is_rechecked(tmp_path):
+    initialize(tmp_path / "db")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def commit():
+        entered.set()
+        await release.wait()
+
+    with SQLiteDB(tmp_path / "db") as db:
+        checkpoints = CheckpointCoordinator(db, tmp_path / "snapshot", commit)
+        sessions = LocalSessions(db, checkpoints)
+        with db.write() as tx:
+            sessions.insert(tx.connection, "a", "a@example.com", "pending")
+        reading = asyncio.create_task(sessions.user("pending"))
+        await entered.wait()
+        revoking = asyncio.create_task(sessions.revoke("pending"))
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(HTTPException) as error:
+            await reading
+        assert error.value.status_code == 401
+        await revoking

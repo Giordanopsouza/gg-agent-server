@@ -293,11 +293,12 @@ async def stream_task_events(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     await websocket.accept()
-    for copy in supervision.list_event_copies(task_id, after_cursor=after):
-        await websocket.send_json(copy.model_dump(mode="json"))
-        after = copy.cursor
+    # Subscribe before replay: events arriving during send_json are queued.
     queue = supervision.subscribe_events(task_id)
     try:
+        for copy in supervision.list_event_copies(task_id, after_cursor=after):
+            await websocket.send_json(copy.model_dump(mode="json"))
+            after = copy.cursor
         while True:
             copy = await queue.get()
             if copy.cursor <= after:

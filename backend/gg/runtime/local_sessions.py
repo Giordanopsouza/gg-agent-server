@@ -38,6 +38,7 @@ class LocalSessions:
         self.db = db
         self.checkpoints = checkpoints
         self.startup_revision = db.revision
+        self._identity_revisions: dict[str, dict[str, int]] = {}
 
     def insert(self, connection, sub: str, email: str, token: str) -> str:
         """Join profile/session creation to a caller's write transaction."""
@@ -53,6 +54,13 @@ class LocalSessions:
             "(?, ?, ?)",
             (token_hash(token), owner, int(time.time()) + SESSION_SECONDS),
         )
+        # BEGIN IMMEDIATE holds the writer lock: this is the commit revision.
+        # user() ignores candidates whose session insert was rolled back.
+        self._identity_revisions.setdefault(owner, {})[token_hash(token)] = (
+            connection.execute("SELECT revision + 1 FROM runtime_metadata").fetchone()[
+                0
+            ]
+        )
         return owner
 
     async def create(self, sub: str, email: str) -> str:
@@ -63,7 +71,6 @@ class LocalSessions:
         return token
 
     async def user(self, token: str) -> dict[str, str]:
-        await durable(self.checkpoints, self.db.revision)
         with self.db.read() as connection:
             row = connection.execute(
                 "SELECT u.id, u.email FROM local_sessions s JOIN local_users u "
@@ -71,8 +78,30 @@ class LocalSessions:
                 "AND expires_at > ?",
                 (token_hash(token), int(time.time())),
             ).fetchone()
+            revision = self.startup_revision
+            if row is not None:
+                pending = self._identity_revisions.get(row[0], {})
+                for hashed, candidate in list(pending.items()):
+                    if candidate <= self.checkpoints.confirmed_revision:
+                        del pending[hashed]
+                    elif (
+                        connection.execute(
+                            "SELECT 1 FROM local_sessions WHERE token_hash = ?",
+                            (hashed,),
+                        ).fetchone()
+                        is not None
+                    ):
+                        revision = max(revision, candidate)
+                    else:
+                        # insert() participates in OAuth's transaction, which
+                        # may roll back after recording the candidate revision.
+                        del pending[hashed]
         if row is None:
             raise HTTPException(status_code=401, detail="session expired or absent")
+        if self.checkpoints.confirmed_revision < revision:
+            await durable(self.checkpoints, revision)
+            # Revocation/expiry may have happened while the commit was awaited.
+            return await self.user(token)
         return {"id": row[0], "email": row[1]}
 
     async def revoke(self, token: str) -> None:
