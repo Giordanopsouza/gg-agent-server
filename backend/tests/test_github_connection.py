@@ -5,31 +5,28 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import sqlite3
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import httpx
+import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.github_connection import GitHubClient, github_connection_router
-from gg.runtime.web_auth import SESSION_COOKIE, SupabaseAuth
+from gg.runtime.local_sessions import LocalSessions
+from gg.runtime.web_auth import SESSION_COOKIE
 
 
-class FakeAuth(SupabaseAuth):
-    async def verified_user(self, access_token):
-        return {
-            "id": access_token,
-            "session_id": "00000000-0000-0000-0000-000000000003",
-            "email": "same@example.test",
-        }
+class FakeSessions(LocalSessions):
+    def __init__(self):
+        pass
 
-
-class FakeSessions:
-    def active(self, user_id, session_id):
-        return True
+    async def user(self, token):
+        return {"id": token, "email": "same@example.test"}
 
 
 class FakeStore:
@@ -51,9 +48,7 @@ class FakeStore:
     def connect(self, owner, github_id, login, token, installations):
         for other, record in self.accounts.items():
             if other != owner and record[0] == github_id:
-                from sqlalchemy.exc import IntegrityError
-
-                raise IntegrityError("unique GitHub user", {}, Exception())
+                raise sqlite3.IntegrityError("unique GitHub user")
         self.accounts[owner] = (github_id, login, token, "connected", installations)
 
     def current(self, owner):
@@ -137,13 +132,12 @@ def fixture():
             return httpx.Response(200, json={"installations": state["installations"]})
         raise AssertionError(request.url)
 
-    auth = FakeAuth(settings)
+    auth = object()
     store = FakeStore()
     app = FastAPI()
     app.include_router(
         github_connection_router(
             settings,
-            auth,
             FakeSessions(),
             store,
             GitHubClient(settings, httpx.MockTransport(github_response)),
@@ -154,9 +148,7 @@ def fixture():
 
 
 def as_user(client, auth, owner):
-    client.cookies.set(
-        SESSION_COOKIE, auth.seal({"access": owner, "refresh": "unused"})
-    )
+    client.cookies.set(SESSION_COOKIE, owner)
 
 
 def start(client):
@@ -292,3 +284,85 @@ def test_pending_revocation_and_signed_webhook():
     state["unauthorized"] = True
     assert client.get("/auth/github").json()["status"] == "revoked"
     assert store.accounts[owner][4] == []
+
+
+@pytest.mark.anyio
+async def test_sqlite_constraints_flow_expiry_webhook_and_snapshot_recovery(tmp_path):
+    import shutil
+    import sqlite3
+
+    import pytest
+
+    from gg.runtime.checkpoints import CheckpointCoordinator
+    from gg.runtime.github_connection import SQLiteGitHubConnections
+    from gg.runtime.local_sessions import LocalSessions, token_hash
+    from gg.runtime.sqlite_db import SQLiteDB
+    from test_support.sqlite_ledger import new_ledger
+
+    flags = {"fail": False}
+
+    async def commit():
+        if flags["fail"]:
+            raise OSError("private volume error")
+
+    with new_ledger() as ledger:
+        db = ledger.db
+        checkpoints = CheckpointCoordinator(db, tmp_path / "snapshot", commit)
+        sessions = LocalSessions(db, checkpoints)
+        a = await sessions.create("a", "a@example.com")
+        b = await sessions.create("b", "b@example.com")
+        owner_a = (await sessions.user(a))["id"]
+        owner_b = (await sessions.user(b))["id"]
+        key = Fernet.generate_key().decode()
+        store = SQLiteGitHubConnections(db, checkpoints, key)
+        store.begin(owner_a, token_hash(a), "flow")
+        assert not store.consume(owner_b, token_hash(b), "flow")
+        assert not store.consume(owner_a, token_hash(b), "flow")
+        assert store.consume(owner_a, token_hash(a), "flow")
+        assert not store.consume(owner_a, token_hash(a), "flow")
+        store.begin(owner_a, token_hash(a), "expired")
+        with db.write() as tx:
+            tx.connection.execute("UPDATE github_oauth_flows SET expires_at=1")
+        assert not store.consume(owner_a, token_hash(a), "expired")
+        installations = [
+            {"id": 99, "account_login": "org", "account_type": "Organization"}
+        ]
+        store.connect(owner_a, 42, "alice", "secret-token", installations)
+        revision = db.revision
+        with pytest.raises(sqlite3.IntegrityError):
+            store.connect(owner_b, 42, "alice", "other-token", installations)
+        assert db.revision == revision and store.current(owner_b) is None
+        store.connect(owner_b, 43, "bob", "bob-token", installations)
+        delivery = uuid4()
+        assert store.webhook(delivery, "github_app_authorization", "revoked", None, 42)
+        assert not store.webhook(
+            delivery, "github_app_authorization", "revoked", None, 42
+        )
+        assert store.current(owner_a)[2:] == (None, "revoked")
+        assert store.current(owner_b)[2] == "bob-token"
+        flags["fail"] = True
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as error:
+            await store.ensure_durable()
+        assert error.value.status_code == 503
+        flags["fail"] = False
+        await store.ensure_durable()
+        shutil.copyfile(checkpoints.snapshot, tmp_path / "restored")
+    with SQLiteDB(tmp_path / "restored") as db:
+        store = SQLiteGitHubConnections(
+            db, CheckpointCoordinator(db, tmp_path / "next", commit), key
+        )
+        assert not store.webhook(
+            delivery, "github_app_authorization", "revoked", None, 42
+        )
+        assert store.current(owner_b)[2] == "bob-token"
+        store.disconnect(owner_b)
+        assert store.current(owner_b) is None
+        with db.read() as conn:
+            assert (
+                conn.execute(
+                    "SELECT * FROM github_installations WHERE owner_id=?", (owner_b,)
+                ).fetchall()
+                == []
+            )

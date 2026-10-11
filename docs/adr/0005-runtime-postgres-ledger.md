@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded by ADR-0008
 ---
 
 # Store durable runtime state in Supabase Postgres
+
+Superseded by [ADR 0008](0008-sqlite-modal-google.md). The decision below
+records the former multi-process architecture.
 
 The runtime uses private Supabase Postgres tables for tasks, reservations,
 evidence copies, supervision and publication intents. A transaction-scoped

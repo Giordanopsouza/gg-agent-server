@@ -52,15 +52,15 @@ if os.environ.get("FAKE_PI_MODE") == "read":
 if os.environ.get("FAKE_PI_MODE") == "leak_patch":
     Path("README.md").write_text(os.environ["OPENROUTER_API_KEY"], encoding="utf-8")
 if check_outcome := os.environ.get("FAKE_PI_CHECK_OUTCOME"):
-    intent = Path(os.environ["FAKE_PI_INTENT_PATH"])
-    intent.parent.mkdir(parents=True, exist_ok=True)
-    intent.write_text(json.dumps({
+    from gg.server.task_supervisor.pi_publication import _write_intent
+    _write_intent(Path(os.environ["FAKE_PI_STATE_DB"]), **{
         "repository": "owner/test",
         "task_branch": "gg/task/owned-1",
         "base_ref": "main",
         "task_marker": "owned-1",
         "check_outcome": check_outcome,
-    }), encoding="utf-8")
+        "commit_sha": None,
+    })
 
 send({"type": "agent_settled"})
 record_path.write_text(json.dumps(state), encoding="utf-8")
@@ -326,8 +326,12 @@ async def test_start_is_idempotent_and_runs_agent_once(
             assert manifest["base_sha"]
             assert manifest["changed_files"]
             assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
-            state = next(settings.conversations_dir.glob("*/base_state.json"))
-            assert '"model":"anthropic/claude-sonnet-4.5"' in state.read_text()
+            from gg.server.agent import load_base_state
+
+            state = load_base_state(
+                settings.conversations_dir / manifest["conversation_id"]
+            )
+            assert state.agent.model == "anthropic/claude-sonnet-4.5"
 
 
 @pytest.mark.anyio
@@ -362,8 +366,14 @@ async def test_manifest_redacts_key_written_by_agent(
             assert response.status_code == 200
             assert "test-key" not in response.text
             assert "[REDACTED]" in response.text
-            saved = next(settings.task_supervisor_dir.glob("manifests/*.json"))
-            assert "test-key" not in saved.read_text()
+            from gg.server.sqlite_state import SandboxState
+
+            with SandboxState(
+                settings.conversations_dir / "sandbox.db"
+            ).connection() as conn:
+                saved = conn.execute("SELECT payload FROM manifests").fetchone()[0]
+            assert "test-key" not in saved
+            assert not list(settings.task_supervisor_dir.glob("manifests/*.json"))
 
 
 @pytest.mark.anyio
@@ -462,8 +472,8 @@ async def test_repository_turn_receives_only_task_credential_without_publication
     monkeypatch.setenv("GITHUB_TOKEN", "global-host-token")
     monkeypatch.setenv("FAKE_PI_CHECK_OUTCOME", "passed")
     monkeypatch.setenv(
-        "FAKE_PI_INTENT_PATH",
-        str(tmp_path / "supervisor" / "pi-publication" / "owned-1.json"),
+        "FAKE_PI_STATE_DB",
+        str(tmp_path / "conversations" / "sandbox.db"),
     )
     settings = Settings(
         conversations_dir=tmp_path / "conversations",
@@ -508,3 +518,134 @@ async def test_repository_turn_receives_only_task_credential_without_publication
     assert "global-host-token" not in prompt
     assert "global-host-token" not in json.dumps(record)
     assert manifest["check_outcome"] == CheckOutcome.NOT_RUN.value
+
+
+def test_execution_identity_race_across_independent_stores(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from gg.server.task_supervisor.store import ExecutionStore, StartKeyConflictError
+
+    arguments = dict(
+        start_key="shared",
+        task_id="one",
+        repository=None,
+        task_branch=None,
+        base_ref=None,
+        deadline_at=datetime.now(UTC),
+    )
+
+    def admit(_):
+        return ExecutionStore(tmp_path).admit_or_get(**arguments)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        records = list(pool.map(admit, range(24)))
+    assert sum(created for _, created in records) == 1
+    assert len({record.execution_id for record, _ in records}) == 1
+    reopened = ExecutionStore(tmp_path)
+    with pytest.raises(StartKeyConflictError):
+        reopened.admit_or_get(**{**arguments, "task_id": "other"})
+    with pytest.raises(StartKeyConflictError):
+        reopened.admit_or_get(**{**arguments, "base_ref": "other"})
+    assert len(reopened.list_non_terminal()) == 1
+    assert not list(tmp_path.rglob("*.json"))
+
+
+@pytest.mark.anyio
+async def test_restart_after_admission_before_start_preserves_identity(
+    tmp_path: Path,
+) -> None:
+    from gg.server.sqlite_state import SandboxState
+    from gg.server.task_supervisor.store import ExecutionStore
+
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "project",
+        task_supervisor_dir=tmp_path / "supervisor",
+    )
+    store = ExecutionStore(
+        settings.task_supervisor_dir,
+        state_db=SandboxState(settings.conversations_dir / "sandbox.db"),
+    )
+    record, created = store.admit_or_get(
+        start_key="before-start",
+        task_id="admitted",
+        repository=None,
+        task_branch=None,
+        base_ref=None,
+        deadline_at=datetime.now(UTC),
+    )
+    assert created
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        service = app.state.task_supervisor_service
+        recovered = service._store.load_execution(record.execution_id)
+        assert recovered.phase == TaskExecutionPhase.FAILED
+        manifest = service._store.load_manifest(record.execution_id)
+        assert manifest.agent_outcome == AgentOutcome.NOT_RUN
+        assert "ownership lost" in manifest.outcome_detail
+        replay, created = service._store.admit_or_get(
+            start_key="before-start",
+            task_id="admitted",
+            repository=None,
+            task_branch=None,
+            base_ref=None,
+            deadline_at=datetime.now(UTC),
+        )
+        assert not created and replay.execution_id == record.execution_id
+        assert recovered.manifest_path.startswith("sqlite:")
+
+
+@pytest.mark.anyio
+async def test_restart_preserves_manifest_saved_before_terminal_phase(tmp_path: Path):
+    from gg.sdk.task_execution import TaskResultManifest
+    from gg.server.sqlite_state import SandboxState
+    from gg.server.task_supervisor.store import ExecutionStore
+
+    settings = Settings(
+        conversations_dir=tmp_path / "conversations",
+        workspace_dir=tmp_path / "project",
+        task_supervisor_dir=tmp_path / "supervisor",
+    )
+    store = ExecutionStore(
+        settings.task_supervisor_dir,
+        state_db=SandboxState(settings.conversations_dir / "sandbox.db"),
+    )
+    record, _ = store.admit_or_get(
+        start_key="result-saved",
+        task_id="done",
+        repository=None,
+        task_branch=None,
+        base_ref=None,
+        deadline_at=datetime.now(UTC),
+    )
+    manifest = TaskResultManifest(
+        task_id=record.task_id,
+        execution_id=record.execution_id,
+        agent_outcome=AgentOutcome.SUCCEEDED,
+        check_outcome=CheckOutcome.NOT_RUN,
+        completed_at=datetime.now(UTC),
+    )
+    store.save_manifest(manifest)
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        recovered = app.state.task_supervisor_service._store
+        assert recovered.load_manifest(record.execution_id) == manifest
+        assert (
+            recovered.load_execution(record.execution_id).phase
+            == TaskExecutionPhase.COMPLETED
+        )
+
+
+def test_conversation_identity_is_atomic_in_shared_sqlite(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from gg.server.task_supervisor.store import ExecutionStore
+
+    def identity(_):
+        return ExecutionStore(tmp_path).conversation_id()
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        identities = list(pool.map(identity, range(24)))
+    assert len(set(identities)) == 1
+    assert ExecutionStore(tmp_path).conversation_id() == identities[0]
+    assert not (tmp_path / "conversation-id").exists()

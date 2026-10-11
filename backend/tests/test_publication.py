@@ -24,7 +24,7 @@ from gg.runtime.publication import (
 )
 from gg.sdk.publication import PublicationRequest, PublicationState
 from gg.sdk.task_execution import AgentOutcome, CheckOutcome, CommandCapture
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 TOKEN = "super-secret-github-token-do-not-leak"

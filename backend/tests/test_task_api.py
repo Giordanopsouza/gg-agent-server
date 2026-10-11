@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import gettempdir
-from unittest.mock import patch
 from uuid import uuid4
 
 import httpx
@@ -13,7 +12,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.ledger import TaskLedger
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -345,7 +344,7 @@ async def test_tasks_persist_across_app_restart(tmp_path) -> None:
             await client.post("/tasks", headers=_AUTH, json=_payload(key="k1"))
             await client.post("/tasks", headers=_AUTH, json=_payload(key="k2"))
 
-    # A second app instance sees the same Postgres records.
+    # A second app instance sees the same SQLite file.
     app2 = _app(settings, ledger=new_ledger())
     transport2 = ASGITransport(app=app2)
     async with httpx.AsyncClient(
@@ -363,13 +362,15 @@ async def test_tasks_persist_across_app_restart(tmp_path) -> None:
 
 
 def test_unsupported_future_schema_fails_startup() -> None:
-    from gg.runtime.ledger import SUPPORTED_SCHEMA_VERSION
+    import sqlite3
+
+    from gg.runtime.sqlite_db import SQLiteDB
+    from gg.runtime.sqlite_migrations import SCHEMA_VERSION, InvalidDatabase
 
     ledger = new_ledger()
-    with patch.object(
-        TaskLedger, "_schema_version", return_value=SUPPORTED_SCHEMA_VERSION + 1
-    ):
-        with pytest.raises(
-            RuntimeError, match="unsupported Postgres ledger schema version"
-        ):
-            ledger.open()
+    path = ledger.db.path
+    ledger.close()
+    with sqlite3.connect(path) as connection:
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    with pytest.raises(InvalidDatabase, match="version"):
+        SQLiteDB(path)

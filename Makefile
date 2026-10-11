@@ -3,8 +3,6 @@
 
 .PHONY: help install test unit-tests integration-tests lint-check lint-fix
 .PHONY: format-check format-fix pre-commit build ci run run-runtime docker-build
-.PHONY: supabase-local-start supabase-local-reset supabase-integration-tests postgres-tests alembic-tests
-.PHONY: db-upgrade db-current db-check
 .PHONY: frontend-install frontend-test frontend-build frontend-dev
 
 help:
@@ -40,13 +38,6 @@ format-fix:
 
 pre-commit: format-check lint-check unit-tests
 
-postgres-tests:
-	uv run --no-editable python scripts/runtime_postgres_tests.py -m "not docker and not pi and not modal and not github"
-	uv run --no-editable python scripts/alembic_postgres_tests.py
-
-alembic-tests:
-	uv run --no-editable python scripts/alembic_postgres_tests.py
-
 build:
 	uv build --package gg-sdk
 	uv build --package gg-backend
@@ -75,18 +66,28 @@ frontend-dev:
 docker-build:
 	$(MAKE) -C sandboxes docker-build
 
-SUPABASE_LOCAL_WORKDIR ?= .
-LOCAL_MIGRATION_DATABASE_URL ?= postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable
-ALEMBIC := uv run --no-editable alembic -c backend/alembic.ini
+.PHONY: modal-init modal-migrate modal-backup modal-restore modal-deploy modal-rollover modal-stop modal-verify
 
-db-upgrade:
-	@test -n "$(GG_MIGRATION_DATABASE_URL)" || { echo "Set GG_MIGRATION_DATABASE_URL to the migrator Postgres URL"; exit 1; }
-	GG_MIGRATION_DATABASE_URL='$(GG_MIGRATION_DATABASE_URL)' $(ALEMBIC) upgrade head
+modal-init:
+	$(MAKE) -C backend $@
 
-db-current:
-	@test -n "$(GG_MIGRATION_DATABASE_URL)" || { echo "Set GG_MIGRATION_DATABASE_URL to the migrator Postgres URL"; exit 1; }
-	GG_MIGRATION_DATABASE_URL='$(GG_MIGRATION_DATABASE_URL)' $(ALEMBIC) current
+modal-migrate:
+	$(MAKE) -C backend $@
 
-db-check:
-	@test -n "$(GG_MIGRATION_DATABASE_URL)" || { echo "Set GG_MIGRATION_DATABASE_URL to the migrator Postgres URL"; exit 1; }
-	GG_MIGRATION_DATABASE_URL='$(GG_MIGRATION_DATABASE_URL)' $(ALEMBIC) check
+modal-backup:
+	$(MAKE) -C backend $@
+
+modal-restore:
+	$(MAKE) -C backend $@
+
+modal-deploy:
+	$(MAKE) -C backend $@
+
+modal-rollover:
+	$(MAKE) -C backend $@
+
+modal-stop:
+	$(MAKE) -C backend $@
+
+modal-verify:
+	$(MAKE) -C backend $@

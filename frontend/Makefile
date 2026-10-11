@@ -1,7 +1,7 @@
-.PHONY: help install test build dev start
+.PHONY: help install test build dev
 
 help:
-	@printf '%s\n' 'frontend: install, test, build, dev, start'
+	@printf '%s\n' 'frontend: install, test, build, dev'
 
 install:
 	npm ci
@@ -14,6 +14,3 @@ build:
 
 dev:
 	npm run dev
-
-start:
-	npm start

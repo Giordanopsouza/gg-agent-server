@@ -1,0 +1,55 @@
+{
+  "url": "https://giordanowrk-sqlite-111-proof--gg-runtime-runtime.us-east.modal.direct",
+  "before_invalid_session_ms": [
+    3768.71,
+    153.35,
+    148.86
+  ],
+  "before_version": "c147a4e634914c27",
+  "ready": {
+    "status": "ready",
+    "database_available": true,
+    "dispatch_owner": true,
+    "reconciled": true,
+    "unresolved_capacity": 0,
+    "scheduler_running": true,
+    "scheduler_error": null,
+    "admission_blocked_reason": null,
+    "conditions": [],
+    "recovering": false,
+    "persistence_error": null,
+    "version": "4d132b582ebff922",
+    "revision": 37749,
+    "confirmed_revision": 37748
+  },
+  "frontend_scripts": [
+    "/assets/index-NumISpUY.js"
+  ],
+  "frontend_bytes": 251776,
+  "after_invalid_session_ms": [
+    104.36,
+    103.2,
+    109.41,
+    112.35,
+    115.68,
+    103.4
+  ],
+  "persisted_counts": {
+    "before": {
+      "tasks": 5,
+      "local_users": 1,
+      "local_sessions": 2,
+      "openrouter_credentials": 1,
+      "task_event_copies": 69,
+      "task_results": 4
+    },
+    "after": {
+      "tasks": 5,
+      "local_users": 1,
+      "local_sessions": 2,
+      "openrouter_credentials": 1,
+      "task_event_copies": 69,
+      "task_results": 4
+    }
+  }
+}

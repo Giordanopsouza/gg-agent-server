@@ -227,18 +227,27 @@ class TaskScheduler:
         """Reconcile ownership, then fill available slots in durable FIFO order."""
 
         async with self._cycle_lock:
+            if isinstance(self._ledger, TaskLedger):
+                try:
+                    await self._ledger.ensure_durable()
+                except Exception:
+                    self._blocked_reason = "state persistence unavailable"
+                    raise
             self._blocked_reason = None
             await self.reconcile()
-            tasks = await asyncio.to_thread(self._ledger.list)
             now = time.monotonic()
             if self._last_maintenance is None or now - self._last_maintenance >= 60:
-                for task in tasks:
-                    last_activity = task.workspace_last_activity_at or task.updated_at
-                    if (
-                        task.state is TaskState.SLEEPING
-                        and not task.workspace_expired
-                        and datetime.now(UTC) - last_activity >= timedelta(days=7)
-                    ):
+                cutoff = datetime.now(UTC) - timedelta(days=7)
+                after_seq = 0
+                while True:
+                    candidates = await asyncio.to_thread(
+                        self._ledger.sleeping_workspace_candidates,
+                        before=cutoff,
+                        after_seq=after_seq,
+                    )
+                    if not candidates:
+                        break
+                    for task in candidates:
                         if self._supervision is not None:
                             await self._supervision.expire_sleeping_workspace(task.id)
                         else:
@@ -246,6 +255,7 @@ class TaskScheduler:
                             await asyncio.to_thread(
                                 self._ledger.expire_workspace, task.id
                             )
+                    after_seq = candidates[-1].seq
                 if self._storage_limits is not None:
                     await asyncio.to_thread(
                         run_retention_pass, self._ledger, self._storage_limits
@@ -263,7 +273,13 @@ class TaskScheduler:
                 await self._provision(reservation.task_id)
                 if self._stop.is_set():
                     return
-            if not any(task.state is TaskState.QUEUED for task in tasks):
+            if any(
+                r.phase is ReservationPhase.UNRESOLVED_CREATION
+                for r in await asyncio.to_thread(self._ledger.list_reservations)
+            ):
+                self._blocked_reason = "provider reconciliation incomplete"
+                return
+            if not await asyncio.to_thread(self._ledger.count_queued):
                 return
             if self._storage_limits is not None:
                 pressure = await asyncio.to_thread(
@@ -320,6 +336,16 @@ class TaskScheduler:
                     condition=f"provider reconciliation failed: {exc}",
                 )
                 continue
+
+            # Provider I/O can outlive an idle->sleep transition and its
+            # reservation. Do not apply an old snapshot to queued work or
+            # to a newer reservation that reused the same task identity.
+            current = await asyncio.to_thread(
+                self._ledger.get_reservation, reservation.task_id
+            )
+            if current is None or current.reserved_at != reservation.reserved_at:
+                continue
+            reservation = current
 
             if snapshot.state is SandboxProviderState.UNKNOWN:
                 await asyncio.to_thread(
@@ -413,9 +439,13 @@ class TaskScheduler:
                 condition=None,
                 task_state=state,
             )
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         self._reconciled = True
 
     async def _provision(self, task_id: str) -> None:
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         try:
             snapshot = await self._lifecycle.create(task_id)
         except CredentialUnavailableError as exc:
@@ -491,9 +521,7 @@ class TaskScheduler:
             for item in reservations
             if item.condition is not None
         )
-        pending = sum(
-            1 for task in self._ledger.list() if task.state is TaskState.QUEUED
-        )
+        pending = self._ledger.count_queued()
         return DispatchStatus(
             enabled=self._admission_enabled,
             reconciled=self._reconciled,

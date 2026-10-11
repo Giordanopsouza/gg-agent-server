@@ -15,7 +15,7 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from gg.runtime.github_connection import PostgresGitHubConnections
+from gg.runtime.github_connection import SQLiteGitHubConnections
 
 
 class RepositoryAccessError(ValueError):
@@ -44,7 +44,7 @@ class RepositoryAuthorization:
 
     def __init__(
         self,
-        connections: PostgresGitHubConnections,
+        connections: SQLiteGitHubConnections,
         *,
         client_id: str,
         private_key: str | None,

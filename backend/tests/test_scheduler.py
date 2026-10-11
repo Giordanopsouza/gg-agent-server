@@ -13,7 +13,7 @@ from gg.runtime.ledger import (
 from gg.runtime.modal_sandbox import SandboxSnapshot
 from gg.runtime.scheduler import DeploymentLock, DispatchLockError, TaskScheduler
 from gg.sdk.tasks import TaskState
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 def _submit(ledger: TaskLedger, key: str):
@@ -245,11 +245,11 @@ async def test_confirmed_sandbox_loss_fails_without_erasing_evidence(tmp_path) -
         task = _submit(ledger, "lost")
         ledger.reserve_next(capacity=1)
         _record_creation(ledger, task.id, provider_id="lost-provider")
-        assert ledger._conn is not None  # noqa: SLF001
-        ledger._conn.execute(  # noqa: SLF001
-            "UPDATE tasks SET outcome_detail = %s, check_status = %s WHERE id = %s",
-            ("captured output", "not_run", task.id),
-        )
+        with ledger.db.write() as transaction:
+            transaction.connection.execute(
+                "UPDATE tasks SET outcome_detail = ?, check_status = ? WHERE id = ?",
+                ("captured output", "not_run", task.id),
+            )
         lifecycle = FakeLifecycle(ledger, state=SandboxProviderState.STOPPED)
         scheduler = TaskScheduler(
             ledger=ledger,
@@ -346,3 +346,138 @@ async def test_reconcile_completes_published_task_stuck_after_cleanup(
         assert settled is not None
         assert settled.state is TaskState.COMPLETED
         assert settled.outcome_detail == "published"
+
+
+@pytest.mark.anyio
+async def test_large_history_returns_only_candidates_and_uses_indexes(
+    tmp_path, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    ledger = new_ledger()
+    queued = [_submit(ledger, f"queued-{i}") for i in range(3)]
+    sleepers = [_submit(ledger, f"sleep-{i}") for i in range(205)]
+    cutoff = datetime.now(UTC) - timedelta(days=7)
+    old = (cutoff - timedelta(days=1)).isoformat()
+    with ledger.db.write() as tx:
+        tx.connection.executemany(
+            "UPDATE tasks SET state = 'sleeping', updated_at = ? WHERE id = ?",
+            [(old, task.id) for task in sleepers],
+        )
+    before = ledger.sleeping_workspace_candidates(before=cutoff)
+    assert len(before) == 200
+    assert [task.id for task in before] == [task.id for task in sleepers[:200]]
+    # Historical payloads are intentionally large; no cycle should deserialize them.
+    with ledger.db.write() as tx:
+        tx.connection.executemany(
+            """INSERT INTO tasks(id, seq, state, idempotency_key, repository,
+               prompt, model, created_at, updated_at) VALUES (?, ?, 'completed', ?,
+               '', ?, 'model', ?, ?)""",
+            [
+                (f"history-{i}", 1000 + i, f"history-{i}", "history" * 1024, old, old)
+                for i in range(10000)
+            ],
+        )
+    after = ledger.sleeping_workspace_candidates(before=cutoff)
+    assert after == before
+    assert ledger.count_queued() == len(queued)
+    assert (
+        len(
+            ledger.sleeping_workspace_candidates(before=cutoff, after_seq=after[-1].seq)
+        )
+        == 5
+    )
+    with ledger.db.read() as connection:
+        plans = {}
+        queries = {
+            "fifo": "SELECT id FROM tasks WHERE state = 'queued' ORDER BY seq LIMIT 1",
+            "reservations": """SELECT * FROM task_reservations
+                ORDER BY reserved_at, task_id""",
+            "expiry": """SELECT id FROM tasks INDEXED BY tasks_sleeping_expiry
+                WHERE state = 'sleeping' AND workspace_expired = 0
+                AND COALESCE(workspace_last_activity_at, updated_at) <= ? AND seq > 0
+                ORDER BY seq LIMIT 200""",
+            "settlement": """SELECT id FROM tasks
+                WHERE sandbox_cleanup_status = 'confirmed_absent'
+                AND state NOT IN ('completed','cancelled')
+                AND outcome_detail = 'published'""",
+        }
+        for name, query in queries.items():
+            params = (cutoff.isoformat(),) if name == "expiry" else ()
+            plans[name] = [
+                row[3]
+                for row in connection.execute("EXPLAIN QUERY PLAN " + query, params)
+            ]
+        print("candidate query plans:", plans)
+        assert "tasks_state_seq" in " ".join(plans["fifo"])
+        assert "reservations_order" in " ".join(plans["reservations"])
+        assert "tasks_sleeping_expiry" in " ".join(plans["expiry"])
+        assert "tasks_settlement" in " ".join(plans["settlement"])
+    monkeypatch.setattr(
+        ledger, "list", lambda: pytest.fail("scheduler loaded task history")
+    )
+    expired = []
+
+    class Lifecycle(FakeLifecycle):
+        async def expire_workspace(self, task_id):
+            expired.append(task_id)
+
+    scheduler = TaskScheduler(
+        ledger=ledger,
+        lifecycle=Lifecycle(ledger),
+        capacity=1,
+        lock_path=str(tmp_path / "lock"),
+    )
+    await scheduler.dispatch_once()
+    assert expired == [task.id for task in sleepers]
+    assert scheduler.status().pending == len(queued)
+    assert ledger.sleeping_workspace_candidates(before=cutoff) == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("reserve_again", [False, True])
+async def test_stale_provider_snapshot_does_not_erase_workspace_wake(
+    tmp_path, reserve_again
+):
+    import asyncio
+
+    ledger = new_ledger()
+    task = _submit(ledger, "wake-during-provider-check")
+    ledger.reserve_next(capacity=1)
+    _record_creation(ledger, task.id, provider_id="old-provider")
+    ledger.update_reservation(
+        task.id, phase=ReservationPhase.RUNNING, task_state=TaskState.IDLE
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Lifecycle(FakeLifecycle):
+        async def reconnect(self, task_id):
+            entered.set()
+            await release.wait()
+            return SandboxSnapshot(
+                task_id, "old-provider", SandboxProviderState.STOPPED
+            )
+
+    scheduler = TaskScheduler(
+        ledger=ledger,
+        lifecycle=Lifecycle(ledger),
+        capacity=1,
+        lock_path=str(tmp_path / "lock"),
+    )
+    cycle = asyncio.create_task(scheduler.reconcile())
+    await entered.wait()
+    # Another coroutine completed suspension, then accepted a wake message.
+    ledger.finish_task(task.id, state=TaskState.SLEEPING)
+    ledger.release_reservation(task.id)
+    ledger.queue_workspace_message(task.id)
+    if reserve_again:
+        assert ledger.reserve_next(capacity=1).id == task.id
+    release.set()
+    await cycle
+    assert ledger.get(task.id).state == (
+        TaskState.STARTING if reserve_again else TaskState.QUEUED
+    )
+    reservation = ledger.get_reservation(task.id)
+    assert (reservation is not None) == reserve_again
+    if reservation is not None:
+        assert reservation.phase == ReservationPhase.STARTING

@@ -6,7 +6,6 @@ import asyncio
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
 from gg.sdk import ConversationStatus, PiAgentConfig
 from gg.sdk.task_execution import (
@@ -48,7 +47,9 @@ class TaskSupervisorService:
     ) -> None:
         self._settings = settings
         self._conversation_service = conversation_service
-        self._store = store or ExecutionStore(settings.task_supervisor_dir)
+        self._store = store or ExecutionStore(
+            settings.task_supervisor_dir, state_db=conversation_service.state_db
+        )
         self._github_token = settings.github_clone_token
         self._process_env = dict(settings.process_env)
         self._process_env.pop("GG_GITHUB_CLONE_TOKEN", None)
@@ -60,16 +61,33 @@ class TaskSupervisorService:
             return
         self._started = True
         for record in self._store.list_non_terminal():
-            detail = "supervisor ownership lost on process restart"
-            await self._finalize_failure(
-                record,
-                detail=detail,
-                agent_outcome=AgentOutcome.NOT_RUN,
-                check_outcome=CheckOutcome.NOT_RUN,
-                repository=record.repository,
-                task_branch=record.task_branch,
-                base_ref=record.base_ref,
-            )
+            try:
+                manifest = self._store.load_manifest(record.execution_id)
+            except KeyError:
+                await self._finalize_failure(
+                    record,
+                    detail="supervisor ownership lost on process restart",
+                    agent_outcome=AgentOutcome.NOT_RUN,
+                    check_outcome=CheckOutcome.NOT_RUN,
+                    repository=record.repository,
+                    task_branch=record.task_branch,
+                    base_ref=record.base_ref,
+                )
+            else:
+                # A crash between saving the result and saving terminal phase
+                # must preserve the completed work, never overwrite its manifest.
+                phase = (
+                    TaskExecutionPhase.COMPLETED
+                    if manifest.agent_outcome
+                    in {AgentOutcome.SUCCEEDED, AgentOutcome.NO_CHANGES}
+                    else TaskExecutionPhase.FAILED
+                )
+                await self._update_phase(
+                    record,
+                    phase,
+                    manifest_path=self._store.manifest_reference(record.execution_id),
+                    outcome_detail=manifest.outcome_detail,
+                )
             self._stop_orphan_processes(record.execution_id)
 
     async def shutdown(self) -> None:
@@ -120,13 +138,7 @@ class TaskSupervisorService:
 
     def _conversation_id(self, task_id: str) -> str:
         """Persist one conversation identity per retained workspace generation."""
-        path = self._settings.task_supervisor_dir / "conversation-id"
-        if path.is_file():
-            return path.read_text(encoding="utf-8").strip()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        value = str(uuid4())
-        path.write_text(value, encoding="utf-8")
-        return value
+        return self._store.conversation_id()
 
     async def _run_pipeline(
         self,
@@ -221,7 +233,7 @@ class TaskSupervisorService:
                 conversation_id=conversation_id,
                 completed_at=datetime.now(UTC),
             )
-            path = self._store.save_manifest(
+            manifest_reference = self._store.save_manifest(
                 self._redact_manifest(manifest, github_token=turn_token)
             )
             terminal = (
@@ -239,7 +251,7 @@ class TaskSupervisorService:
             await self._update_phase(
                 record,
                 terminal,
-                manifest_path=str(path),
+                manifest_path=manifest_reference,
                 outcome_detail=detail,
             )
         except TimeoutError as exc:
@@ -356,13 +368,13 @@ class TaskSupervisorService:
             outcome_detail=detail,
             completed_at=datetime.now(UTC),
         )
-        path = self._store.save_manifest(
+        manifest_reference = self._store.save_manifest(
             self._redact_manifest(manifest, github_token=github_token)
         )
         await self._update_phase(
             record,
             TaskExecutionPhase.FAILED,
-            manifest_path=str(path),
+            manifest_path=manifest_reference,
             outcome_detail=detail,
         )
 

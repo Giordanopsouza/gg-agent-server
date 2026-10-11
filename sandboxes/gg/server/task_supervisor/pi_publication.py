@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shlex
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Protocol
 
 from gg.server.config import publication_process_env
+from gg.server.sqlite_state import SandboxState
 
 
 MARKER_PREFIX = "gg-task-marker:"
@@ -87,14 +89,26 @@ def publication_instructions(
     task_branch: str,
     base_ref: str,
     task_marker: str,
-    intent_path: Path,
+    state_db: Path,
 ) -> str:
     """Tell Pi how to publish without treating that text as a merge lock."""
 
-    command = (
-        "python -m gg.server.task_supervisor.pi_publication "
-        f"--repository {repository} --branch {task_branch} --base {base_ref} "
-        f"--marker {task_marker} --intent-path {intent_path}"
+    command = shlex.join(
+        [
+            "python",
+            "-m",
+            "gg.server.task_supervisor.pi_publication",
+            "--repository",
+            repository,
+            "--branch",
+            task_branch,
+            "--base",
+            base_ref,
+            "--marker",
+            task_marker,
+            "--state-db",
+            str(state_db.resolve()),
+        ]
     )
     return (
         "After you edit the repository and run the tests you can, commit on "
@@ -127,7 +141,7 @@ def publish_draft(
     task_branch: str,
     base_ref: str,
     task_marker: str,
-    intent_path: Path,
+    state_db: Path,
     client: PullRequestClient,
     process_env: Mapping[str, str] | None = None,
     check_outcome: str = "not_run",
@@ -138,9 +152,9 @@ def publish_draft(
         raise PublicationError("refusing to publish this branch")
     if check_outcome not in {"passed", "failed", "not_run"}:
         raise PublicationError("invalid check outcome")
-    _assert_identity(intent_path, repository, task_branch, base_ref, task_marker)
+    _assert_identity(state_db, repository, task_branch, base_ref, task_marker)
     _write_intent(
-        intent_path,
+        state_db,
         repository=repository,
         task_branch=task_branch,
         base_ref=base_ref,
@@ -156,7 +170,7 @@ def publish_draft(
     if head == base and not status:
         raise NoChanges("no_changes")
     _write_intent(
-        intent_path,
+        state_db,
         repository=repository,
         task_branch=task_branch,
         base_ref=base_ref,
@@ -266,16 +280,34 @@ def _assert_identity(
     base_ref: str,
     task_marker: str,
 ) -> None:
-    if not path.is_file():
-        return
-    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved = load_publication_intent(path, task_marker)
+    if saved is not None:
+        _check_identity(saved, repository, task_branch, base_ref, task_marker)
+
+
+def _check_identity(
+    saved: dict[str, object],
+    repository: str,
+    task_branch: str,
+    base_ref: str,
+    task_marker: str,
+) -> None:
     if (
-        saved.get("repository") != repository
-        or saved.get("task_branch") != task_branch
-        or saved.get("base_ref") != base_ref
-        or saved.get("task_marker") != task_marker
-    ):
+        saved.get("repository"),
+        saved.get("task_branch"),
+        saved.get("base_ref"),
+        saved.get("task_marker"),
+    ) != (repository, task_branch, base_ref, task_marker):
         raise PublicationConflict("existing publication identity does not match task")
+
+
+def load_publication_intent(path: Path, task_marker: str) -> dict[str, object] | None:
+    with SandboxState(path).connection() as connection:
+        row = connection.execute(
+            "SELECT payload FROM publication_intents WHERE task_marker = ?",
+            (task_marker,),
+        ).fetchone()
+    return None if row is None else json.loads(row[0])
 
 
 def reported_check_outcome(
@@ -288,10 +320,10 @@ def reported_check_outcome(
 ) -> str:
     """Read the check result Pi supplied to its publication command."""
 
-    if not path.is_file():
+    saved = load_publication_intent(path, task_marker)
+    if saved is None:
         return "not_run"
-    _assert_identity(path, repository, task_branch, base_ref, task_marker)
-    saved = json.loads(path.read_text(encoding="utf-8"))
+    _check_identity(saved, repository, task_branch, base_ref, task_marker)
     outcome = saved.get("check_outcome", "not_run")
     if outcome not in {"passed", "failed", "not_run"}:
         raise PublicationConflict("invalid publication check outcome")
@@ -308,21 +340,29 @@ def _write_intent(
     commit_sha: str | None,
     check_outcome: str,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.is_file() and commit_sha is None:
-        saved = json.loads(path.read_text(encoding="utf-8"))
-        commit_sha = saved.get("commit_sha")
-    payload = {
-        "repository": repository,
-        "task_branch": task_branch,
-        "base_ref": base_ref,
-        "task_marker": task_marker,
-        "commit_sha": commit_sha,
-        "check_outcome": check_outcome,
-    }
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload), encoding="utf-8")
-    temporary.replace(path)
+    with SandboxState(path).write() as connection:
+        row = connection.execute(
+            "SELECT payload FROM publication_intents WHERE task_marker = ?",
+            (task_marker,),
+        ).fetchone()
+        if row is not None:
+            saved = json.loads(row[0])
+            _check_identity(saved, repository, task_branch, base_ref, task_marker)
+            if commit_sha is None:
+                commit_sha = saved.get("commit_sha")
+        payload = {
+            "repository": repository,
+            "task_branch": task_branch,
+            "base_ref": base_ref,
+            "task_marker": task_marker,
+            "commit_sha": commit_sha,
+            "check_outcome": check_outcome,
+        }
+        connection.execute(
+            """INSERT INTO publication_intents VALUES (?, ?)
+               ON CONFLICT(task_marker) DO UPDATE SET payload = excluded.payload""",
+            (task_marker, json.dumps(payload)),
+        )
 
 
 def _commit_if_needed(
@@ -522,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch", required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--marker", required=True)
-    parser.add_argument("--intent-path", required=True, type=Path)
+    parser.add_argument("--state-db", required=True, type=Path)
     parser.add_argument(
         "--check-outcome", choices=("passed", "failed", "not_run"), default="not_run"
     )
@@ -535,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
             task_branch=args.branch,
             base_ref=args.base,
             task_marker=args.marker,
-            intent_path=args.intent_path,
+            state_db=args.state_db,
             client=GhPullRequestClient(),
             process_env=publication_process_env(),
             check_outcome=args.check_outcome,

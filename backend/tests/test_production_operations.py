@@ -13,7 +13,7 @@ from gg.runtime.storage import StorageLimits, admission_pressure, run_retention_
 from gg.runtime.task_service import StoragePressureError, TaskService
 from gg.sdk.domain import Event, EventKind
 from gg.sdk.tasks import CreateTaskRequest, TaskState
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -116,10 +116,9 @@ def test_retention_expires_terminal_payload_but_keeps_idempotency(
         )
         ledger.finish_task(record.id, state=TaskState.COMPLETED)
         old = datetime.now(UTC) - timedelta(days=8)
-        assert ledger._conn is not None
-        with ledger._lock:
-            ledger._conn.execute(
-                "UPDATE tasks SET updated_at = %s WHERE id = %s",
+        with ledger.db.write() as tx:
+            tx.connection.execute(
+                "UPDATE tasks SET updated_at = ? WHERE id = ?",
                 (old.isoformat(), record.id),
             )
         limits = StorageLimits(

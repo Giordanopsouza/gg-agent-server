@@ -75,6 +75,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
     GG_WORKSPACE_DIR=/workspace/project \
     GG_CONVERSATIONS_DIR=/workspace/conversations
 
+# Verify the installed image includes the SQLite stores and the standalone Pi helper.
+RUN /app/.venv/bin/python -c "from gg.server.sqlite_state import SandboxState; from gg.server.agent.event_log import EventLog; from gg.server.task_supervisor.store import ExecutionStore; from gg.server.task_supervisor.pi_publication import load_publication_intent" \
+ && /app/.venv/bin/python -m gg.server.task_supervisor.pi_publication --help
+
 USER ${USERNAME}
 WORKDIR /home/gg
 

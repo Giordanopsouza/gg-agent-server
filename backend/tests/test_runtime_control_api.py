@@ -7,7 +7,7 @@ from httpx import ASGITransport
 from gg.runtime import RuntimeSettings, create_app
 from gg.runtime.ledger import SandboxProviderState
 from gg.runtime.modal_sandbox import SandboxSnapshot
-from test_support.postgres_ledger import new_ledger
+from test_support.sqlite_ledger import new_ledger
 
 
 _AUTH = {"X-API-Key": "control-secret"}
@@ -37,9 +37,10 @@ async def test_control_plane_rejects_missing_or_wrong_api_key() -> None:
     )
     transport = ASGITransport(app=app)
 
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://runtime"
-    ) as client:
+    async with (
+        httpx.AsyncClient(transport=transport, base_url="http://runtime") as client,
+        app.router.lifespan_context(app),
+    ):
         missing = await client.post("/tasks", json=_TASK)
         wrong = await client.post("/tasks", headers={"X-API-Key": "wrong"}, json=_TASK)
 
@@ -57,9 +58,10 @@ async def test_configured_web_origin_can_preflight_api_key() -> None:
         task_ledger=new_ledger(),
     )
     transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://runtime"
-    ) as client:
+    async with (
+        httpx.AsyncClient(transport=transport, base_url="http://runtime") as client,
+        app.router.lifespan_context(app),
+    ):
         allowed = await client.options(
             "/tasks",
             headers={

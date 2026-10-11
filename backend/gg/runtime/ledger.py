@@ -1,9 +1,9 @@
-"""Postgres-backed durable task ledger for the control plane."""
+"""SQLite task ledger; all writes join the shared runtime revision."""
 
 from __future__ import annotations
 
 import json
-import threading
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -12,12 +12,10 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-import psycopg
-from psycopg import sql
-from psycopg.rows import dict_row, tuple_row
-from sqlalchemy import Engine, event
-
-from gg.runtime.postgres import RuntimePostgres
+from gg.runtime.checkpoints import CheckpointCoordinator
+from gg.runtime.local_sessions import durable
+from gg.runtime.sqlite_db import SQLiteDB
+from gg.runtime.sqlite_migrations import SCHEMA_VERSION
 from gg.sdk.agent_backend import DEFAULT_PI_MODEL
 from gg.sdk.domain import Event, MessageDeliveryStatus, MessageReceipt
 from gg.sdk.publication import PublicationRecord, PublicationState
@@ -25,13 +23,8 @@ from gg.sdk.task_execution import AgentOutcome, CheckOutcome, TaskResultManifest
 from gg.sdk.tasks import TaskRecord, TaskState
 
 
-# The schema version this runtime understands. A database reporting a higher
-# version is from a future runtime and must fail startup explicitly rather
-# than silently downgrade.
-SUPPORTED_SCHEMA_VERSION = 9
+SUPPORTED_SCHEMA_VERSION = SCHEMA_VERSION
 
-# Outcomes recorded only after the agent finished successfully. A later sandbox
-# reconcile must not replace these with a failure.
 _SETTLED_SUCCESS_OUTCOMES = frozenset(
     {"published", "no_changes", "checks_passed", "checks_not_run"}
 )
@@ -192,102 +185,68 @@ def _row_to_record(row: dict[str, Any]) -> TaskRecord:
         workspace_expired=bool(row["workspace_expired"])
         if "workspace_expired" in row.keys()
         else False,
-        workspace_last_activity_at=(
-            datetime.fromisoformat(row["workspace_last_activity_at"])
-            if "workspace_last_activity_at" in row.keys()
-            and row["workspace_last_activity_at"]
-            else None
-        ),
+        workspace_last_activity_at=datetime.fromisoformat(
+            row["workspace_last_activity_at"]
+        )
+        if "workspace_last_activity_at" in row.keys()
+        and row["workspace_last_activity_at"]
+        else None,
     )
 
 
 class TaskLedger:
-    """Durable runtime ledger stored in the private Postgres schema."""
+    """Native SQL port of task operations, borrowing one shared database."""
 
-    def __init__(self, database: RuntimePostgres) -> None:
+    def __init__(
+        self, database: SQLiteDB, checkpoints: CheckpointCoordinator | None = None
+    ):
+        if checkpoints is not None and checkpoints.db is not database:
+            raise ValueError("ledger and checkpoints must share a database")
         self._database = database
-        self._engine: Engine = database.engine()
-        event.listen(self._engine, "connect", self._configure_connection)
-        self._lock = threading.Lock()
-        self._conn: Any | None = None
-
-    def _configure_connection(self, connection: Any, _: Any) -> None:
-        connection.autocommit = True
-        try:
-            connection.execute(
-                sql.SQL("SET search_path TO {}").format(
-                    sql.Identifier(self._database.schema)
-                )
-            )
-        finally:
-            connection.autocommit = False
-
-    @contextmanager
-    def _read_connection(self) -> Iterator[Any]:
-        """Borrow a pooled connection so reads never wait on the writer lock."""
-        assert self._conn is not None
-        if self._database.max_size == 1:
-            with self._lock:
-                yield self._conn
-            return
-        connection = self._engine.raw_connection()
-        driver = connection.driver_connection
-        driver.row_factory = dict_row
-        try:
-            yield connection
-        finally:
-            driver.row_factory = tuple_row
-            connection.close()
+        self.checkpoints = checkpoints
 
     @property
-    def engine(self) -> Engine:
-        """The shared process engine used by other database-backed services."""
-        return self._engine
+    def db(self) -> SQLiteDB:
+        return self._database
 
-    def open(self) -> None:
-        if self._conn is not None:
-            return
-        connection = self._engine.raw_connection()
-        connection.driver_connection.row_factory = dict_row
-        connection.driver_connection.autocommit = True
-        try:
-            connection.execute(
-                sql.SQL("SET search_path TO {}").format(
-                    sql.Identifier(self._database.schema)
-                )
-            )
-            self._conn = connection
-            version = self._schema_version()
-            if version != SUPPORTED_SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"unsupported Postgres ledger schema version {version}; "
-                    f"expected {SUPPORTED_SCHEMA_VERSION}"
-                )
-        except Exception:
-            connection.close()
-            self._engine.dispose()
-            self._conn = None
-            raise
+    async def ensure_durable(self):
+        if self.checkpoints is not None:
+            await durable(self.checkpoints, self.db.revision)
 
-    def close(self) -> None:
-        with self._lock:
-            if self._conn is not None:
-                self._conn.close()
-                self._conn = None
-            self._engine.dispose()
+    def open(self):
+        # The caller owns the database lifecycle; verify existing state only.
+        self.db.revision
 
-    def __enter__(self) -> TaskLedger:
+    def close(self):
+        self.db.close()
+
+    def __enter__(self):
         self.open()
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(self, *_):
         self.close()
 
-    def _begin_write(self) -> None:
-        assert self._conn is not None
-        self._conn.execute("BEGIN")
-        # Serialize sequence, capacity, and publication decisions across workers.
-        self._conn.execute("SELECT pg_advisory_xact_lock(780078)")
+    @contextmanager
+    def _read_connection(self) -> Iterator[sqlite3.Connection]:
+        with self._database.read() as connection:
+            connection.row_factory = lambda cursor, values: dict(
+                zip((c[0] for c in cursor.description), values)
+            )
+            yield connection
+
+    @contextmanager
+    def _write_connection(
+        self, *, skip_unchanged: bool = False
+    ) -> Iterator[sqlite3.Connection]:
+        with self._database.write(skip_unchanged=skip_unchanged) as transaction:
+            transaction.connection.row_factory = lambda cursor, values: dict(
+                zip((c[0] for c in cursor.description), values)
+            )
+            try:
+                yield transaction.connection
+            finally:
+                transaction.connection.row_factory = None
 
     def submit(
         self,
@@ -300,64 +259,53 @@ class TaskLedger:
         model: str = DEFAULT_PI_MODEL,
         owner_id: UUID | None = None,
     ) -> tuple[TaskRecord, bool]:
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                scope, scope_params = self._owner_scope(owner_id)
-                existing = self._conn.execute(
-                    f"SELECT * FROM tasks WHERE idempotency_key = %s AND {scope}",
-                    (idempotency_key, *scope_params),
-                ).fetchone()
-                if existing is not None:
-                    self._conn.execute("COMMIT")
-                    return _row_to_record(existing), False
-                tombstone = self._conn.execute(
-                    "SELECT * FROM retention_tombstones "
-                    f"WHERE idempotency_key = %s AND {scope}",
-                    (idempotency_key, *scope_params),
-                ).fetchone()
-                if tombstone is not None:
-                    self._conn.execute("COMMIT")
-                    return self._record_from_tombstone(tombstone), False
-
-                seq_row = self._conn.execute(
-                    "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM tasks"
-                ).fetchone()
-                seq = int(seq_row["next_seq"])
-                now = _utcnow_iso()
-                task_id = str(uuid4())
-                self._conn.execute(
-                    """
-                    INSERT INTO tasks (
-                        id, seq, state, idempotency_key, owner_id, repository,
-                        prompt, base_ref, base_sha, retry_of, model,
-                        created_at, updated_at,
-                        outcome_detail, check_status, sandbox_cleanup_status
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, NULL,
-                        %s, %s, %s, %s, NULL, NULL, NULL
-                    )
-                    """,
-                    (
-                        task_id,
-                        seq,
-                        TaskState.QUEUED.value,
-                        idempotency_key,
-                        owner_id,
-                        repository or "",
-                        prompt,
-                        base_ref,
-                        retry_of,
-                        model,
-                        now,
-                        now,
-                    ),
-                )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            scope, scope_params = self._owner_scope(owner_id)
+            existing = connection.execute(
+                f"SELECT * FROM tasks WHERE idempotency_key = ? AND {scope}",
+                (idempotency_key, *scope_params),
+            ).fetchone()
+            if existing is not None:
+                return (_row_to_record(existing), False)
+            retired = connection.execute(
+                f"SELECT * FROM task_idempotency WHERE idempotency_key = ? AND {scope}",
+                (idempotency_key, *scope_params),
+            ).fetchone()
+            if retired is not None:
+                return (self._record_from_tombstone(retired), False)
+            seq_row = connection.execute(
+                """
+            UPDATE ledger_counters SET value = value + 1 WHERE name = ?
+            RETURNING value AS next_seq
+            """,
+                ("task_seq",),
+            ).fetchone()
+            seq = int(seq_row["next_seq"])
+            now = _utcnow_iso()
+            task_id = str(uuid4())
+            connection.execute(
+                """
+            INSERT INTO tasks ( id, seq, state, idempotency_key, owner_id,
+            repository, prompt, base_ref, base_sha, retry_of, model, created_at,
+            updated_at, outcome_detail, check_status, sandbox_cleanup_status )
+            VALUES ( ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL
+            )
+            """,
+                (
+                    task_id,
+                    seq,
+                    TaskState.QUEUED.value,
+                    idempotency_key,
+                    None if owner_id is None else str(owner_id),
+                    repository or "",
+                    prompt,
+                    base_ref,
+                    retry_of,
+                    model,
+                    now,
+                    now,
+                ),
+            )
         return (
             TaskRecord(
                 owner_id=owner_id,
@@ -376,125 +324,124 @@ class TaskLedger:
             True,
         )
 
-    # Return one task by id, or None.
     def record_base_sha(self, task_id: str, base_sha: str) -> TaskRecord:
         """Persist the resolved starting revision for one task."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                updated = self._conn.execute(
-                    "UPDATE tasks SET base_sha = %s, updated_at = %s WHERE id = %s",
-                    (base_sha, now, task_id),
-                )
-                if updated.rowcount != 1:
-                    raise KeyError(f"no task {task_id}")
-                row = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            now = _utcnow_iso()
+            updated = connection.execute(
+                "UPDATE tasks SET base_sha = ?, updated_at = ? WHERE id = ?",
+                (base_sha, now, task_id),
+            )
+            if updated.rowcount != 1:
+                raise KeyError(f"no task {task_id}")
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
         assert row is not None
         return _row_to_record(row)
 
     @staticmethod
-    def _owner_scope(owner_id: UUID | None) -> tuple[str, tuple[UUID, ...]]:
+    def _owner_scope(owner_id: UUID | None) -> tuple[str, tuple[str, ...]]:
         if owner_id is None:
-            return "owner_id IS NULL", ()
-        return "owner_id = %s", (owner_id,)
+            return ("owner_id IS NULL", ())
+        return ("owner_id = ?", (str(owner_id),))
 
     def get(self, task_id: str, *, owner_id: UUID | None = None) -> TaskRecord | None:
-        assert self._conn is not None
         with self._read_connection() as connection:
+            query = """
+            SELECT tasks.*, json_extract(results.manifest_json,
+            '$.agent_outcome') AS agent_outcome FROM tasks LEFT JOIN
+            task_results AS results ON results.task_id = tasks.id
+            WHERE tasks.id = ?
+            """
             if owner_id is None:
-                row = connection.execute(
-                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
-                ).fetchone()
+                row = connection.execute(query, (task_id,)).fetchone()
             else:
                 row = connection.execute(
-                    "SELECT * FROM tasks WHERE id = %s AND owner_id = %s",
-                    (task_id, owner_id),
+                    query + "AND tasks.owner_id = ?", (task_id, str(owner_id))
                 ).fetchone()
         return _row_to_record(row) if row is not None else None
 
-    # Return all tasks in FIFO (seq) order.
     def list(self, *, owner_id: UUID | None = None) -> list[TaskRecord]:
         with self._read_connection() as connection:
-            query = (
-                "SELECT tasks.*, "
-                "(results.manifest_json::jsonb ->> 'agent_outcome') AS agent_outcome "
-                "FROM tasks LEFT JOIN task_results AS results "
-                "ON results.task_id = tasks.id "
-            )
+            query = """
+            SELECT tasks.*, json_extract(results.manifest_json,
+            '$.agent_outcome') AS agent_outcome FROM tasks LEFT JOIN
+            task_results AS results ON results.task_id = tasks.id
+            """
             if owner_id is None:
                 rows = connection.execute(query + "ORDER BY tasks.seq ASC").fetchall()
             else:
                 rows = connection.execute(
-                    query + "WHERE tasks.owner_id = %s ORDER BY tasks.seq ASC",
-                    (owner_id,),
+                    query + "WHERE tasks.owner_id = ? ORDER BY tasks.seq ASC",
+                    (str(owner_id),),
                 ).fetchall()
+        return [_row_to_record(row) for row in rows]
+
+    def count_queued(self) -> int:
+        with self._read_connection() as connection:
+            return connection.execute(
+                "SELECT COUNT(*) AS count FROM tasks WHERE state = 'queued'"
+            ).fetchone()["count"]
+
+    def sleeping_workspace_candidates(
+        self, *, before: datetime, after_seq: int = 0, limit: int = 200
+    ) -> list[TaskRecord]:
+        """Return only due workspaces, in bounded keyset pages."""
+        if not 1 <= limit <= 200:
+            raise ValueError("candidate limit must be between 1 and 200")
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM tasks INDEXED BY tasks_sleeping_expiry
+                   WHERE state = 'sleeping'
+                   AND workspace_expired = 0
+                   AND COALESCE(workspace_last_activity_at, updated_at) <= ?
+                   AND seq > ? ORDER BY seq LIMIT ?""",
+                (before.isoformat(), after_seq, limit),
+            ).fetchall()
         return [_row_to_record(row) for row in rows]
 
     def reserve_next(self, *, capacity: int) -> TaskRecord | None:
         """Atomically reserve the oldest queued task if capacity is available."""
-
         if not 1 <= capacity <= 10:
             raise ValueError("reservation capacity must be between 1 and 10")
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                active = int(
-                    self._conn.execute(
-                        "SELECT COUNT(*) AS count FROM task_reservations"
-                    ).fetchone()["count"]
-                )
-                if active >= capacity:
-                    self._conn.execute("COMMIT")
-                    return None
-                row = self._conn.execute(
-                    """
-                    SELECT tasks.* FROM tasks
-                    LEFT JOIN task_reservations
-                        ON task_reservations.task_id = tasks.id
-                    WHERE tasks.state = %s AND task_reservations.task_id IS NULL
-                    ORDER BY tasks.seq ASC
-                    LIMIT 1
-                    """,
-                    (TaskState.QUEUED.value,),
-                ).fetchone()
-                if row is None:
-                    self._conn.execute("COMMIT")
-                    return None
-                now = _utcnow_iso()
-                self._conn.execute(
-                    """
-                    INSERT INTO task_reservations (
-                        task_id, phase, condition, reserved_at, updated_at
-                    ) VALUES (%s, %s, NULL, %s, %s)
-                    """,
-                    (row["id"], ReservationPhase.STARTING.value, now, now),
-                )
-                self._conn.execute(
-                    "UPDATE tasks SET state = %s, updated_at = %s WHERE id = %s",
-                    (TaskState.STARTING.value, now, row["id"]),
-                )
-                claimed = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = %s", (row["id"],)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            active = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM task_reservations"
+                ).fetchone()["count"]
+            )
+            if active >= capacity:
+                return None
+            row = connection.execute(
+                """
+            SELECT tasks.* FROM tasks LEFT JOIN task_reservations ON
+            task_reservations.task_id = tasks.id WHERE tasks.state = ? AND
+            task_reservations.task_id IS NULL ORDER BY tasks.seq ASC LIMIT 1
+            """,
+                (TaskState.QUEUED.value,),
+            ).fetchone()
+            if row is None:
+                return None
+            now = _utcnow_iso()
+            connection.execute(
+                """
+            INSERT INTO task_reservations ( task_id, phase, condition,
+            reserved_at, updated_at ) VALUES (?, ?, NULL, ?, ?)
+            """,
+                (row["id"], ReservationPhase.STARTING.value, now, now),
+            )
+            connection.execute(
+                "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                (TaskState.STARTING.value, now, row["id"]),
+            )
+            claimed = connection.execute(
+                "SELECT * FROM tasks WHERE id = ?", (row["id"],)
+            ).fetchone()
         assert claimed is not None
         return _row_to_record(claimed)
 
     def list_reservations(self) -> list[ReservationRecord]:
-        assert self._conn is not None
         with self._read_connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM task_reservations ORDER BY reserved_at, task_id"
@@ -502,10 +449,9 @@ class TaskLedger:
         return [_row_to_reservation(row) for row in rows]
 
     def get_reservation(self, task_id: str) -> ReservationRecord | None:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
-                "SELECT * FROM task_reservations WHERE task_id = %s", (task_id,)
+                "SELECT * FROM task_reservations WHERE task_id = ?", (task_id,)
             ).fetchone()
         return _row_to_reservation(row) if row is not None else None
 
@@ -518,34 +464,27 @@ class TaskLedger:
         task_state: TaskState | None = None,
     ) -> ReservationRecord:
         """Update reservation and public task state in one transaction."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                updated = self._conn.execute(
-                    """
-                    UPDATE task_reservations
-                    SET phase = %s, condition = %s, updated_at = %s
-                    WHERE task_id = %s
-                    """,
-                    (phase.value, condition, now, task_id),
+        with self._write_connection() as connection:
+            now = _utcnow_iso()
+            updated = connection.execute(
+                """
+            UPDATE task_reservations SET phase = ?, condition = ?, updated_at =
+            ? WHERE task_id = ?
+            """,
+                (phase.value, condition, now, task_id),
+            )
+            if updated.rowcount != 1:
+                raise KeyError(f"no reservation for task {task_id}")
+            if task_state is not None and (
+                not self._task_state_is_terminal(connection, task_id)
+            ):
+                connection.execute(
+                    "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                    (task_state.value, now, task_id),
                 )
-                if updated.rowcount != 1:
-                    raise KeyError(f"no reservation for task {task_id}")
-                if task_state is not None and not self._task_state_is_terminal(task_id):
-                    self._conn.execute(
-                        "UPDATE tasks SET state = %s, updated_at = %s WHERE id = %s",
-                        (task_state.value, now, task_id),
-                    )
-                row = self._conn.execute(
-                    "SELECT * FROM task_reservations WHERE task_id = %s", (task_id,)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+            row = connection.execute(
+                "SELECT * FROM task_reservations WHERE task_id = ?", (task_id,)
+            ).fetchone()
         assert row is not None
         return _row_to_reservation(row)
 
@@ -553,27 +492,18 @@ class TaskLedger:
         self, task_id: str, *, cleanup_status: str = "confirmed_absent"
     ) -> None:
         """Release capacity only after provider absence has been confirmed."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                self._conn.execute(
-                    "DELETE FROM task_reservations WHERE task_id = %s", (task_id,)
-                )
-                self._conn.execute(
-                    """
-                    UPDATE tasks
-                    SET sandbox_cleanup_status = %s, updated_at = %s
-                    WHERE id = %s
-                    """,
-                    (cleanup_status, now, task_id),
-                )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            now = _utcnow_iso()
+            connection.execute(
+                "DELETE FROM task_reservations WHERE task_id = ?", (task_id,)
+            )
+            connection.execute(
+                """
+            UPDATE tasks SET sandbox_cleanup_status = ?, updated_at = ? WHERE id
+            = ?
+            """,
+                (cleanup_status, now, task_id),
+            )
 
     def mark_sandbox_lost(self, task_id: str, *, detail: str) -> None:
         """Fail execution without erasing previously captured task evidence.
@@ -581,87 +511,55 @@ class TaskLedger:
         A task that already settled successfully stays completed. The sandbox
         exiting after publication is cleanup, not a new failure.
         """
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                row = self._conn.execute(
-                    "SELECT state, outcome_detail FROM tasks WHERE id = %s",
-                    (task_id,),
-                ).fetchone()
-                if row is None:
-                    self._conn.execute("COMMIT")
-                    return
-                current = TaskState(row["state"])
-                outcome = row["outcome_detail"]
-                if current is TaskState.CANCELLED:
-                    next_state = TaskState.CANCELLED
-                elif (
-                    current is TaskState.COMPLETED
-                    or outcome in _SETTLED_SUCCESS_OUTCOMES
-                ):
-                    next_state = TaskState.COMPLETED
-                else:
-                    next_state = TaskState.FAILED
-                self._conn.execute(
-                    """
-                    UPDATE tasks
-                    SET state = %s, outcome_detail = COALESCE(outcome_detail, %s),
-                        sandbox_cleanup_status = %s, updated_at = %s
-                    WHERE id = %s
-                    """,
-                    (
-                        next_state.value,
-                        detail,
-                        "confirmed_absent",
-                        now,
-                        task_id,
-                    ),
-                )
-                self._conn.execute(
-                    "DELETE FROM task_reservations WHERE task_id = %s", (task_id,)
-                )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            now = _utcnow_iso()
+            row = connection.execute(
+                "SELECT state, outcome_detail FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if row is None:
+                return
+            current = TaskState(row["state"])
+            outcome = row["outcome_detail"]
+            if current is TaskState.CANCELLED:
+                next_state = TaskState.CANCELLED
+            elif current is TaskState.COMPLETED or outcome in _SETTLED_SUCCESS_OUTCOMES:
+                next_state = TaskState.COMPLETED
+            else:
+                next_state = TaskState.FAILED
+            connection.execute(
+                """
+            UPDATE tasks SET state = ?, outcome_detail =
+            COALESCE(outcome_detail, ?), sandbox_cleanup_status = ?, updated_at
+            = ? WHERE id = ?
+            """,
+                (next_state.value, detail, "confirmed_absent", now, task_id),
+            )
+            connection.execute(
+                "DELETE FROM task_reservations WHERE task_id = ?", (task_id,)
+            )
 
     def settle_successful_tasks(self) -> None:
         """Complete tasks whose work already settled and whose sandbox is gone."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                placeholders = ",".join("%s" for _ in _SETTLED_SUCCESS_OUTCOMES)
-                self._conn.execute(
-                    f"""
-                    UPDATE tasks
-                    SET state = %s, updated_at = %s
+        with self._write_connection() as connection:
+            now = _utcnow_iso()
+            placeholders = ",".join("?" for _ in _SETTLED_SUCCESS_OUTCOMES)
+            connection.execute(
+                f"""UPDATE tasks SET state = ?, updated_at = ?
                     WHERE sandbox_cleanup_status = 'confirmed_absent'
                       AND outcome_detail IN ({placeholders})
-                      AND state NOT IN (%s, %s)
-                    """,
-                    (
-                        TaskState.COMPLETED.value,
-                        now,
-                        *_SETTLED_SUCCESS_OUTCOMES,
-                        TaskState.COMPLETED.value,
-                        TaskState.CANCELLED.value,
-                    ),
-                )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+                      AND state NOT IN ('completed', 'cancelled')""",
+                (
+                    TaskState.COMPLETED.value,
+                    now,
+                    *_SETTLED_SUCCESS_OUTCOMES,
+                ),
+            )
 
-    def _task_state_is_terminal(self, task_id: str) -> bool:
-        assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT state FROM tasks WHERE id = %s", (task_id,)
+    def _task_state_is_terminal(
+        self, connection: sqlite3.Connection, task_id: str
+    ) -> bool:
+        row = connection.execute(
+            "SELECT state FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
         if row is None:
             return False
@@ -678,54 +576,50 @@ class TaskLedger:
         credential_version: int | None = None,
     ) -> tuple[SandboxCreationRecord, bool]:
         """Persist creation intent before any provider call."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                existing = self._conn.execute(
-                    "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
-                ).fetchone()
-                if existing is not None:
-                    self._conn.execute("COMMIT")
-                    return _row_to_sandbox_record(existing), False
-                now = _utcnow_iso()
-                self._conn.execute(
-                    """
-                    INSERT INTO sandbox_creations (
-                        task_id, deployment, sandbox_name, tags_json,
-                        session_api_key, credential_version, provider_id,
-                        provider_state, detail,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, NULL, %s, %s)
-                    """,
-                    (
-                        task_id,
-                        deployment,
-                        sandbox_name,
-                        tags_json,
-                        session_api_key,
-                        credential_version,
-                        SandboxProviderState.CREATING.value,
-                        now,
-                        now,
-                    ),
-                )
-                row = self._conn.execute(
-                    "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            self._require_payload(connection, task_id)
+            existing = connection.execute(
+                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["deployment"],
+                    existing["sandbox_name"],
+                    existing["tags_json"],
+                    existing["session_api_key"],
+                ) != (deployment, sandbox_name, tags_json, session_api_key):
+                    raise RuntimeError("sandbox creation identity does not match task")
+                return (_row_to_sandbox_record(existing), False)
+            now = _utcnow_iso()
+            connection.execute(
+                """
+            INSERT INTO sandbox_creations ( task_id, deployment, sandbox_name,
+            tags_json, session_api_key, credential_version, provider_id,
+            provider_state, detail, created_at, updated_at ) VALUES (?, ?, ?, ?,
+            ?, ?, NULL, ?, NULL, ?, ?)
+            """,
+                (
+                    task_id,
+                    deployment,
+                    sandbox_name,
+                    tags_json,
+                    session_api_key,
+                    credential_version,
+                    SandboxProviderState.CREATING.value,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
+            ).fetchone()
         assert row is not None
-        return _row_to_sandbox_record(row), True
+        return (_row_to_sandbox_record(row), True)
 
     def get_sandbox_creation(self, task_id: str) -> SandboxCreationRecord | None:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
-                "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
+                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
             ).fetchone()
         return _row_to_sandbox_record(row) if row is not None else None
 
@@ -733,11 +627,12 @@ class TaskLedger:
         self, task_id: str, version: int | None
     ) -> SandboxCreationRecord:
         """Record the newly resolved version before retrying an absent provider."""
-        assert self._conn is not None
-        with self._lock:
-            row = self._conn.execute(
-                "UPDATE sandbox_creations SET credential_version = %s "
-                "WHERE task_id = %s RETURNING *",
+        with self._write_connection() as connection:
+            row = connection.execute(
+                """
+            UPDATE sandbox_creations SET credential_version = ? WHERE task_id =
+            ? RETURNING *
+            """,
                 (version, task_id),
             ).fetchone()
         if row is None:
@@ -753,31 +648,27 @@ class TaskLedger:
         detail: str | None = None,
     ) -> SandboxCreationRecord:
         """Record provider identity/state without exposing stored credentials."""
-
-        assert self._conn is not None
-        with self._lock:
-            now = _utcnow_iso()
-            if provider_id is None:
-                self._conn.execute(
-                    """
-                    UPDATE sandbox_creations
-                    SET provider_state = %s, detail = %s, updated_at = %s
-                    WHERE task_id = %s
-                    """,
-                    (provider_state.value, detail, now, task_id),
-                )
-            else:
-                self._conn.execute(
-                    """
-                    UPDATE sandbox_creations
-                    SET provider_id = %s, provider_state = %s,
-                        detail = %s, updated_at = %s
-                    WHERE task_id = %s
-                    """,
-                    (provider_id, provider_state.value, detail, now, task_id),
-                )
-            row = self._conn.execute(
-                "SELECT * FROM sandbox_creations WHERE task_id = %s", (task_id,)
+        with self._write_connection(skip_unchanged=True) as connection:
+            connection.execute(
+                """
+                UPDATE sandbox_creations SET provider_id = COALESCE(?, provider_id),
+                provider_state = ?, detail = ?, updated_at = ? WHERE task_id = ?
+                AND (provider_id IS NOT COALESCE(?, provider_id)
+                     OR provider_state IS NOT ? OR detail IS NOT ?)
+                """,
+                (
+                    provider_id,
+                    provider_state.value,
+                    detail,
+                    _utcnow_iso(),
+                    task_id,
+                    provider_id,
+                    provider_state.value,
+                    detail,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM sandbox_creations WHERE task_id = ?", (task_id,)
             ).fetchone()
         if row is None:
             raise KeyError(f"no sandbox creation intent for task {task_id}")
@@ -798,86 +689,65 @@ class TaskLedger:
         detail: str | None = None,
     ) -> tuple[PublicationRecord, bool]:
         """Persist publication identity before push/create side effects."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                existing = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = %s",
-                    (task_id,),
-                ).fetchone()
-                if existing is not None:
-                    record = _row_to_publication(existing)
-                    if (
-                        record.repository != repository
-                        or record.task_branch != task_branch
-                        or record.base_ref != base_ref
-                        or record.task_marker != task_marker
-                    ):
-                        self._conn.execute("COMMIT")
-                        raise PublicationIdentityError(
-                            "existing publication identity does not match "
-                            f"task {task_id}"
-                        )
-                    if (
-                        record.commit_sha is not None
-                        and commit_sha is not None
-                        and record.commit_sha != commit_sha
-                    ):
-                        self._conn.execute("COMMIT")
-                        raise PublicationIdentityError(
-                            f"existing publication commit does not match task {task_id}"
-                        )
-                    self._conn.execute("COMMIT")
-                    return record, False
-                now = _utcnow_iso()
-                self._conn.execute(
-                    """
-                    INSERT INTO publication_intents (
-                        task_id, repository, task_branch, base_ref, task_marker,
-                        commit_sha, state, check_outcome, agent_outcome,
-                        pr_number, pr_url, pr_draft, pr_author, pr_state,
-                        detail, created_at, updated_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        NULL, NULL, NULL, NULL, NULL, %s, %s, %s
+        with self._write_connection() as connection:
+            self._require_payload(connection, task_id)
+            existing = connection.execute(
+                "SELECT * FROM publication_intents WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if existing is not None:
+                record = _row_to_publication(existing)
+                if (
+                    record.repository != repository
+                    or record.task_branch != task_branch
+                    or record.base_ref != base_ref
+                    or (record.task_marker != task_marker)
+                ):
+                    raise PublicationIdentityError(
+                        f"existing publication identity does not match task {task_id}"
                     )
-                    """,
-                    (
-                        task_id,
-                        repository,
-                        task_branch,
-                        base_ref,
-                        task_marker,
-                        commit_sha,
-                        state.value,
-                        check_outcome.value,
-                        agent_outcome.value,
-                        detail,
-                        now,
-                        now,
-                    ),
-                )
-                row = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = %s",
-                    (task_id,),
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except PublicationIdentityError:
-                raise
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+                if (
+                    record.commit_sha is not None
+                    and commit_sha is not None
+                    and (record.commit_sha != commit_sha)
+                ):
+                    raise PublicationIdentityError(
+                        f"existing publication commit does not match task {task_id}"
+                    )
+                return (record, False)
+            now = _utcnow_iso()
+            connection.execute(
+                """
+            INSERT INTO publication_intents ( task_id, repository, task_branch,
+            base_ref, task_marker, commit_sha, state, check_outcome,
+            agent_outcome, pr_number, pr_url, pr_draft, pr_author, pr_state,
+            detail, created_at, updated_at ) VALUES ( ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            NULL, NULL, NULL, NULL, NULL, ?, ?, ? )
+            """,
+                (
+                    task_id,
+                    repository,
+                    task_branch,
+                    base_ref,
+                    task_marker,
+                    commit_sha,
+                    state.value,
+                    check_outcome.value,
+                    agent_outcome.value,
+                    detail,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM publication_intents WHERE task_id = ?", (task_id,)
+            ).fetchone()
         assert row is not None
-        return _row_to_publication(row), True
+        return (_row_to_publication(row), True)
 
     def get_publication(self, task_id: str) -> PublicationRecord | None:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
-                "SELECT * FROM publication_intents WHERE task_id = %s",
-                (task_id,),
+                "SELECT * FROM publication_intents WHERE task_id = ?", (task_id,)
             ).fetchone()
         return _row_to_publication(row) if row is not None else None
 
@@ -899,69 +769,50 @@ class TaskLedger:
         agent_outcome: AgentOutcome | None = None,
     ) -> PublicationRecord:
         """Record publication progress without storing credentials."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                current = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = %s",
-                    (task_id,),
-                ).fetchone()
-                if current is None:
-                    raise KeyError(f"no publication intent for task {task_id}")
-                draft_value = current["pr_draft"] if pr_draft is None else int(pr_draft)
-                self._conn.execute(
+        with self._write_connection() as connection:
+            now = _utcnow_iso()
+            current = connection.execute(
+                "SELECT * FROM publication_intents WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if current is None:
+                raise KeyError(f"no publication intent for task {task_id}")
+            draft_value = current["pr_draft"] if pr_draft is None else int(pr_draft)
+            connection.execute(
+                """
+            UPDATE publication_intents SET state = ?, commit_sha = COALESCE(?,
+            commit_sha), pr_number = COALESCE(?, pr_number), pr_url =
+            COALESCE(?, pr_url), pr_draft = ?, pr_author = COALESCE(?,
+            pr_author), pr_state = COALESCE(?, pr_state), detail = ?,
+            check_outcome = COALESCE(?, check_outcome), agent_outcome =
+            COALESCE(?, agent_outcome), updated_at = ? WHERE task_id = ?
+            """,
+                (
+                    state.value,
+                    commit_sha,
+                    pr_number,
+                    pr_url,
+                    draft_value,
+                    pr_author,
+                    pr_state,
+                    detail,
+                    None if check_outcome is None else check_outcome.value,
+                    None if agent_outcome is None else agent_outcome.value,
+                    now,
+                    task_id,
+                ),
+            )
+            if check_status is not None or outcome_detail is not None:
+                connection.execute(
                     """
-                    UPDATE publication_intents
-                    SET state = %s,
-                        commit_sha = COALESCE(%s, commit_sha),
-                        pr_number = COALESCE(%s, pr_number),
-                        pr_url = COALESCE(%s, pr_url),
-                        pr_draft = %s,
-                        pr_author = COALESCE(%s, pr_author),
-                        pr_state = COALESCE(%s, pr_state),
-                        detail = %s,
-                        check_outcome = COALESCE(%s, check_outcome),
-                        agent_outcome = COALESCE(%s, agent_outcome),
-                        updated_at = %s
-                    WHERE task_id = %s
-                    """,
-                    (
-                        state.value,
-                        commit_sha,
-                        pr_number,
-                        pr_url,
-                        draft_value,
-                        pr_author,
-                        pr_state,
-                        detail,
-                        None if check_outcome is None else check_outcome.value,
-                        None if agent_outcome is None else agent_outcome.value,
-                        now,
-                        task_id,
-                    ),
+            UPDATE tasks SET check_status = COALESCE(?, check_status),
+            outcome_detail = COALESCE(?, outcome_detail), updated_at = ? WHERE
+            id = ?
+            """,
+                    (check_status, outcome_detail, now, task_id),
                 )
-                if check_status is not None or outcome_detail is not None:
-                    self._conn.execute(
-                        """
-                        UPDATE tasks
-                        SET check_status = COALESCE(%s, check_status),
-                            outcome_detail = COALESCE(%s, outcome_detail),
-                            updated_at = %s
-                        WHERE id = %s
-                        """,
-                        (check_status, outcome_detail, now, task_id),
-                    )
-                row = self._conn.execute(
-                    "SELECT * FROM publication_intents WHERE task_id = %s",
-                    (task_id,),
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+            row = connection.execute(
+                "SELECT * FROM publication_intents WHERE task_id = ?", (task_id,)
+            ).fetchone()
         assert row is not None
         return _row_to_publication(row)
 
@@ -975,63 +826,53 @@ class TaskLedger:
         conversation_id: str | None = None,
     ) -> tuple[SupervisionRecord, bool]:
         """Persist execution identity before nonblocking sandbox startup."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                existing = self._conn.execute(
-                    """
-                    SELECT * FROM task_supervisions
-                    WHERE task_id = %s OR start_key = %s
-                    """,
-                    (task_id, start_key),
-                ).fetchone()
-                if existing is not None:
-                    record = _row_to_supervision(existing)
-                    if record.task_id != task_id or record.start_key != start_key:
-                        self._conn.execute("ROLLBACK")
-                        raise SupervisionIdentityError(
-                            "start_key already bound to a different task"
-                        )
-                    self._conn.execute("COMMIT")
-                    return record, False
-                now = _utcnow_iso()
-                self._conn.execute(
-                    """
-                    INSERT INTO task_supervisions (
-                        task_id, execution_id, task_branch, start_key,
-                        conversation_id, cancel_requested, tail_gap_possible,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, 0, 0, %s, %s)
-                    """,
-                    (
-                        task_id,
-                        execution_id,
-                        task_branch,
-                        start_key,
-                        conversation_id,
-                        now,
-                        now,
-                    ),
-                )
-                row = self._conn.execute(
-                    "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except SupervisionIdentityError:
-                raise
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            self._require_payload(connection, task_id)
+            existing = connection.execute(
+                """
+            SELECT * FROM task_supervisions WHERE task_id = ? OR start_key = ?
+            """,
+                (task_id, start_key),
+            ).fetchone()
+            if existing is not None:
+                record = _row_to_supervision(existing)
+                if (
+                    record.task_id != task_id
+                    or record.start_key != start_key
+                    or record.execution_id != execution_id
+                    or (record.task_branch != task_branch)
+                ):
+                    raise SupervisionIdentityError(
+                        "start_key already bound to a different task"
+                    )
+                return (record, False)
+            now = _utcnow_iso()
+            connection.execute(
+                """
+            INSERT INTO task_supervisions ( task_id, execution_id, task_branch,
+            start_key, conversation_id, cancel_requested, tail_gap_possible,
+            created_at, updated_at ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+            """,
+                (
+                    task_id,
+                    execution_id,
+                    task_branch,
+                    start_key,
+                    conversation_id,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
+            ).fetchone()
         assert row is not None
-        return _row_to_supervision(row), True
+        return (_row_to_supervision(row), True)
 
     def get_supervision(self, task_id: str) -> SupervisionRecord | None:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
-                "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
+                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
             ).fetchone()
         return _row_to_supervision(row) if row is not None else None
 
@@ -1045,11 +886,10 @@ class TaskLedger:
         cancel_requested: bool | None = None,
         tail_gap_possible: bool | None = None,
     ) -> SupervisionRecord:
-        assert self._conn is not None
-        with self._lock:
+        with self._write_connection() as connection:
             now = _utcnow_iso()
-            current = self._conn.execute(
-                "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
+            current = connection.execute(
+                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
             ).fetchone()
             if current is None:
                 raise KeyError(f"no supervision record for task {task_id}")
@@ -1070,17 +910,16 @@ class TaskLedger:
                 if tail_gap_possible is None
                 else tail_gap_possible
             )
-            self._conn.execute(
+            connection.execute(
                 """
-                UPDATE task_supervisions
-                SET execution_id = %s, start_key = %s, conversation_id = %s,
-                    cancel_requested = %s, tail_gap_possible = %s, updated_at = %s
-                WHERE task_id = %s
-                """,
+            UPDATE task_supervisions SET execution_id = ?, start_key = ?,
+            conversation_id = ?, cancel_requested = ?, tail_gap_possible = ?,
+            updated_at = ? WHERE task_id = ?
+            """,
                 (execution, key, conversation, int(cancel), int(tail), now, task_id),
             )
-            row = self._conn.execute(
-                "SELECT * FROM task_supervisions WHERE task_id = %s", (task_id,)
+            row = connection.execute(
+                "SELECT * FROM task_supervisions WHERE task_id = ?", (task_id,)
             ).fetchone()
         assert row is not None
         return _row_to_supervision(row)
@@ -1095,65 +934,127 @@ class TaskLedger:
         event_json: str | None = None,
     ) -> int | None:
         """Insert one copied event; return cursor or None when deduplicated."""
-
-        assert self._conn is not None
         payload = event_json if event_json is not None else event.model_dump_json()
-        with self._lock:
-            self._begin_write()
-            try:
-                existing = self._conn.execute(
-                    """
-                    SELECT cursor_seq FROM task_event_copies
-                    WHERE task_id = %s AND source_id = %s AND source_seq = %s
-                    """,
-                    (task_id, source_id, source_seq),
-                ).fetchone()
-                if existing is not None:
-                    self._conn.execute("COMMIT")
-                    return None
-                next_row = self._conn.execute(
-                    """
-                    SELECT COALESCE(MAX(cursor_seq), 0) + 1 AS next_cursor
-                    FROM task_event_copies WHERE task_id = %s
-                    """,
-                    (task_id,),
-                ).fetchone()
-                cursor = int(next_row["next_cursor"])
-                now = _utcnow_iso()
-                self._conn.execute(
-                    """
-                    INSERT INTO task_event_copies (
-                        task_id, cursor_seq, source_id, source_seq,
-                        event_json, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        task_id,
-                        cursor,
-                        source_id,
-                        source_seq,
-                        payload,
-                        now,
-                    ),
-                )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            return self._insert_task_event(
+                connection, task_id, source_id, source_seq, payload
+            )
+
+    def _insert_task_event(
+        self,
+        connection: sqlite3.Connection,
+        task_id: str,
+        source_id: str,
+        source_seq: int,
+        payload: str,
+    ) -> int | None:
+        existing = connection.execute(
+            """
+        SELECT cursor_seq FROM task_event_identities WHERE task_id = ? AND
+        source_id = ? AND source_seq = ?
+        """,
+            (task_id, source_id, source_seq),
+        ).fetchone()
+        if existing is not None:
+            return None
+        self._require_payload(connection, task_id)
+        connection.execute(
+            """
+        INSERT INTO task_event_counters(task_id, value) VALUES (?, 0) ON
+        CONFLICT DO NOTHING
+        """,
+            (task_id,),
+        )
+        cursor = connection.execute(
+            """
+        UPDATE task_event_counters SET value = value + 1 WHERE task_id = ?
+        RETURNING value
+        """,
+            (task_id,),
+        ).fetchone()["value"]
+        connection.execute(
+            "INSERT INTO task_event_identities VALUES (?, ?, ?, ?)",
+            (task_id, source_id, source_seq, cursor),
+        )
+        now = _utcnow_iso()
+        connection.execute(
+            """
+        INSERT INTO task_event_copies ( task_id, cursor_seq, source_id,
+        source_seq, event_json, created_at ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (task_id, cursor, source_id, source_seq, payload, now),
+        )
         return cursor
+
+    def event_source_cursor(self, task_id: str, source_id: str) -> int:
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT source_seq FROM task_event_source_cursors "
+                "WHERE task_id = ? AND source_id = ?",
+                (task_id, source_id),
+            ).fetchone()
+        return 0 if row is None else row["source_seq"]
+
+    def copy_task_event_page(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        events: list[Event],
+        max_log_bytes: int | None = None,
+    ) -> list[tuple[int, Event]]:
+        """Commit source watermark, identities and bounded evidence atomically."""
+        from gg.runtime.storage import truncate_event_json
+
+        if not events:
+            return []
+        if len(events) > 200 or any(
+            event.seq <= 0 or (index and event.seq <= events[index - 1].seq)
+            for index, event in enumerate(events)
+        ):
+            raise ValueError(
+                "event page must contain at most 200 ordered source events"
+            )
+        inserted = []
+        with self._write_connection() as connection:
+            self._require_payload(connection, task_id)
+            log_bytes = connection.execute(
+                "SELECT COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS bytes "
+                "FROM task_event_copies WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()["bytes"]
+            for event in events:
+                payload = event.model_dump_json()
+                if max_log_bytes is not None:
+                    payload, _ = truncate_event_json(
+                        event,
+                        max_task_log_bytes=max_log_bytes,
+                        current_log_bytes=log_bytes,
+                    )
+                cursor = self._insert_task_event(
+                    connection, task_id, source_id, event.seq, payload
+                )
+                if cursor is not None:
+                    log_bytes += len(payload.encode("utf-8"))
+                    inserted.append((cursor, Event.model_validate_json(payload)))
+            connection.execute(
+                """INSERT INTO task_event_source_cursors VALUES (?, ?, ?)
+                ON CONFLICT(task_id, source_id) DO UPDATE SET
+                source_seq = MAX(source_seq, excluded.source_seq)""",
+                (task_id, source_id, events[-1].seq),
+            )
+        return inserted
 
     def list_task_events(
         self, task_id: str, *, after_cursor: int = 0
     ) -> list[tuple[int, str, int, Event]]:
-        assert self._conn is not None
         with self._read_connection() as connection:
             rows = connection.execute(
                 """
-                SELECT cursor_seq, source_id, source_seq, event_json
-                FROM task_event_copies
-                WHERE task_id = %s AND cursor_seq > %s
-                ORDER BY cursor_seq ASC
-                """,
+            SELECT cursor_seq, source_id, source_seq, event_json FROM
+            task_event_copies WHERE task_id = ? AND cursor_seq > ? ORDER BY
+            cursor_seq ASC
+            """,
                 (task_id, after_cursor),
             ).fetchall()
         copied: list[tuple[int, str, int, Event]] = []
@@ -1169,62 +1070,50 @@ class TaskLedger:
         return copied
 
     def save_task_message_receipt(self, task_id: str, receipt: MessageReceipt) -> None:
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                saved = self._conn.execute(
-                    """
-                    INSERT INTO task_message_receipts (
-                        task_id, message_id, content, status, detail,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(task_id, message_id) DO UPDATE SET
-                        content = excluded.content,
-                        status = excluded.status,
-                        detail = excluded.detail,
-                        updated_at = excluded.updated_at
-                    WHERE task_message_receipts.content = excluded.content
-                    """,
-                    (
-                        task_id,
-                        receipt.id,
-                        receipt.content,
-                        receipt.status.value,
-                        receipt.detail,
-                        receipt.created_at.isoformat(),
-                        receipt.updated_at.isoformat(),
-                    ),
-                )
-                if saved.rowcount != 1:
-                    raise RuntimeError("message id already belongs to another message")
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            self._require_payload(connection, task_id)
+            saved = connection.execute(
+                """
+            INSERT INTO task_message_receipts ( task_id, message_id, content,
+            status, detail, created_at, updated_at ) VALUES (?, ?, ?, ?, ?, ?,
+            ?) ON CONFLICT(task_id, message_id) DO UPDATE SET content =
+            excluded.content, status = excluded.status, detail =
+            excluded.detail, updated_at = excluded.updated_at WHERE
+            task_message_receipts.content = excluded.content
+            """,
+                (
+                    task_id,
+                    receipt.id,
+                    receipt.content,
+                    receipt.status.value,
+                    receipt.detail,
+                    receipt.created_at.isoformat(),
+                    receipt.updated_at.isoformat(),
+                ),
+            )
+            if saved.rowcount != 1:
+                raise RuntimeError("message id already belongs to another message")
 
     def get_task_message_receipt(
         self, task_id: str, message_id: str
     ) -> MessageReceipt | None:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
                 """
-                SELECT * FROM task_message_receipts
-                WHERE task_id = %s AND message_id = %s
-                """,
+            SELECT * FROM task_message_receipts WHERE task_id = ? AND message_id
+            = ?
+            """,
                 (task_id, message_id),
             ).fetchone()
         return _row_to_message_receipt(row) if row is not None else None
 
     def list_task_message_receipts(self, task_id: str) -> list[MessageReceipt]:
-        assert self._conn is not None
         with self._read_connection() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM task_message_receipts
-                WHERE task_id = %s ORDER BY created_at, message_id
-                """,
+            SELECT * FROM task_message_receipts WHERE task_id = ? ORDER BY
+            created_at, message_id
+            """,
                 (task_id,),
             ).fetchall()
         return [_row_to_message_receipt(row) for row in rows]
@@ -1244,95 +1133,72 @@ class TaskLedger:
         evidence_complete: bool,
         evidence_detail: str | None,
     ) -> TaskResultArchive:
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                manifest_json = None if manifest is None else manifest.model_dump_json()
-                self._conn.execute(
-                    """
-                    INSERT INTO task_results (
-                        task_id, execution_id, manifest_json,
-                        evidence_complete, evidence_detail, archived_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(task_id) DO UPDATE SET
-                        execution_id = excluded.execution_id,
-                        manifest_json = excluded.manifest_json,
-                        evidence_complete = excluded.evidence_complete,
-                        evidence_detail = excluded.evidence_detail,
-                        archived_at = excluded.archived_at
-                    """,
-                    (
-                        task_id,
-                        execution_id,
-                        manifest_json,
-                        int(evidence_complete),
-                        evidence_detail,
-                        now,
-                    ),
-                )
-                row = self._conn.execute(
-                    "SELECT * FROM task_results WHERE task_id = %s", (task_id,)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            self._require_payload(connection, task_id)
+            now = _utcnow_iso()
+            manifest_json = None if manifest is None else manifest.model_dump_json()
+            connection.execute(
+                """
+            INSERT INTO task_results ( task_id, execution_id, manifest_json,
+            evidence_complete, evidence_detail, archived_at ) VALUES (?, ?, ?,
+            ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET execution_id =
+            excluded.execution_id, manifest_json = excluded.manifest_json,
+            evidence_complete = excluded.evidence_complete, evidence_detail =
+            excluded.evidence_detail, archived_at = excluded.archived_at
+            """,
+                (
+                    task_id,
+                    execution_id,
+                    manifest_json,
+                    int(evidence_complete),
+                    evidence_detail,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM task_results WHERE task_id = ?", (task_id,)
+            ).fetchone()
         assert row is not None
         return _row_to_task_result(row)
 
     def get_task_result(self, task_id: str) -> TaskResultArchive | None:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
-                "SELECT * FROM task_results WHERE task_id = %s", (task_id,)
+                "SELECT * FROM task_results WHERE task_id = ?", (task_id,)
             ).fetchone()
         return _row_to_task_result(row) if row is not None else None
 
     def cancel_queued_task(self, task_id: str) -> TaskRecord | None:
         """Cancel a queued task before sandbox allocation."""
-
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                row = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
-                ).fetchone()
-                if row is None:
-                    self._conn.execute("COMMIT")
-                    return None
-                if TaskState(row["state"]) is not TaskState.QUEUED:
-                    self._conn.execute("COMMIT")
-                    return _row_to_record(row)
-                now = _utcnow_iso()
-                self._conn.execute(
-                    """
-                    UPDATE tasks
-                    SET state = %s, outcome_detail = %s, updated_at = %s
-                    WHERE id = %s
-                    """,
-                    (
-                        TaskState.CANCELLED.value,
-                        "cancelled_before_allocation",
-                        now,
-                        task_id,
-                    ),
-                )
-                updated = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            if TaskState(row["state"]) is not TaskState.QUEUED:
+                return _row_to_record(row)
+            now = _utcnow_iso()
+            connection.execute(
+                """
+            UPDATE tasks SET state = ?, outcome_detail = ?, updated_at = ? WHERE
+            id = ?
+            """,
+                (
+                    TaskState.CANCELLED.value,
+                    "cancelled_before_allocation",
+                    now,
+                    task_id,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
         assert updated is not None
         return _row_to_record(updated)
 
     def request_task_cancel(self, task_id: str) -> SupervisionRecord | None:
         """Mark a running task for cooperative cancellation."""
-
         supervision = self.get_supervision(task_id)
         if supervision is None:
             return None
@@ -1346,51 +1212,41 @@ class TaskLedger:
         outcome_detail: str | None = None,
         check_status: str | None = None,
     ) -> TaskRecord:
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                now = _utcnow_iso()
-                self._conn.execute(
-                    """
-                    UPDATE tasks
-                    SET state = %s,
-                        outcome_detail = COALESCE(%s, outcome_detail),
-                        check_status = COALESCE(%s, check_status),
-                        updated_at = %s,
-                        workspace_last_activity_at = CASE WHEN %s = %s
-                            THEN workspace_last_activity_at ELSE %s END
-                    WHERE id = %s
-                    """,
-                    (
-                        state.value,
-                        outcome_detail,
-                        check_status,
-                        now,
-                        state.value,
-                        TaskState.SLEEPING.value,
-                        now,
-                        task_id,
-                    ),
-                )
-                row = self._conn.execute(
-                    "SELECT * FROM tasks WHERE id = %s", (task_id,)
-                ).fetchone()
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            now = _utcnow_iso()
+            connection.execute(
+                """
+            UPDATE tasks SET state = ?, outcome_detail = COALESCE(?,
+            outcome_detail), check_status = COALESCE(?, check_status),
+            updated_at = ?, workspace_last_activity_at = CASE WHEN ? = ? THEN
+            workspace_last_activity_at ELSE ? END WHERE id = ?
+            """,
+                (
+                    state.value,
+                    outcome_detail,
+                    check_status,
+                    now,
+                    state.value,
+                    TaskState.SLEEPING.value,
+                    now,
+                    task_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
         if row is None:
             raise KeyError(f"no task {task_id}")
         return _row_to_record(row)
 
     def queue_workspace_message(self, task_id: str) -> None:
         """Wake a sleeping workspace after its message receipt is durable."""
-        assert self._conn is not None
-        with self._lock:
-            self._conn.execute(
-                "UPDATE tasks SET state = %s, updated_at = %s "
-                "WHERE id = %s AND state = %s",
+        with self._write_connection() as connection:
+            connection.execute(
+                """
+            UPDATE tasks SET state = ?, updated_at = ? WHERE id = ? AND state =
+            ?
+            """,
                 (
                     TaskState.QUEUED.value,
                     _utcnow_iso(),
@@ -1400,60 +1256,57 @@ class TaskLedger:
             )
 
     def touch_workspace(self, task_id: str) -> None:
-        assert self._conn is not None
-        with self._lock:
-            self._conn.execute(
-                "UPDATE tasks SET updated_at = %s, workspace_last_activity_at = %s "
-                "WHERE id = %s",
+        with self._write_connection() as connection:
+            connection.execute(
+                """
+            UPDATE tasks SET updated_at = ?, workspace_last_activity_at = ?
+            WHERE id = ?
+            """,
                 (_utcnow_iso(), _utcnow_iso(), task_id),
             )
 
     def try_mark_sleeping(self, task_id: str) -> bool:
         """Close the idle window atomically with the message queue."""
-        assert self._conn is not None
-        with self._lock:
-            self._begin_write()
-            try:
-                pending = self._conn.execute(
-                    "SELECT 1 FROM task_message_receipts WHERE task_id = %s "
-                    "AND status = %s LIMIT 1",
-                    (task_id, MessageDeliveryStatus.ACCEPTED.value),
-                ).fetchone()
-                if pending is not None:
-                    self._conn.execute("COMMIT")
-                    return False
-                updated = self._conn.execute(
-                    "UPDATE tasks SET state = %s, updated_at = %s "
-                    "WHERE id = %s AND state = %s",
-                    (
-                        TaskState.SLEEPING.value,
-                        _utcnow_iso(),
-                        task_id,
-                        TaskState.IDLE.value,
-                    ),
-                )
-                self._conn.execute("COMMIT")
-                return updated.rowcount == 1
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        with self._write_connection() as connection:
+            pending = connection.execute(
+                """
+            SELECT 1 FROM task_message_receipts WHERE task_id = ? AND status = ?
+            LIMIT 1
+            """,
+                (task_id, MessageDeliveryStatus.ACCEPTED.value),
+            ).fetchone()
+            if pending is not None:
+                return False
+            updated = connection.execute(
+                """
+            UPDATE tasks SET state = ?, updated_at = ? WHERE id = ? AND state =
+            ?
+            """,
+                (
+                    TaskState.SLEEPING.value,
+                    _utcnow_iso(),
+                    task_id,
+                    TaskState.IDLE.value,
+                ),
+            )
+            return updated.rowcount == 1
 
     def expire_workspace(self, task_id: str) -> None:
-        assert self._conn is not None
-        with self._lock:
-            self._conn.execute(
-                "UPDATE tasks SET workspace_expired = 1 WHERE id = %s AND state = %s",
+        with self._write_connection() as connection:
+            connection.execute(
+                "UPDATE tasks SET workspace_expired = 1 WHERE id = ? AND state = ?",
                 (task_id, TaskState.SLEEPING.value),
             )
 
     def reset_sandbox_for_wake(self, task_id: str) -> None:
         """Discard the old provider identity after absence was confirmed."""
-        assert self._conn is not None
-        with self._lock:
-            self._conn.execute(
-                "UPDATE sandbox_creations SET provider_id = NULL, "
-                "provider_state = %s, detail = NULL, updated_at = %s "
-                "WHERE task_id = %s AND provider_state = %s",
+        with self._write_connection() as connection:
+            connection.execute(
+                """
+            UPDATE sandbox_creations SET provider_id = NULL, provider_state = ?,
+            detail = NULL, updated_at = ? WHERE task_id = ? AND provider_state =
+            ?
+            """,
                 (
                     SandboxProviderState.CREATING.value,
                     _utcnow_iso(),
@@ -1462,222 +1315,148 @@ class TaskLedger:
                 ),
             )
 
-    def _schema_version(self) -> int:
-        assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-        ).fetchone()
-        return int(row["value"]) if row is not None else 0
-
     def ping_database(self) -> bool:
         try:
-            assert self._conn is not None
             with self._read_connection() as connection:
                 connection.execute("SELECT 1")
-        except (psycopg.Error, AssertionError):
+        except (sqlite3.Error, RuntimeError):
             return False
         return True
 
     def count_task_log_bytes(self, task_id: str) -> int:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
                 """
-                SELECT
-                    COALESCE((
-                        SELECT SUM(LENGTH(event_json))
-                        FROM task_event_copies WHERE task_id = %s
-                    ), 0)
-                    + COALESCE((
-                        SELECT SUM(LENGTH(content) + LENGTH(COALESCE(detail, '')))
-                        FROM task_message_receipts WHERE task_id = %s
-                    ), 0) AS total
-                """,
+            SELECT COALESCE(( SELECT SUM(LENGTH(CAST(event_json AS BLOB))) FROM
+            task_event_copies WHERE task_id = ? ), 0) + COALESCE(( SELECT
+            SUM(LENGTH(CAST(content AS BLOB)) + LENGTH(CAST(COALESCE(detail, '')
+            AS BLOB))) FROM task_message_receipts WHERE task_id = ? ), 0) AS
+            total
+            """,
                 (task_id, task_id),
             ).fetchone()
         return int(row["total"])
 
     def count_task_artifact_bytes(self, task_id: str) -> int:
-        assert self._conn is not None
         with self._read_connection() as connection:
             row = connection.execute(
                 """
-                SELECT COALESCE(LENGTH(manifest_json), 0) AS total
-                FROM task_results WHERE task_id = %s
-                """,
+            SELECT COALESCE(LENGTH(CAST(manifest_json AS BLOB)), 0) AS total
+            FROM task_results WHERE task_id = ?
+            """,
                 (task_id,),
             ).fetchone()
         return int(row["total"]) if row is not None else 0
 
     def count_total_evidence_bytes(self) -> int:
-        assert self._conn is not None
         with self._read_connection() as connection:
-            row = connection.execute(
-                """
-                SELECT
-                    COALESCE((SELECT SUM(LENGTH(event_json)) FROM task_event_copies), 0)
-                    + COALESCE((
-                        SELECT SUM(LENGTH(content) + LENGTH(COALESCE(detail, '')))
-                        FROM task_message_receipts
-                    ), 0)
-                    + COALESCE((
-                        SELECT SUM(LENGTH(manifest_json)) FROM task_results
-                    ), 0) AS total
-                """
-            ).fetchone()
+            row = connection.execute("""
+            SELECT COALESCE((SELECT SUM(LENGTH(CAST(event_json AS BLOB))) FROM
+            task_event_copies), 0) + COALESCE(( SELECT SUM(LENGTH(CAST(content
+            AS BLOB)) + LENGTH(CAST(COALESCE(detail, '') AS BLOB))) FROM
+            task_message_receipts ), 0) + COALESCE(( SELECT
+            SUM(LENGTH(CAST(manifest_json AS BLOB))) FROM task_results ), 0) AS
+            total
+            """).fetchone()
         return int(row["total"])
 
     def protected_task_ids(self) -> set[str]:
         return {item.task_id for item in self.list_reservations()}
 
     def expire_terminal_payloads(
-        self,
-        *,
-        before: datetime,
-        tombstone_retention: timedelta,
+        self, *, before: datetime, tombstone_retention: timedelta
     ) -> int:
-        """Drop bulky evidence for terminal tasks while keeping dedupe metadata."""
-
-        assert self._conn is not None
-        terminal = (
-            TaskState.COMPLETED.value,
-            TaskState.FAILED.value,
-            TaskState.CANCELLED.value,
-        )
-        protected = self.protected_task_ids()
-        with self._read_connection() as connection:
+        """Expire payload and mutable identities atomically, protecting reservations."""
+        with self._write_connection() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM tasks
-                WHERE state IN (%s, %s, %s)
-                  AND payload_expired = 0
-                  AND updated_at < %s
-                ORDER BY updated_at ASC
-                """,
-                (*terminal, before.isoformat()),
-            ).fetchall()
-        expired = 0
-        for row in rows:
-            task_id = row["id"]
-            if task_id in protected:
-                continue
-            self._expire_task_payload(
-                task_id,
-                record=row,
-                tombstone_retention=tombstone_retention,
-            )
-            expired += 1
-        return expired
-
-    def purge_expired_tombstones(self, *, before: datetime) -> int:
-        assert self._conn is not None
-        with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT task_id FROM retention_tombstones
-                WHERE expires_at < %s
-                """,
+            SELECT * FROM tasks WHERE state IN ('completed', 'failed',
+            'cancelled') AND payload_expired = 0 AND updated_at < ? AND NOT
+            EXISTS (SELECT 1 FROM task_reservations r WHERE r.task_id =
+            tasks.id)
+            """,
                 (before.isoformat(),),
             ).fetchall()
+            now = _utcnow_iso()
+            expires = (datetime.fromisoformat(now) + tombstone_retention).isoformat()
             for row in rows:
-                self._conn.execute(
-                    "DELETE FROM retention_tombstones WHERE task_id = %s",
-                    (row["task_id"],),
+                task_id = row["id"]
+                publication = connection.execute(
+                    "SELECT * FROM publication_intents WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                remote = (
+                    None
+                    if publication is None
+                    else json.dumps(
+                        {
+                            key: publication[key]
+                            for key in ("pr_number", "pr_url", "pr_state", "state")
+                        },
+                        separators=(",", ":"),
+                    )
+                )
+                connection.execute(
+                    "INSERT INTO retention_tombstones VALUES (?, ?, ?)",
+                    (task_id, remote, expires),
+                )
+                connection.execute(
+                    """
+            INSERT INTO task_idempotency (task_id, owner_id, idempotency_key,
+            seq, terminal_state, model, created_at, updated_at) VALUES (?, ?, ?,
+            ?, ?, ?, ?, ?)
+            """,
+                    (
+                        task_id,
+                        row["owner_id"],
+                        row["idempotency_key"],
+                        row["seq"],
+                        row["state"],
+                        row["model"],
+                        row["created_at"],
+                        row["updated_at"],
+                    ),
+                )
+                for table in (
+                    "task_event_copies",
+                    "task_message_receipts",
+                    "task_results",
+                    "task_supervisions",
+                    "sandbox_creations",
+                    "publication_intents",
+                ):
+                    connection.execute(
+                        f"DELETE FROM {table} WHERE task_id = ?", (task_id,)
+                    )
+                connection.execute(
+                    """
+            UPDATE tasks SET payload_expired = 1, prompt = '', repository = '',
+            base_ref = NULL, base_sha = NULL, retry_of = NULL, outcome_detail =
+            NULL, check_status = NULL WHERE id = ?
+            """,
+                    (task_id,),
                 )
         return len(rows)
 
-    def _expire_task_payload(
-        self,
-        task_id: str,
-        *,
-        record: dict[str, Any],
-        tombstone_retention: timedelta,
-    ) -> None:
-        assert self._conn is not None
-        now = _utcnow_iso()
-        with self._lock:
-            publication_row = self._conn.execute(
-                "SELECT * FROM publication_intents WHERE task_id = %s",
-                (task_id,),
-            ).fetchone()
-        remote_effect = None
-        if publication_row is not None:
-            publication = _row_to_publication(publication_row)
-            remote_effect = json.dumps(
-                {
-                    "pr_number": publication.pr_number,
-                    "pr_url": publication.pr_url,
-                    "pr_state": publication.pr_state,
-                    "state": publication.state.value,
-                },
-                separators=(",", ":"),
-            )
-        expires_at = (datetime.fromisoformat(now) + tombstone_retention).isoformat()
-        with self._lock:
-            self._begin_write()
-            try:
-                self._conn.execute(
-                    """
-                    INSERT INTO retention_tombstones (
-                        idempotency_key, owner_id, task_id, repository, prompt,
-                        base_ref, retry_of, model, terminal_state, seq,
-                        created_at, updated_at,
-                        remote_effect_json, payload_expired_at, expires_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s
-                    )
-                    ON CONFLICT(task_id) DO UPDATE SET
-                        remote_effect_json = excluded.remote_effect_json,
-                        payload_expired_at = excluded.payload_expired_at,
-                        expires_at = excluded.expires_at
-                    """,
-                    (
-                        record["idempotency_key"],
-                        record["owner_id"],
-                        task_id,
-                        record["repository"],
-                        record["prompt"],
-                        record["base_ref"],
-                        record["retry_of"],
-                        record["model"],
-                        record["state"],
-                        record["seq"],
-                        record["created_at"],
-                        record["updated_at"],
-                        remote_effect,
-                        now,
-                        expires_at,
-                    ),
+    def purge_expired_tombstones(self, *, before: datetime) -> int:
+        with self._write_connection() as connection:
+            rows = connection.execute(
+                """
+            SELECT task_id FROM retention_tombstones WHERE expires_at < ? AND
+            NOT EXISTS (SELECT 1 FROM task_reservations r WHERE r.task_id =
+            retention_tombstones.task_id)
+            """,
+                (before.isoformat(),),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    "DELETE FROM retention_tombstones WHERE task_id = ?",
+                    (row["task_id"],),
                 )
-                self._conn.execute(
-                    "DELETE FROM task_event_copies WHERE task_id = %s", (task_id,)
+                connection.execute(
+                    "DELETE FROM tasks WHERE id = ? AND payload_expired = 1",
+                    (row["task_id"],),
                 )
-                self._conn.execute(
-                    "DELETE FROM task_message_receipts WHERE task_id = %s",
-                    (task_id,),
-                )
-                self._conn.execute(
-                    """
-                    UPDATE task_results
-                    SET manifest_json = NULL,
-                        evidence_complete = 0,
-                        evidence_detail = 'payload expired by retention policy'
-                    WHERE task_id = %s
-                    """,
-                    (task_id,),
-                )
-                self._conn.execute(
-                    """
-                    UPDATE tasks SET payload_expired = 1, updated_at = %s
-                    WHERE id = %s
-                    """,
-                    (now, task_id),
-                )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+        return len(rows)
 
     @staticmethod
     def _record_from_tombstone(row: dict[str, Any]) -> TaskRecord:
@@ -1687,15 +1466,20 @@ class TaskLedger:
             seq=row["seq"],
             state=TaskState(row["terminal_state"]),
             idempotency_key=row["idempotency_key"],
-            repository=row["repository"] or None,
-            prompt=row["prompt"],
-            base_ref=row["base_ref"],
-            retry_of=row["retry_of"],
+            prompt="",
             model=row["model"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             payload_expired=True,
         )
+
+    @staticmethod
+    def _require_payload(connection: sqlite3.Connection, task_id: str) -> None:
+        row = connection.execute(
+            "SELECT payload_expired FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if row is None or row["payload_expired"]:
+            raise KeyError(f"no active task payload {task_id}")
 
 
 def _row_to_supervision(row: dict[str, Any]) -> SupervisionRecord:
@@ -1750,17 +1534,3 @@ class SupervisionIdentityError(RuntimeError):
 
 class PublicationIdentityError(RuntimeError):
     """A task's stored publication identity does not match a retry."""
-
-
-__all__ = [
-    "SUPPORTED_SCHEMA_VERSION",
-    "PublicationIdentityError",
-    "ReservationPhase",
-    "ReservationRecord",
-    "SandboxCreationRecord",
-    "SandboxProviderState",
-    "SupervisionIdentityError",
-    "SupervisionRecord",
-    "TaskLedger",
-    "TaskResultArchive",
-]

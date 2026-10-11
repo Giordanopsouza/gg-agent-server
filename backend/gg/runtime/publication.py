@@ -113,6 +113,7 @@ class DraftPublisher:
                 PublicationState.PENDING,
                 PublicationState.FAILED,
             }:
+                await self._ledger.ensure_durable()
                 await self._push_branch(request, repo_dir, commit_sha)
                 record = self._ledger.update_publication(
                     request.task_id, state=PublicationState.PUSHED
@@ -121,6 +122,7 @@ class DraftPublisher:
                 record = self._ledger.update_publication(
                     request.task_id, state=PublicationState.CREATING
                 )
+            await self._ledger.ensure_durable()
             pr = await self._reconcile_or_create(request, commit_sha)
             return self._record_published(request, pr, commit_sha)
         except PublicationConflictError as exc:

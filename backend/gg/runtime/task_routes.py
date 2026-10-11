@@ -100,14 +100,16 @@ def list_repository_branches(
 
 
 @router.post("", response_model=TaskRecord)
-def submit_task(
+async def submit_task(
     body: CreateTaskRequest,
     request: Request,
     response: Response,
     service: TaskService = Depends(_get_service),
 ) -> TaskRecord:
     try:
-        record, created = service.submit(body, owner_id=request.state.owner_id)
+        record, created = await asyncio.to_thread(
+            service.submit, body, owner_id=request.state.owner_id
+        )
     except TaskConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -123,6 +125,7 @@ def submit_task(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    await request.app.state.task_ledger.ensure_durable()
     if created:
         request.app.state.task_scheduler.wake()
         response.status_code = status.HTTP_201_CREATED
@@ -200,15 +203,18 @@ def get_task_message_receipt(
 
 
 @router.post("/{task_id}/cancel", response_model=TaskRecord)
-def cancel_task(
+async def cancel_task(
     task_id: str,
     request: Request,
     service: TaskService = Depends(_get_service),
 ) -> TaskRecord:
     try:
-        record = service.cancel(task_id, owner_id=request.state.owner_id)
+        record = await asyncio.to_thread(
+            service.cancel, task_id, owner_id=request.state.owner_id
+        )
     except TaskControlError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await request.app.state.task_ledger.ensure_durable()
     request.app.state.task_scheduler.wake()
     return record
 
@@ -226,7 +232,7 @@ def get_task_result(
 
 
 @router.post("/{task_id}/retry", response_model=TaskRecord)
-def retry_task(
+async def retry_task(
     task_id: str,
     body: RetryTaskRequest,
     request: Request,
@@ -234,7 +240,9 @@ def retry_task(
     service: TaskService = Depends(_get_service),
 ) -> TaskRecord:
     try:
-        record, created = service.retry(task_id, body, owner_id=request.state.owner_id)
+        record, created = await asyncio.to_thread(
+            service.retry, task_id, body, owner_id=request.state.owner_id
+        )
     except TaskConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except TaskControlError as exc:
@@ -243,6 +251,7 @@ def retry_task(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    await request.app.state.task_ledger.ensure_durable()
     if created:
         request.app.state.task_scheduler.wake()
         response.status_code = status.HTTP_201_CREATED
@@ -284,11 +293,12 @@ async def stream_task_events(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     await websocket.accept()
-    for copy in supervision.list_event_copies(task_id, after_cursor=after):
-        await websocket.send_json(copy.model_dump(mode="json"))
-        after = copy.cursor
+    # Subscribe before replay: events arriving during send_json are queued.
     queue = supervision.subscribe_events(task_id)
     try:
+        for copy in supervision.list_event_copies(task_id, after_cursor=after):
+            await websocket.send_json(copy.model_dump(mode="json"))
+            after = copy.cursor
         while True:
             copy = await queue.get()
             if copy.cursor <= after:

@@ -3,14 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && tsc -p tsconfig.server.json && vite build",
-    "start": "node dist-server/server.js",
-    "test:server": "npm run build && node --test dist-server/server.test.js",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run src && npm run test:server"
+    "test": "vitest run src"
   },
   "dependencies": {
     "react": "^19.1.1",

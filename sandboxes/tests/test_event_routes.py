@@ -288,3 +288,44 @@ async def test_unknown_conversation_returns_404(tmp_path: Path) -> None:
     assert posted.status_code == 404
     assert listed.status_code == 404
     assert ran.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_event_pages_match_full_history_and_validate_queries(
+    tmp_path: Path,
+) -> None:
+    app = create_app(_settings(tmp_path))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            conversation = await _start_conversation(client)
+            url = f"/api/conversations/{conversation['id']}/events"
+            for index in range(7):
+                assert (
+                    await client.post(url, json={"content": str(index)})
+                ).status_code == 200
+            full = (await client.get(url)).json()
+            collected = []
+            after = 0
+            while True:
+                page = (
+                    await client.get(url, params={"after": after, "limit": 2})
+                ).json()
+                if not page:
+                    break
+                assert len(page) <= 2
+                assert page[0]["seq"] > after
+                collected.extend(page)
+                after = page[-1]["seq"]
+            assert collected == full
+            assert (await client.get(url, params={"after": 3})).json() == full[3:]
+            assert (await client.get(url, params={"limit": 3})).json() == full[:3]
+            for query in [
+                {"after": -1},
+                {"after": "bad"},
+                {"limit": 0},
+                {"limit": -1},
+                {"limit": "1.5"},
+            ]:
+                assert (await client.get(url, params=query)).status_code == 400

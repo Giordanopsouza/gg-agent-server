@@ -24,8 +24,6 @@ from gg.runtime.repository_authorization import (
 )
 from gg.runtime.storage import (
     StorageLimits,
-    measure_task_evidence,
-    truncate_event_json,
     truncate_manifest,
 )
 from gg.runtime.task_supervisor_client import TaskSupervisorClient
@@ -177,6 +175,8 @@ class TaskSupervisionManager:
             if existing is not None:
                 if existing.content != content:
                     raise RuntimeError("message id already belongs to another message")
+                if isinstance(self._ledger, TaskLedger):
+                    await self._ledger.ensure_durable()
                 return existing
             accepted = MessageReceipt(
                 id=message_id,
@@ -191,6 +191,8 @@ class TaskSupervisionManager:
                 await asyncio.to_thread(self._ledger.get, task_id)
             ).state is TaskState.SLEEPING:
                 await asyncio.to_thread(self._ledger.queue_workspace_message, task_id)
+            if isinstance(self._ledger, TaskLedger):
+                await self._ledger.ensure_durable()
             self._ensure_loop(task_id)
             return accepted
 
@@ -248,7 +250,7 @@ class TaskSupervisionManager:
                 self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.RUNNING,
-                condition=f"supervision error: {exc}",
+                condition=f"supervision error: {type(exc).__name__}",
             )
 
     async def _drive_running(self, task_id: str) -> None:
@@ -395,6 +397,7 @@ class TaskSupervisionManager:
             deadline_at=datetime.now(UTC) + DEFAULT_TASK_DEADLINE,
             model=task.model,
         )
+        await self._authorize_execution(task, supervision.task_branch)
         record, _ = await client.start(request, github_token=github_token)
         delivered = receipt.model_copy(
             update={
@@ -447,6 +450,23 @@ class TaskSupervisionManager:
         )
         return credential.token
 
+    async def _authorize_execution(self, task: TaskRecord, branch: str):
+        # Run and publication identities are confirmed before a write token reaches Pi.
+        if task.repository and task.owner_id:
+            await asyncio.to_thread(
+                self._ledger.begin_publication,
+                task_id=task.id,
+                repository=task.repository,
+                task_branch=branch,
+                base_ref=task.base_ref or "main",
+                task_marker=task.id,
+                commit_sha=None,
+                check_outcome=CheckOutcome.NOT_RUN,
+                agent_outcome=AgentOutcome.NOT_RUN,
+            )
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
+
     async def _start_execution(
         self, task_id: str, task: TaskRecord, client: TaskSupervisorClient
     ) -> SupervisionRecord | None:
@@ -480,6 +500,7 @@ class TaskSupervisionManager:
             deadline_at=deadline_at,
             model=task.model,
         )
+        await self._authorize_execution(task, task_branch)
         try:
             record, _ = await client.start(
                 request, github_token=await self._fresh_github_token(task)
@@ -544,46 +565,51 @@ class TaskSupervisionManager:
     async def _sync_events(
         self, task_id: str, connection: object, conversation_id: str
     ) -> None:
+        after = await asyncio.to_thread(
+            self._ledger.event_source_cursor, task_id, conversation_id
+        )
         async with connection.http_client(timeout=30) as client:  # type: ignore[attr-defined]
-            response = await client.get(f"/api/conversations/{conversation_id}/events")
-        if response.status_code == 404:
-            return
-        response.raise_for_status()
-        for payload in response.json():
-            event = Event.model_validate(payload)
-            event_json = event.model_dump_json()
-            if self._storage_limits is not None:
-                evidence = await asyncio.to_thread(
-                    measure_task_evidence, self._ledger, task_id
+            while True:
+                response = await client.get(
+                    f"/api/conversations/{conversation_id}/events",
+                    params={"after": after, "limit": 200},
                 )
-                event_json, _ = truncate_event_json(
-                    event,
-                    max_task_log_bytes=self._storage_limits.max_log_evidence_bytes,
-                    current_log_bytes=evidence.log_bytes,
+                if response.status_code == 404:
+                    return
+                response.raise_for_status()
+                events = [Event.model_validate(payload) for payload in response.json()]
+                if not events:
+                    return
+                if events[0].seq <= after:
+                    raise ValueError("sandbox event page did not advance source cursor")
+                inserted = await asyncio.to_thread(
+                    self._ledger.copy_task_event_page,
+                    task_id=task_id,
+                    source_id=conversation_id,
+                    events=events,
+                    max_log_bytes=(
+                        None
+                        if self._storage_limits is None
+                        else self._storage_limits.max_log_evidence_bytes
+                    ),
                 )
-            cursor = await asyncio.to_thread(
-                self._ledger.copy_task_event,
-                task_id=task_id,
-                source_id=conversation_id,
-                source_seq=event.seq,
-                event=event,
-                event_json=event_json,
-            )
-            if cursor is None:
-                continue
-            copy = TaskEventCopy(
-                cursor=cursor,
-                source_id=conversation_id,
-                source_seq=event.seq,
-                event=event,
-            )
-            if self._callbacks.on_event_copied:
-                self._callbacks.on_event_copied(task_id, cursor, event)
-            for queue in self._live.get(task_id, []):
-                try:
-                    queue.put_nowait(copy)
-                except asyncio.QueueFull:
-                    pass
+                for cursor, event in inserted:
+                    copy = TaskEventCopy(
+                        cursor=cursor,
+                        source_id=conversation_id,
+                        source_seq=event.seq,
+                        event=event,
+                    )
+                    if self._callbacks.on_event_copied:
+                        self._callbacks.on_event_copied(task_id, cursor, event)
+                    for queue in self._live.get(task_id, []):
+                        try:
+                            queue.put_nowait(copy)
+                        except asyncio.QueueFull:
+                            pass
+                after = events[-1].seq
+                if len(events) < 200:
+                    return
 
     async def _cancel_execution(
         self,
@@ -592,6 +618,8 @@ class TaskSupervisionManager:
         supervision: SupervisionRecord,
         client: TaskSupervisorClient,
     ) -> None:
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         if supervision.conversation_id:
             async with connection.http_client(timeout=30) as client_http:  # type: ignore[attr-defined]
                 await client_http.post(

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
 import { authApi, setSessionExpiredHandler, taskApi, type Branch, type CredentialStatus, type GitHubStatus, type Models, type Repository, type Session, type TaskEventCopy, type TaskRecord, type TaskResult } from "./api";
 
+import { useTaskDetail, type TaskCache } from "./useTaskDetail";
+
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const draftKey = (userId: string) => `gg.task-draft.${userId}`;
 
@@ -85,65 +87,16 @@ function EventCard({ copy }: { copy: TaskEventCopy }) {
   );
 }
 
-function Detail({ id, onTask, onResult }: {
+function Detail({ id, cache, onTask, onResult }: {
   id: string;
+  cache: TaskCache;
   onTask: (task: TaskRecord) => void;
   onResult: (id: string, result: TaskResult) => void;
 }) {
-  const [task, setTask] = useState<TaskRecord | null>(null);
-  const [events, setEvents] = useState<TaskEventCopy[]>([]);
-  const [result, setResult] = useState<TaskResult | null>(null);
-  const [error, setError] = useState("");
+  const { task, events, result, error, setError, refresh } = useTaskDetail(id, cache, onTask, onResult);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [messageId, setMessageId] = useState(() => crypto.randomUUID());
-
-  useEffect(() => {
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    let cursor = 0;
-    let resultRevision: string | null = null;
-    setTask(null);
-    setEvents([]);
-    setResult(null);
-    setError("");
-    const poll = async () => {
-      try {
-        const recordPromise = taskApi.get(id).then((record) => {
-          if (!active) return;
-          setTask(record);
-          onTask(record);
-          return record;
-        });
-        const eventsPromise = taskApi.events(id, cursor).then((copies) => {
-          if (!active || !copies.length) return;
-          cursor = Math.max(cursor, ...copies.map((copy) => copy.cursor));
-          setEvents((previous) => [...previous, ...copies]);
-        });
-        const resultPromise = recordPromise.then(async (record) => {
-          if (!record) return;
-          const revision = `${record.state}:${record.updated_at}`;
-          if (revision === resultRevision) return;
-          const outcome = await taskApi.result(id);
-          if (!active) return;
-          setResult(outcome);
-          onResult(id, outcome);
-          resultRevision = revision;
-        });
-        const settled = await Promise.allSettled([recordPromise, eventsPromise, resultPromise]);
-        const failed = settled.find((entry) => entry.status === "rejected");
-        if (failed?.status === "rejected") throw failed.reason;
-        if (!active) return;
-        setError("");
-      } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : "Could not load task");
-      } finally {
-        if (active) timer = setTimeout(poll, 2500);
-      }
-    };
-    void poll();
-    return () => { active = false; clearTimeout(timer); };
-  }, [id, onTask, onResult]);
 
   const prUrl = result?.publication?.pr_url || result?.prior_pr_url;
   const displayStatus = task ? statusLabel(task, result || undefined) : "loading";
@@ -153,7 +106,7 @@ function Detail({ id, onTask, onResult }: {
     setSending(true); setError("");
     try {
       await taskApi.message(id, message.trim(), messageId);
-      setMessage(""); setMessageId(crypto.randomUUID());
+      setMessage(""); setMessageId(crypto.randomUUID()); refresh();
     } catch (cause) { setError(String(cause)); }
     finally { setSending(false); }
   }
@@ -283,6 +236,7 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
+  const [taskCache] = useState<TaskCache>(() => ({ details: new Map(), valid: true }));
   const [session, setSession] = useState<Session | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [sessionError, setSessionError] = useState(loginMessage);
@@ -293,7 +247,12 @@ export default function App() {
   const [results, setResults] = useState<Record<string, TaskResult>>({});
   const [listError, setListError] = useState("");
   const [loadingTasks, setLoadingTasks] = useState(true);
-  const onTask = useCallback((task: TaskRecord) => setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)].sort((a, b) => b.seq - a.seq)), []);
+  const onTask = useCallback((task: TaskRecord) => {
+    if (!taskCache.valid) return;
+    const cached = taskCache.details.get(task.id);
+    taskCache.details.set(task.id, { task, events: cached?.events || [], result: cached?.result || null, cursor: cached?.cursor || 0 });
+    setTasks(previous => [task, ...previous.filter(item => item.id !== task.id)].sort((a, b) => b.seq - a.seq));
+  }, [taskCache]);
   const onResult = useCallback((id: string, result: TaskResult) => setResults((previous) => ({ ...previous, [id]: result })), []);
   useEffect(() => { localStorage.removeItem("gg.runtime.apiKey"); }, []);
   useEffect(() => {
@@ -305,12 +264,12 @@ export default function App() {
   }, []);
   useEffect(() => {
     setSessionExpiredHandler(() => {
-      setSession(null); setCredential(null); setGitHub(null); setTasks([]); setResults({});
+      taskCache.valid = false; taskCache.details.clear(); setSession(null); setCredential(null); setGitHub(null); setTasks([]); setResults({});
       setSetupError(""); setListError("");
       setSessionError("Your session expired. Sign in again to continue.");
     });
     return () => setSessionExpiredHandler(null);
-  }, []);
+  }, [taskCache]);
   useEffect(() => {
     let active = true;
     void authApi.session().then((value) => { if (active) setSession(value); }).catch((cause) => {
@@ -335,21 +294,31 @@ export default function App() {
   useEffect(() => {
     if (!session) { setTasks([]); setResults({}); setLoadingTasks(true); return; }
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
+    let busy = false;
     const poll = async () => {
+      if (busy) return;
+      busy = true;
       try {
         const listed = await taskApi.list();
         if (!active) return;
         const recent = [...listed].sort((a, b) => b.seq - a.seq);
-        setTasks(recent); setListError("");
+        setTasks(previous => {
+          const merged = new Map(recent.map(task => [task.id, task]));
+          for (const task of previous) {
+            const listed = merged.get(task.id);
+            if (!listed || listed.updated_at < task.updated_at) merged.set(task.id, task);
+          }
+          return [...merged.values()].sort((a, b) => b.seq - a.seq);
+        }); setListError("");
       } catch (cause) { if (active) setListError(String(cause)); }
-      finally { if (active) { setLoadingTasks(false); timer = setTimeout(poll, 5000); } }
+      finally { busy = false; if (active) setLoadingTasks(false); }
     };
     void poll();
-    return () => { active = false; clearTimeout(timer); };
+    const timer = setInterval(poll, 5000);
+    return () => { active = false; clearInterval(timer); };
   }, [session]);
   async function logout() {
-    try { await authApi.logout(); sessionStorage.removeItem(draftKey(session!.user.id)); setSession(null); setCredential(null); setGitHub(null); setTasks([]); setResults({}); setSessionError(""); setSetupError(""); setListError(""); window.location.hash = "#/"; }
+    try { await authApi.logout(); sessionStorage.removeItem(draftKey(session!.user.id)); taskCache.valid = false; taskCache.details.clear(); setSession(null); setCredential(null); setGitHub(null); setTasks([]); setResults({}); setSessionError(""); setSetupError(""); setListError(""); window.location.hash = "#/"; }
     catch (cause) { setSetupError(String(cause)); }
   }
   if (checkingSession) return <main className="auth-screen"><div className="auth-card">Checking session…</div></main>;
@@ -386,7 +355,7 @@ export default function App() {
     </aside>
     <div className="content"><header className="topbar"><button className="icon-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} aria-controls="workspace-sidebar" onClick={() => setSidebarOpen((value) => !value)}><Icon name="panel" /></button><span>{taskId ? "Task workspace" : page === "settings" ? "Settings" : page === "tasks" ? "All tasks" : ""}</span></header>
       {setupError ? <div className="alert setup-error" role="alert">{setupError}</div> : null}
-      {taskId ? <Detail key={`${session.user.id}:${taskId}`} id={taskId} onTask={onTask} onResult={onResult} /> : page === "settings" ? <main className="main settings-main"><div className="page-intro"><h1>Settings</h1><p>Connect the tools your agent needs.</p></div><AccountSetup key={session.user.id} session={session} credential={credential} github={github} onCredential={setCredential} onGitHub={setGitHub} onLogout={() => void logout()} /></main> : page === "tasks" ? <main className="main tasks-main"><div className="page-intro"><div><h1>Your tasks</h1><p>Pick up where you left off.</p></div><a className="spawn-button" href="#/"><Icon name="plus" />New task</a></div>{loadingTasks ? <div className="empty-panel" role="status">Loading tasks…</div> : listError ? <div className="alert" role="alert">{listError}</div> : !tasks.length ? <div className="empty-panel">No tasks yet. <a href="#/">Start your first task →</a></div> : <div className="task-list">{tasks.map((task) => <a className="task-row" key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`}><div><strong>{task.prompt}</strong><span>{task.repository || "Blank workspace"} · {formatDate(task.created_at)}</span></div><StatusChip status={statusLabel(task, results[task.id])} /><Icon name="arrow" /></a>)}</div>}</main> : <Home key={session.user.id} userId={session.user.id} credential={credential} github={github} onCreated={onTask} />}
+      {taskId ? <Detail key={`${session.user.id}:${taskId}`} id={taskId} cache={taskCache} onTask={onTask} onResult={onResult} /> : page === "settings" ? <main className="main settings-main"><div className="page-intro"><h1>Settings</h1><p>Connect the tools your agent needs.</p></div><AccountSetup key={session.user.id} session={session} credential={credential} github={github} onCredential={setCredential} onGitHub={setGitHub} onLogout={() => void logout()} /></main> : page === "tasks" ? <main className="main tasks-main"><div className="page-intro"><div><h1>Your tasks</h1><p>Pick up where you left off.</p></div><a className="spawn-button" href="#/"><Icon name="plus" />New task</a></div>{loadingTasks ? <div className="empty-panel" role="status">Loading tasks…</div> : listError ? <div className="alert" role="alert">{listError}</div> : !tasks.length ? <div className="empty-panel">No tasks yet. <a href="#/">Start your first task →</a></div> : <div className="task-list">{tasks.map((task) => <a className="task-row" key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`}><div><strong>{task.prompt}</strong><span>{task.repository || "Blank workspace"} · {formatDate(task.created_at)}</span></div><StatusChip status={statusLabel(task, results[task.id])} /><Icon name="arrow" /></a>)}</div>}</main> : <Home key={session.user.id} userId={session.user.id} credential={credential} github={github} onCreated={onTask} />}
     </div>
   </div>;
 }

@@ -7,10 +7,11 @@ TESTS := backend/tests
 SOURCES := backend/gg backend/tests
 
 .PHONY: help install test unit-tests integration-tests lint-check lint-fix
-.PHONY: format-check format-fix pre-commit build run docker-build production-smoke-tests
+.PHONY: format-check format-fix pre-commit build run docker-build
 
 help:
 	@printf '%s\n' 'backend: install test unit-tests lint-check format-check build run'
+	@printf '%s\n' 'backend: modal-init modal-migrate modal-backup modal-restore modal-deploy modal-rollover modal-stop modal-verify' '  Set MODAL_ENVIRONMENT; MODAL_URL for backup/rollover/verify; MODAL_SNAPSHOT for backup/restore; GG_RUNTIME_API_KEY for online operations' '  Runbook: docs/modal-state-operations.md'
 
 install:
 	uv --directory $(REPO_ROOT) sync --no-editable --package $(PACKAGE)
@@ -44,5 +45,43 @@ build:
 run:
 	$(UV_RUN) python -m gg.runtime --host 127.0.0.1 --port 8001
 
-production-smoke-tests:
-	$(UV_RUN) python scripts/runtime_postgres_tests.py backend/tests/test_production_operations.py
+.PHONY: modal-init modal-migrate modal-backup modal-restore modal-deploy modal-rollover modal-stop modal-verify
+
+MODAL_ENVIRONMENT ?=
+MODAL_URL ?=
+MODAL_SNAPSHOT ?=
+MODAL_OPS := $(UV_RUN) python -m gg.runtime.modal_operations
+
+modal-init:
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) init --environment "$(MODAL_ENVIRONMENT)"
+
+modal-migrate:
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) migrate --environment "$(MODAL_ENVIRONMENT)"
+
+modal-backup:
+	@test -n "$(MODAL_SNAPSHOT)" || { echo "Set MODAL_SNAPSHOT explicitly"; exit 1; }
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) backup --environment "$(MODAL_ENVIRONMENT)" --url "$(MODAL_URL)" --snapshot "$(abspath $(MODAL_SNAPSHOT))"
+
+modal-restore:
+	@test -n "$(MODAL_SNAPSHOT)" || { echo "Set MODAL_SNAPSHOT explicitly"; exit 1; }
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) restore --environment "$(MODAL_ENVIRONMENT)" --snapshot "$(abspath $(MODAL_SNAPSHOT))"
+
+modal-deploy:
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) deploy --environment "$(MODAL_ENVIRONMENT)"
+
+modal-rollover:
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) rollover --environment "$(MODAL_ENVIRONMENT)" --url "$(MODAL_URL)"
+
+modal-stop:
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) stop --environment "$(MODAL_ENVIRONMENT)"
+
+modal-verify:
+	@test -n "$(MODAL_ENVIRONMENT)" || { echo "Set MODAL_ENVIRONMENT explicitly"; exit 1; }
+	$(MODAL_OPS) verify --environment "$(MODAL_ENVIRONMENT)" --url "$(MODAL_URL)"

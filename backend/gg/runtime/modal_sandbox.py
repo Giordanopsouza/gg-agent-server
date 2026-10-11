@@ -11,15 +11,14 @@ import hashlib
 import json
 import re
 import secrets
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
 import modal
-import psycopg
 from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
-from sqlalchemy.exc import SQLAlchemyError
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import (
@@ -320,6 +319,8 @@ class ModalSandboxLifecycle:
         self._provider_timeout = provider_timeout
 
     async def create(self, task_id: str) -> SandboxSnapshot:
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         task = await asyncio.to_thread(self._ledger.get, task_id)
         if task is None:
             raise ModalLifecycleError("task not found")
@@ -347,7 +348,7 @@ class ModalSandboxLifecycle:
                 resolved = await asyncio.to_thread(
                     self._credential_vault.resolve, str(task.owner_id)
                 )
-            except (InvalidToken, psycopg.Error, SQLAlchemyError):
+            except (InvalidToken, sqlite3.Error):
                 raise CredentialUnavailableError(
                     "personal credential vault unavailable"
                 ) from None
@@ -399,6 +400,8 @@ class ModalSandboxLifecycle:
                 self._ledger.set_sandbox_credential_version, task_id, credential_version
             )
 
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         try:
             env = dict(self._sandbox_env)
             env.update(
@@ -447,6 +450,8 @@ class ModalSandboxLifecycle:
             provider_id=handle.object_id,
             provider_state=SandboxProviderState.CREATING,
         )
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         try:
             await self._provider.wait_until_ready(handle, timeout=self._startup_timeout)
         except Exception as exc:
@@ -542,6 +547,8 @@ class ModalSandboxLifecycle:
         return snapshot
 
     async def terminate(self, task_id: str) -> SandboxSnapshot:
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         record = await asyncio.to_thread(self._record, task_id)
         snapshot, handle = await self._reconnect(record)
         if snapshot.state is SandboxProviderState.STOPPED:
@@ -565,6 +572,8 @@ class ModalSandboxLifecycle:
             ) from exc
 
     async def sync(self, task_id: str) -> None:
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         record = await asyncio.to_thread(self._record, task_id)
         snapshot, handle = await self._reconnect(record)
         if snapshot.state is not SandboxProviderState.RUNNING or handle is None:
@@ -572,6 +581,8 @@ class ModalSandboxLifecycle:
         await self._provider.sync(handle)
 
     async def expire_workspace(self, task_id: str) -> None:
+        if isinstance(self._ledger, TaskLedger):
+            await self._ledger.ensure_durable()
         await self._provider.delete_workspace(task_id)
 
     def _record(self, task_id: str) -> SandboxCreationRecord:
@@ -698,6 +709,7 @@ def lifecycle_from_settings(
     modal_provider = provider or ModalProvider(
         app_name=settings.modal_app_name,
         image_name=settings.modal_image_name,
+        environment_name=settings.modal_environment,
     )
     return ModalSandboxLifecycle(
         ledger=ledger,
