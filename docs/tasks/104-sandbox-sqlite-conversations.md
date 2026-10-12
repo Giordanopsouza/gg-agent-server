@@ -19,7 +19,6 @@ depends_on: ["091-sqlite-transactions"]
 
 - [x] Teste/comando focado: `uv run --no-editable pytest sandboxes/tests/test_event_log.py sandboxes/tests/test_local_conversation.py`.
 - [x] Demo/check operacional: Reabrir conversa com o mesmo DB após interrupção e verificar metadados, eventos, recibos e diretório do Pi.
-- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [091-sqlite-transactions](091-sqlite-transactions.md).
 
@@ -32,8 +31,6 @@ depends_on: ["091-sqlite-transactions"]
 - `sandboxes/tests/test_local_conversation.py`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
 
 ## Resultado — 2026-10-08
 

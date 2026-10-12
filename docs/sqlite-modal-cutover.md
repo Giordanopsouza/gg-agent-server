@@ -5,39 +5,31 @@ https://giordanowrk-sqlite-111-proof--gg-runtime-runtime.us-east.modal.direct.
 Apesar do nome do ambiente de prova, é o destino autorizado pelo usuário
 para a ativação atual; não confundir com Modal `main`.
 
-## Ordem de execução
+O corte já foi aceito. Recuperação usa os checkpoints Modal e as chaves do
+Secret. Voltar ao banco antigo não é rollback.
 
-1. Publicar a worktree 091 pelos comandos de `modal-state-operations.md`.
-   Conferir versão, readiness, dispatch e revisão confirmada.
-2. Registrar callbacks Google e GitHub na origem publicada e webhook GitHub
-   em `/webhooks/github`. Conferir read-back. Google permanece External/Testing
-   conforme decisão anterior; publicar OAuth não é parte desta execução.
-3. Entrar novamente, configurar OpenRouter pessoal e reconectar GitHub.
-   Executar tarefa real, verificar eventos HTTP/WS, resposta ao prompt,
-   manifest/checks e reserva liberada. Repetir após recreate e restore.
-4. Registrar aceite humano da URL e da versão verificadas. O pedido de
-   continuar/deploy não substitui aceite de um fluxo efetivamente observado.
-5. Bloquear admissões nos serviços antigos identificados na evidência 125;
-   verificar bloqueio pelo endpoint e ausência de trabalho ativo.
-   A exclusão do histórico não bloqueia novas admissões.
-6. Preservar contas/credenciais antigas conforme decisão específica de retenção
-   antes de desativar serviços ou excluir o projeto. As etapas de desligamento
-   e exclusão são distintas do descarte já autorizado das tarefas antigas.
+Em 2026-10-12 o usuário autorizou apagar o que não é mais usado:
+
+- Projeto Supabase `GGAgenteServer` (`xmqpgubedtjirohntdwg`) excluído.
+- Projetos Railway `gg-agent-main-railpack`
+  (`1ed15135-c389-44de-9298-d1672f13b3c8`) e `gg-agent-server`
+  (`9546078e-3ae0-4c9e-99d2-000e005de338`) excluídos, inclusive o runtime
+  que ainda estava em execução em `gg-runtime-production.up.railway.app`.
+- Não foram alterados os projetos Railway `empowering-art` e
+  `fulfilling-enthusiasm`, nem o projeto Supabase `wpp-agent`.
 
 ## Dados e recuperação
 
-O novo produto usa dados SQLite novos. Não importar usuários, sessões, tarefas
-ou credenciais Postgres; usuários entram e reconectam contas novamente.
-Após a primeira gravação nova, recuperação usa restore/repair dos checkpoints
-Modal e código compatível. Voltar ao banco antigo perde dados novos e não é
-rollback válido. Guardar chaves do Secret separadamente dos snapshots.
+O produto usa dados SQLite novos. Não importar usuários, sessões, tarefas
+ou credenciais do Postgres antigo. Após a primeira gravação nova, recuperação
+usa restore/repair dos checkpoints Modal e código compatível. Guardar chaves
+do Secret separadamente dos snapshots.
 
 Usar `recreate` e o protocolo de lease de operações da aplicação para manter
-um escritor. Medir indisponibilidade e perda de eventos de fundo; não presumir
-zero downtime. O comportamento de recreate está descrito em
+um escritor. O comportamento de recreate está descrito em
 [Managing deployments](https://modal.com/docs/guide/managing-deployments).
 
-Estado e pendências:
+Estado do corte:
 [124](tasks/evidence/124-recovery-and-metrics.md),
 [125](tasks/evidence/125-legacy-backup.md),
 [126](tasks/evidence/126-cutover-acceptance.md).

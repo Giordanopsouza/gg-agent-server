@@ -1,11 +1,11 @@
 # Provas das tasks 121–122 — 2026-10-08
 
 - Checkout: `.agents/worktrees/091-sqlite-modal`, branch `091-sqlite-modal`.
-- `docs/adr/0008-sqlite-modal-google.md` confere com `tasks/spec.md` e
-  `tasks/plan.md`: SQLite local/WAL, um escritor Modal, snapshot completo
-  confirmado por revisão, recuperação antes de admissão, Google `sub` associado
-  a UUID local e identidades externas persistidas. Os ADRs 0005/0006 preservam
-  o texto histórico e apontam ao substituto.
+- `docs/adr/0008-sqlite-modal-google.md` registra SQLite local/WAL, um escritor
+  Modal, snapshot completo confirmado por revisão, recuperação antes de
+  admissão, Google `sub` associado a UUID local e identidades externas
+  persistidas. Os ADRs 0005/0006 preservam o texto histórico e apontam ao
+  substituto.
 - `README.md`, `AGENTS.md`, `frontend/README.md` e
   `docs/sqlite-modal-operations.md` apontam os comandos existentes:
   `db_cli init`, `make run-runtime` (8001), `make run` (8000),

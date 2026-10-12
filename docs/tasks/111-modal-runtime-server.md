@@ -19,7 +19,6 @@ depends_on: ["092-sqlite-checkpoints","093-sqlite-recovery-cli","102-durable-eff
 
 - [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_modal_runtime.py`.
 - [x] Demo/check operacional: Deploy em ambiente isolado, descobrir URL real, inspecionar worker/container e reiniciar com snapshot confirmado.
-- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [092-sqlite-checkpoints](092-sqlite-checkpoints.md), [093-sqlite-recovery-cli](093-sqlite-recovery-cli.md), [102-durable-effect-barriers](102-durable-effect-barriers.md), [108-sandbox-sqlite-live-demo](108-sandbox-sqlite-live-demo.md), [109-fastapi-react-serving](109-fastapi-react-serving.md), [110-remove-node-production-proxy](110-remove-node-production-proxy.md).
 
@@ -32,8 +31,6 @@ depends_on: ["092-sqlite-checkpoints","093-sqlite-recovery-cli","102-durable-eff
 - `backend/tests/test_modal_runtime.py (novo)`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
 
 ## Evidência de conclusão
 

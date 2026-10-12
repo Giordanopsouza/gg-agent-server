@@ -19,7 +19,6 @@ depends_on: ["094-sqlite-task-admission","095-sqlite-task-effects"]
 
 - [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_sqlite_task_evidence.py`.
 - [x] Demo/check operacional: Expirar tarefas/eventos, reiniciar e submeter novas tarefas/replays para verificar ausência de reuso de sequências.
-- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [094-sqlite-task-admission](094-sqlite-task-admission.md), [095-sqlite-task-effects](095-sqlite-task-effects.md).
 
@@ -31,8 +30,6 @@ depends_on: ["094-sqlite-task-admission","095-sqlite-task-effects"]
 - `backend/tests/test_sqlite_task_evidence.py (novo)`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
 
 ## Log — 2026-10-07
 

@@ -19,7 +19,6 @@ depends_on: ["096-sqlite-task-evidence","106-sandbox-event-pagination"]
 
 - [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_incremental_event_sync.py backend/tests/test_task_supervision_integration.py`.
 - [x] Demo/check operacional: Sincronizar 450 eventos, reiniciar no limite de página e confirmar igualdade de evidência sem reler todo o histórico.
-- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [096-sqlite-task-evidence](096-sqlite-task-evidence.md), [106-sandbox-event-pagination](106-sandbox-event-pagination.md).
 
@@ -32,8 +31,6 @@ depends_on: ["096-sqlite-task-evidence","106-sandbox-event-pagination"]
 - `backend/tests/test_incremental_event_sync.py (novo)`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
 
 ## Resultado — 2026-10-08
 

@@ -19,7 +19,6 @@ depends_on: ["096-sqlite-task-evidence","102-durable-effect-barriers"]
 
 - [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_scheduler.py backend/tests/test_scheduler_recovery.py`.
 - [x] Demo/check operacional: Popular histórico sintético, usar EXPLAIN QUERY PLAN e registrar consultas/linhas retornadas por ciclo.
-- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [096-sqlite-task-evidence](096-sqlite-task-evidence.md), [102-durable-effect-barriers](102-durable-effect-barriers.md).
 
@@ -32,8 +31,6 @@ depends_on: ["096-sqlite-task-evidence","102-durable-effect-barriers"]
 - `backend/tests/test_scheduler_recovery.py`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
 
 ## Resultado — 2026-10-08
 

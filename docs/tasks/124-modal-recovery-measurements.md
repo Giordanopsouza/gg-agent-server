@@ -19,7 +19,6 @@ depends_on: ["123-modal-public-onboarding"]
 
 - [ ] Teste/comando focado: `make format-fix → make lint-fix → make format-check → make lint-check → make pre-commit → make unit-tests; make frontend-test; make frontend-build`.
 - [ ] Demo/check operacional: Recreate durante tarefa e após confirmação; verificar snapshot por restore isolado e zero sobreposição de escritores. Se faltar pré-requisito, registrar primeiro bloqueio e boundary exato.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [123-modal-public-onboarding](123-modal-public-onboarding.md).
 
@@ -31,5 +30,3 @@ depends_on: ["123-modal-public-onboarding"]
 - `docs/sqlite-modal-operations.md`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.

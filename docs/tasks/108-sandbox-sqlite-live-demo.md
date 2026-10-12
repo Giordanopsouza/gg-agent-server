@@ -19,7 +19,6 @@ depends_on: ["102-durable-effect-barriers","104-sandbox-sqlite-conversations","1
 
 - [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_modal_image.py; teste live opt-in: uv run --no-editable pytest backend/tests/test_modal_sandbox_live.py -m modal`.
 - [x] Demo/check operacional: Usar local-stack atualizada para SQLite e sessão Google; tarefa em repo autorizado com alteração verificável e PR draft pelo Pi. A especificação prevalece sobre instruções obsoletas de Postgres/chave administrativa da local-stack; documentar init SQLite e sessão Google no demo antes da limpeza final 122.
-- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [102-durable-effect-barriers](102-durable-effect-barriers.md), [104-sandbox-sqlite-conversations](104-sandbox-sqlite-conversations.md), [105-sandbox-sqlite-executions](105-sandbox-sqlite-executions.md), [106-sandbox-event-pagination](106-sandbox-event-pagination.md), [107-incremental-event-sync](107-incremental-event-sync.md).
 
@@ -32,8 +31,6 @@ depends_on: ["102-durable-effect-barriers","104-sandbox-sqlite-conversations","1
 - `tasks/evidence/108-sandbox-demo.md (novo)`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
 
 ## Resultado — 2026-10-08
 

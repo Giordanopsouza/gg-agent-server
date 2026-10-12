@@ -29,7 +29,6 @@ esta decisão não comprova os demais critérios abaixo. Ver
 
 - [ ] Teste/comando focado: `make frontend-test; make frontend-build; smoke HTTP autenticado e prova live documentados no arquivo de evidência`.
 - [ ] Demo/check operacional: Confirmar configuração com read-back sem segredos; login humano das duas contas é pré-requisito operacional, não substituído por mocks.
-- [ ] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [108-sandbox-sqlite-live-demo](108-sandbox-sqlite-live-demo.md), [111-modal-runtime-server](111-modal-runtime-server.md), [112-modal-state-operations](112-modal-state-operations.md), [118-remove-postgres-dependencies](118-remove-postgres-dependencies.md), [121-sqlite-architecture-record](121-sqlite-architecture-record.md), [122-sqlite-local-runbook](122-sqlite-local-runbook.md).
 
@@ -40,5 +39,3 @@ esta decisão não comprova os demais critérios abaixo. Ver
 - `backend/tests/test_production_operations.py`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.

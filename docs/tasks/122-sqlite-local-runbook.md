@@ -31,5 +31,3 @@ depends_on: ["108-sandbox-sqlite-live-demo","112-modal-state-operations","120-re
 - `.agents/skills/local-stack/SKILL.md (local ignorada; sincronizar no handoff)`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.

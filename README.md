@@ -63,6 +63,5 @@ restore commands are documented in [the state operations runbook](docs/modal-sta
 - [Component layout decision](docs/adr/0004-component-layout.md)
 - [SQLite, Modal and Google decision](docs/adr/0008-sqlite-modal-google.md)
 - [Local and published operations](docs/sqlite-modal-operations.md)
-- [MVP web plan](docs/mvp-web-plan.md)
 - [Task web UI](frontend/README.md)
 - [Task tracker](docs/tasks/README.md)

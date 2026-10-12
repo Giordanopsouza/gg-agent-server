@@ -29,5 +29,3 @@ depends_on: ["125-legacy-final-backup"]
 - `tasks/evidence/126-cutover-acceptance.md (novo)`
 
 **Escopo estimado:** Pequeno (1–2 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.

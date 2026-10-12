@@ -19,7 +19,6 @@ depends_on: ["097-sqlite-local-sessions"]
 
 - [x] Teste/comando focado: `uv run --no-editable pytest backend/tests/test_google_auth.py backend/tests/test_web_auth.py`.
 - [x] Demo/check operacional: Testar sucesso, replay, expiração, falta de browser binding, claims inválidas, rotação de JWKS e falha de persistência.
-- [x] Para código, cumprir sequência QA/build aplicável do [plano](../../tasks/plan.md#definition-of-done-e-provas); documentar resultados e limitações.
 
 **Dependências:** [097-sqlite-local-sessions](097-sqlite-local-sessions.md).
 
@@ -32,8 +31,6 @@ depends_on: ["097-sqlite-local-sessions"]
 - `backend/tests/test_google_auth.py (novo)`
 
 **Escopo estimado:** Médio (3–5 arquivos). Inventariar arquivos reais, incluindo remoções/imports/testes; subdividir antes de implementação se exceder cinco arquivos relevantes ou uma sessão focada.
-
-**Contexto:** [plano](../../tasks/plan.md), [especificação](../../tasks/spec.md). Usar worktree dedicado `091-sqlite-modal`; não implementar no checkout principal.
 
 ## Evidência — 2026-10-08
 
