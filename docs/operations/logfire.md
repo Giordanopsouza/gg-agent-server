@@ -12,9 +12,9 @@ Configure the runtime with:
 | `GG_LOGFIRE_ENVIRONMENT` | `production` |
 | `GG_LOGFIRE_SAMPLE_RATE` | `1` initially |
 | `GG_LOGFIRE_RELAY_URL` | Public runtime origin plus `/internal/logfire` |
-| `LOGFIRE_TOKEN` | Write token for the Logfire project, in the runtime secret only |
+| `LOGFIRE_TOKEN` | Project API key with Send telemetry permission, or a write token, in the runtime secret only |
 
-The US project [giordano/agent-server](https://logfire-us.pydantic.dev/giordano/agent-server) was confirmed through the authenticated Logfire CLI. Configure its write token in the runtime secret before enabling production export. The relay URL must be reachable from Modal sandboxes. The runtime passes the relay URL, task ID, and task-scoped session key to each sandbox. The sandbox has no Logfire token. The relay accepts only `v1/traces`, verifies the task's session key against its SQLite record, and limits each request body to 1 MiB.
+The US project [giordano/agent-server](https://logfire-us.pydantic.dev/giordano/agent-server) was confirmed through the authenticated Logfire CLI. The production relay URL is `https://giordanowrk-sqlite-111-proof--gg-runtime-runtime.us-east.modal.direct/internal/logfire`, discovered through `modal.Server.from_name(...).get_url()` and verified through `/health`. The relay URL must be reachable from Modal sandboxes. The runtime passes the relay URL, task ID, and task-scoped session key to each sandbox. The sandbox has no Logfire token. The relay accepts only `v1/traces`, verifies the task's session key against its SQLite record, and limits each request body to 1 MiB.
 
 Set `GG_LOGFIRE_ENABLED=false` to disable instrumentation. A configured runtime requires `GG_LOGFIRE_RELAY_URL` before creating sandboxes. Restart both the runtime and sandbox image after changing instrumentation code or configuration. If Logfire export fails, the batch exporter drops telemetry without failing a task.
 
