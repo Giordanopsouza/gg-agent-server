@@ -31,6 +31,6 @@ WHERE attributes->>'task_id' = '<task UUID>'
 ORDER BY start_timestamp
 ```
 
-HTTP spans record method, route template, and status; `/health` and `/ready` are excluded. SQLite spans record operation and code location, without SQL text or bound values. Pi telemetry records model, conversation ID, tool name, error flag, and duration when available. Raw request URLs, headers, bodies, prompts, answers, tool arguments/results, and exception messages are excluded from application spans. No alerts are configured in this rollout.
+HTTP spans record method, route template, and status; `/health` and `/ready` are excluded. SQLite spans within an active request or task trace record operation and code location, without SQL text or bound values. Background polling queries outside a trace are excluded. Pi telemetry records model, conversation ID, tool name, error flag, and duration when available. Raw request URLs, headers, bodies, prompts, answers, tool arguments/results, and exception messages are excluded from application spans. No alerts are configured in this rollout.
 
 Review ingestion volume and retention after the initial full-sample production run before changing `GG_LOGFIRE_SAMPLE_RATE`.

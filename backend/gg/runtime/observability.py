@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 
 import logfire
 from fastapi import FastAPI, Request, Response
+from opentelemetry import trace
 
 from gg.runtime.config import RuntimeSettings
 
@@ -20,7 +21,7 @@ _sqlite_enabled = False
 
 def trace_sqlite_query[T](sql: str, execute: Callable[[], T]) -> T:
     """Measure one query by call site without exporting SQL or bound values."""
-    if not _sqlite_enabled:
+    if not _sqlite_enabled or not trace.get_current_span().is_recording():
         return execute()
     first = sql.lstrip().split(None, 1)
     operation = first[0].upper() if first else "OTHER"

@@ -93,10 +93,12 @@ def test_sqlite_query_trace_omits_statement_and_values(
     monkeypatch.setattr("gg.runtime.observability._sqlite_enabled", True)
     connection = sqlite3.connect(":memory:", factory=ObservedConnection)
     try:
-        connection.execute("CREATE TABLE items (value TEXT)")
-        connection.execute("INSERT INTO items VALUES (?)", ("private-value",))
-        with pytest.raises(sqlite3.Error):
-            connection.execute("SELECT private-literal FROM missing_table")
+        connection.execute("PRAGMA user_version")
+        with logfire.span("task query"):
+            connection.execute("CREATE TABLE items (value TEXT)")
+            connection.execute("INSERT INTO items VALUES (?)", ("private-value",))
+            with pytest.raises(sqlite3.Error):
+                connection.execute("SELECT private-literal FROM missing_table")
     finally:
         connection.close()
 

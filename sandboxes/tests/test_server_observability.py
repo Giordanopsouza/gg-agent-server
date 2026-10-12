@@ -72,8 +72,10 @@ def test_sandbox_sqlite_queries_omit_statement_and_values(
     monkeypatch.setattr("gg.server.observability._sqlite_enabled", True)
     connection = sqlite3.connect(":memory:", factory=ObservedConnection)
     try:
-        connection.execute("CREATE TABLE items (value TEXT)")
-        connection.execute("INSERT INTO items VALUES (?)", ("private-value",))
+        connection.execute("PRAGMA user_version")
+        with logfire.span("task query"):
+            connection.execute("CREATE TABLE items (value TEXT)")
+            connection.execute("INSERT INTO items VALUES (?)", ("private-value",))
     finally:
         connection.close()
 
