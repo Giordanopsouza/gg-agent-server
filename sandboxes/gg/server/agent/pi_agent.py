@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, Literal
 from uuid import uuid4
 
+import logfire
 from pydantic import BaseModel, ConfigDict, PositiveFloat
 
 from gg.sdk.agent_backend import DEFAULT_PI_MODEL
@@ -28,6 +29,7 @@ from gg.server.agent.exceptions import (
     AgentTimeoutError,
 )
 from gg.server.agent.local_workspace import LocalWorkspace
+from gg.server.observability import task_context
 from gg.server.secret_redaction import redact_secret
 
 
@@ -45,6 +47,8 @@ def _pi_process_env(github_token: str | None) -> dict[str, str]:
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_TOKEN", None)
     env.pop("GG_GITHUB_CLONE_TOKEN", None)
+    for name in ("LOGFIRE_TOKEN", "LOGFIRE_API_KEY", "OTEL_EXPORTER_OTLP_HEADERS"):
+        env.pop(name, None)
     if github_token:
         env["GH_TOKEN"] = github_token
         # gh reads GH_TOKEN directly; this helper stores no credential on disk.
@@ -107,6 +111,7 @@ class PiRpcAgent:
         self._active = False
         self._settling_listener: Callable[[], None] | None = None
         self._cancel_requested = threading.Event()
+        self._tool_started: dict[str, float] = {}
 
     def set_settling_listener(self, listener: Callable[[], None] | None) -> None:
         with self._state_lock:
@@ -249,14 +254,35 @@ class PiRpcAgent:
                 process,
                 {"id": request_id, "type": "prompt", "message": prompt},
             )
-            self._consume(
-                process,
-                messages,
-                request_id=request_id,
-                emit=emit,
-                api_key=api_key,
-                stderr=stderr,
-            )
+
+            def consume() -> None:
+                self._consume(
+                    process,
+                    messages,
+                    request_id=request_id,
+                    emit=emit,
+                    api_key=api_key,
+                    stderr=stderr,
+                )
+
+            context = task_context.get()
+            if context is None:
+                consume()
+            else:
+                failure: BaseException | None = None
+                with logfire.span(
+                    "pi RPC run",
+                    task_id=context[0],
+                    conversation_id=context[1],
+                    model=self.settings.model,
+                ) as span:
+                    try:
+                        consume()
+                    except BaseException as exc:
+                        span.set_attribute("error_type", type(exc).__name__)
+                        failure = exc
+                if failure is not None:
+                    raise failure.with_traceback(failure.__traceback__)
         except AgentTimeoutError:
             timed_out = True
             raise
@@ -267,6 +293,7 @@ class PiRpcAgent:
             stderr_thread.join(timeout=1.0)
             with self._state_lock:
                 self._process = None
+            self._tool_started.clear()
 
     def _preflight(self) -> str:
         if shutil.which("pi") is None:
@@ -371,10 +398,13 @@ class PiRpcAgent:
                 {"role": "assistant", "text": self._assistant_text(completed)},
             )
         elif message_type == "tool_execution_start":
+            tool_call_id = self._string_field(message, "toolCallId")
+            if task_context.get() is not None:
+                self._tool_started[tool_call_id] = time.monotonic()
             emit(
                 EventKind.ACTION,
                 {
-                    "tool_call_id": self._string_field(message, "toolCallId"),
+                    "tool_call_id": tool_call_id,
                     "tool": self._string_field(message, "toolName"),
                     "args": message.get("args"),
                 },
@@ -383,10 +413,30 @@ class PiRpcAgent:
             is_error = message.get("isError")
             if not isinstance(is_error, bool):
                 raise AgentProtocolError("Pi tool result has invalid isError")
+            tool_call_id = self._string_field(message, "toolCallId")
+            started = self._tool_started.pop(tool_call_id, None)
+            context = task_context.get()
+            if context is not None:
+                tool_name = self._string_field(message, "toolName")
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}", tool_name):
+                    tool_name = "unknown"
+                logfire.info(
+                    "pi tool execution",
+                    task_id=context[0],
+                    conversation_id=context[1],
+                    model=self.settings.model,
+                    tool=tool_name,
+                    is_error=is_error,
+                    duration_ms=(
+                        round((time.monotonic() - started) * 1000, 2)
+                        if started is not None
+                        else None
+                    ),
+                )
             emit(
                 EventKind.OBSERVATION,
                 {
-                    "tool_call_id": self._string_field(message, "toolCallId"),
+                    "tool_call_id": tool_call_id,
                     "tool": self._string_field(message, "toolName"),
                     "result": message.get("result"),
                     "is_error": is_error,

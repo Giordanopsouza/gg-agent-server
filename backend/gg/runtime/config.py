@@ -87,6 +87,10 @@ class RuntimeSettings(BaseModel):
     task_capacity: int = Field(default=DEFAULT_TASK_CAPACITY, ge=1, le=10)
     dispatch_poll_seconds: float = Field(default=DEFAULT_DISPATCH_POLL_SECONDS, gt=0)
     task_dispatch_enabled: bool = False
+    logfire_enabled: bool = False
+    logfire_environment: str = "local"
+    logfire_sample_rate: float = Field(default=1.0, ge=0, le=1)
+    logfire_relay_url: str | None = None
     dispatch_lock_path: str | None = None
     task_evidence_dir: str | None = None
     terminal_retention_days: int = Field(default=DEFAULT_TERMINAL_RETENTION_DAYS, ge=1)
@@ -322,6 +326,10 @@ def load_settings() -> RuntimeSettings:
             os.getenv("GG_DISPATCH_POLL_SECONDS"), DEFAULT_DISPATCH_POLL_SECONDS
         ),
         task_dispatch_enabled=_parse_bool(os.getenv("GG_TASK_DISPATCH_ENABLED")),
+        logfire_enabled=_parse_bool(os.getenv("GG_LOGFIRE_ENABLED")),
+        logfire_environment=os.getenv("GG_LOGFIRE_ENVIRONMENT", "local"),
+        logfire_sample_rate=_parse_float(os.getenv("GG_LOGFIRE_SAMPLE_RATE"), 1.0),
+        logfire_relay_url=_optional_secret(os.getenv("GG_LOGFIRE_RELAY_URL")),
         dispatch_lock_path=os.getenv("GG_DISPATCH_LOCK_PATH"),
         task_evidence_dir=os.getenv("GG_TASK_EVIDENCE_DIR"),
         terminal_retention_days=_parse_int(

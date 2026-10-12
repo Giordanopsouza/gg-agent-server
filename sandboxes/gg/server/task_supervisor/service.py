@@ -7,6 +7,8 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+import logfire
+
 from gg.sdk import ConversationStatus, PiAgentConfig
 from gg.sdk.task_execution import (
     AgentOutcome,
@@ -20,6 +22,7 @@ from gg.sdk.task_execution import (
 from gg.server.agent import AgentError, ConversationNotFoundError
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
+from gg.server.observability import task_context
 from gg.server.secret_redaction import redact_secret
 from gg.server.task_supervisor.git_prep import (
     GitPrepError,
@@ -120,6 +123,13 @@ class TaskSupervisorService:
             raise
         if not created:
             return record, False
+        if self._settings.logfire_enabled:
+            logfire.info(
+                "server task execution admitted",
+                task_id=request.task_id,
+                execution_id=record.execution_id,
+                model=request.model,
+            )
         if record.execution_id in self._active:
             return record, False
         task = asyncio.create_task(
@@ -317,14 +327,23 @@ class TaskSupervisorService:
             DEFAULT_AGENT_TIMEOUT_SECONDS,
             self._remaining_seconds(request.deadline_at, minimum=30),
         )
+        context_token = (
+            task_context.set((request.task_id, conversation_id))
+            if self._settings.logfire_enabled
+            else None
+        )
         try:
-            record = await asyncio.wait_for(
-                self._conversation_service.run(conversation_id),
-                timeout=timeout,
-            )
-        except TimeoutError:
-            await self._conversation_service.cancel(conversation_id)
-            return AgentOutcome.TIMEOUT
+            try:
+                record = await asyncio.wait_for(
+                    self._conversation_service.run(conversation_id),
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                await self._conversation_service.cancel(conversation_id)
+                return AgentOutcome.TIMEOUT
+        finally:
+            if context_token is not None:
+                task_context.reset(context_token)
         if record.status is ConversationStatus.CANCELLED:
             return AgentOutcome.CANCELLED
         if record.status is ConversationStatus.ERROR:
@@ -386,6 +405,13 @@ class TaskSupervisorService:
         manifest_path: str | None = None,
         outcome_detail: str | None = None,
     ) -> None:
+        if self._settings.logfire_enabled:
+            logfire.info(
+                "server task execution phase",
+                task_id=record.task_id,
+                execution_id=record.execution_id,
+                phase=phase.value,
+            )
         updated = record.model_copy(
             update={
                 "phase": phase,

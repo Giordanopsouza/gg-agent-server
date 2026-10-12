@@ -15,6 +15,7 @@ import uvicorn
 from gg.runtime.app import create_app
 from gg.runtime.config import load_settings
 from gg.runtime.db_cli import restore
+from gg.runtime.observability import configure_runtime_observability
 from gg.runtime.runtime_image import runtime_image
 
 
@@ -26,10 +27,12 @@ SNAPSHOT = Path("/state/runtime.snapshot")
 
 def restored_app(snapshot: Path, local: Path, commit):
     """Validate and restore before wiring or opening the listening socket."""
+    settings = load_settings()
+    configure_runtime_observability(settings)
     restore(snapshot, local)
     os.environ["GG_RUNTIME_DB_PATH"] = str(local)
     os.environ["GG_RUNTIME_SNAPSHOT_PATH"] = str(snapshot)
-    return create_app(load_settings(), snapshot_commit=commit, internal_proxy=True)
+    return create_app(settings, snapshot_commit=commit, internal_proxy=True)
 
 
 @app.server(

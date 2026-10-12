@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
+from logfire.testing import CaptureLogfire
 from pydantic import ValidationError
 
 import gg.server.agent.pi_agent as pi_agent
@@ -23,6 +24,7 @@ from gg.server.agent import (
     PiAgentSettings,
     PiRpcAgent,
 )
+from gg.server.observability import task_context
 
 
 _FAKE_PI = r"""#!/usr/bin/env python3
@@ -252,6 +254,66 @@ def _run_and_capture_error(
     with pytest.raises(error_type) as caught:
         conversation.run()
     return conversation, caught.value
+
+
+def test_pi_telemetry_excludes_prompt_tool_payload_and_token(
+    fake_pi: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    monkeypatch.setenv("FAKE_PI_MODE", "leak")
+    monkeypatch.setenv("LOGFIRE_TOKEN", "private-logfire-token")
+    monkeypatch.setenv("LOGFIRE_API_KEY", "private-logfire-api-key")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "private-exporter-header")
+    assert "LOGFIRE_TOKEN" not in pi_agent._pi_process_env(None)
+    assert "LOGFIRE_API_KEY" not in pi_agent._pi_process_env(None)
+    assert "OTEL_EXPORTER_OTLP_HEADERS" not in pi_agent._pi_process_env(None)
+
+    conversation = _conversation(tmp_path)
+    conversation.send_message("private-prompt-text")
+    token = task_context.set(("task-123", "conversation-123"))
+    try:
+        conversation.run()
+    finally:
+        task_context.reset(token)
+
+    spans = capfire.exporter.exported_spans_as_dict()
+    root = next(span for span in spans if span["name"] == "pi RPC run")
+    tool = next(span for span in spans if span["name"] == "pi tool execution")
+    assert root["attributes"]["task_id"] == "task-123"
+    assert tool["attributes"]["tool"] == "write"
+    assert tool["attributes"]["is_error"] is False
+    for secret in (
+        "private-prompt-text",
+        "test-openrouter-secret",
+        "private-logfire-token",
+        "private-logfire-api-key",
+        "private-exporter-header",
+    ):
+        assert secret not in repr(spans)
+
+
+def test_pi_protocol_failure_telemetry_keeps_only_error_type(
+    fake_pi: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    monkeypatch.setenv("FAKE_PI_MODE", "malformed")
+    conversation = _conversation(tmp_path)
+    conversation.send_message("private-prompt-text")
+    token = task_context.set(("task-123", "conversation-123"))
+    try:
+        with pytest.raises(AgentProtocolError):
+            conversation.run()
+    finally:
+        task_context.reset(token)
+
+    spans = capfire.exporter.exported_spans_as_dict()
+    root = next(span for span in spans if span["name"] == "pi RPC run")
+    assert root["attributes"]["error_type"] == "AgentProtocolError"
+    assert "private-prompt-text" not in repr(spans)
 
 
 def test_pi_settings_fix_provider_and_supply_defaults() -> None:

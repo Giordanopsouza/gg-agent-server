@@ -27,7 +27,10 @@ DEFAULT_TASK_SUPERVISOR_DIR = Path("workspace/task-supervisor")
 def publication_process_env() -> dict[str, str]:
     """Pass Pi's task-scoped environment to the publication CLI subprocesses."""
 
-    return dict(os.environ)
+    env = dict(os.environ)
+    for name in ("LOGFIRE_TOKEN", "LOGFIRE_API_KEY", "OTEL_EXPORTER_OTLP_HEADERS"):
+        env.pop(name, None)
+    return env
 
 
 class Settings(BaseModel):
@@ -44,6 +47,11 @@ class Settings(BaseModel):
     github_clone_token: str | None = None
     pi_owns_publication: bool = False
     process_env: dict[str, str] = Field(default_factory=dict)
+    logfire_enabled: bool = False
+    logfire_environment: str = "local"
+    logfire_sample_rate: float = Field(default=1.0, ge=0, le=1)
+    logfire_relay_url: str | None = None
+    logfire_task_id: str | None = None
     # - # Empty list means an open server (no auth). See task 010 for enforcement.
     session_api_keys: list[str] = Field(default_factory=list)
 
@@ -101,11 +109,23 @@ def _load_settings() -> Settings:
             data["github_clone_token"] = stripped
 
     data["pi_owns_publication"] = os.getenv("GG_PI_OWNS_PUBLICATION") == "1"
+    data["logfire_enabled"] = os.getenv("GG_LOGFIRE_ENABLED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    data["logfire_environment"] = os.getenv("GG_LOGFIRE_ENVIRONMENT", "local")
+    data["logfire_sample_rate"] = float(os.getenv("GG_LOGFIRE_SAMPLE_RATE", "1.0"))
+    data["logfire_relay_url"] = os.getenv("GG_LOGFIRE_RELAY_URL")
+    data["logfire_task_id"] = os.getenv("GG_TASK_ID")
     data["session_api_keys"] = _parse_session_api_keys(os.getenv("GG_SESSION_API_KEYS"))
 
     process_env = dict(os.environ)
     process_env.pop("GH_TOKEN", None)
     process_env.pop("GG_GITHUB_CLONE_TOKEN", None)
+    for name in ("LOGFIRE_TOKEN", "LOGFIRE_API_KEY", "OTEL_EXPORTER_OTLP_HEADERS"):
+        process_env.pop(name, None)
     data["process_env"] = process_env
 
     try:

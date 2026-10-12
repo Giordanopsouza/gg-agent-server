@@ -10,7 +10,17 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from gg.runtime.observability import trace_sqlite_query
 from gg.runtime.sqlite_migrations import apply_migrations, validate_schema
+
+
+class ObservedConnection(sqlite3.Connection):
+    """Trace the Connection.execute calls used throughout the runtime."""
+
+    def execute(self, sql, parameters=(), /):
+        return trace_sqlite_query(
+            sql, lambda: sqlite3.Connection.execute(self, sql, parameters)
+        )
 
 
 @contextmanager
@@ -32,7 +42,10 @@ def database_lease(path: Path, *, exclusive: bool = False) -> Iterator[None]:
 def connect(path: Path) -> sqlite3.Connection:
     """Open existing state only. All writable connections use the same PRAGMAs."""
     connection = sqlite3.connect(
-        path.resolve().as_uri() + "?mode=rw", uri=True, isolation_level=None
+        path.resolve().as_uri() + "?mode=rw",
+        uri=True,
+        isolation_level=None,
+        factory=ObservedConnection,
     )
     try:
         connection.execute("PRAGMA busy_timeout = 10000")

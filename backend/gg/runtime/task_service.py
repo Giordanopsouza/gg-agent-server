@@ -10,8 +10,11 @@ ledger.
 from __future__ import annotations
 
 import re
+import time
 from datetime import timedelta
 from uuid import UUID
+
+import logfire
 
 from gg.runtime.config import RuntimeSettings
 from gg.runtime.ledger import TaskLedger
@@ -137,6 +140,7 @@ class TaskService:
         pressure = admission_pressure(self._ledger, limits)
         if pressure.blocked:
             raise StoragePressureError(pressure.reason or "storage pressure")
+        admission_started = time.monotonic()
         record, created = self._ledger.submit(
             idempotency_key=request.idempotency_key,
             repository=request.repository,
@@ -154,6 +158,13 @@ class TaskService:
             raise TaskConflictError(record)
         if created and base_sha is not None:
             record = self._ledger.record_base_sha(record.id, base_sha)
+        if self._settings.logfire_enabled:
+            logfire.info(
+                "runtime task admission",
+                task_id=record.id,
+                created=created,
+                duration_ms=round((time.monotonic() - admission_started) * 1000, 2),
+            )
         return record, created
 
     # Return all tasks in FIFO order.

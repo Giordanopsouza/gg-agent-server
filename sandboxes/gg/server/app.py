@@ -14,6 +14,7 @@ from gg.server.api import api_router
 from gg.server.config import Settings
 from gg.server.conversation_service import ConversationService
 from gg.server.dependencies import check_session_api_key
+from gg.server.observability import instrument_server_http
 from gg.server.task_supervisor.service import TaskSupervisorService
 from gg.server.websocket_routes import event_socket_router
 
@@ -52,6 +53,8 @@ def create_app(settings: Settings) -> FastAPI:
         description="HTTP server for remote gg agent conversations",
         lifespan=_lifespan,
     )
+    if settings.logfire_enabled:
+        instrument_server_http(app)
     app.state.settings = settings
     app.state.ready_event = asyncio.Event()
 

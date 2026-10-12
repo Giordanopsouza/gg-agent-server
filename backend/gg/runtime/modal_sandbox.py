@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
+import logfire
 import modal
 from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
@@ -268,10 +269,12 @@ class SandboxConnection:
         return {"type": "auth", "session_api_key": self._session_api_key}
 
     def _headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {self._connect_token}",
             SESSION_API_KEY_HEADER: self._session_api_key,
         }
+        headers.update(logfire.get_context())
+        return headers
 
 
 def _sandbox_identity(deployment: str, task_id: str) -> tuple[str, dict[str, str]]:
@@ -422,6 +425,7 @@ class ModalSandboxLifecycle:
                 if github_credential is not None:
                     env["GG_GITHUB_CLONE_TOKEN"] = github_credential.token
             env["GG_SESSION_API_KEYS"] = record.session_api_key
+            env["GG_TASK_ID"] = task_id
             handle = await self._provider.create(
                 name=record.sandbox_name,
                 tags=json.loads(record.tags_json),
@@ -692,6 +696,13 @@ def sandbox_env_from_settings(settings: RuntimeSettings) -> dict[str, str]:
         env["GG_GITHUB_CLONE_TOKEN"] = settings.github_clone_token
     if settings.openrouter_api_key:
         env["OPENROUTER_API_KEY"] = settings.openrouter_api_key
+    if settings.logfire_enabled:
+        if not settings.logfire_relay_url:
+            raise ValueError("GG_LOGFIRE_RELAY_URL is required for sandbox telemetry")
+        env["GG_LOGFIRE_ENABLED"] = "true"
+        env["GG_LOGFIRE_ENVIRONMENT"] = settings.logfire_environment
+        env["GG_LOGFIRE_SAMPLE_RATE"] = str(settings.logfire_sample_rate)
+        env["GG_LOGFIRE_RELAY_URL"] = settings.logfire_relay_url
     return env
 
 

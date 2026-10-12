@@ -8,6 +8,7 @@ import uvicorn
 
 from gg.server.app import create_app
 from gg.server.config import DEFAULT_HOST, DEFAULT_PORT, get_settings
+from gg.server.observability import configure_server_observability
 
 
 _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", "[::]"})
@@ -45,6 +46,7 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    configure_server_observability(settings)
     host = resolve_bind_host(args.host, session_api_keys=settings.session_api_keys)
     port = args.port if args.port is not None else settings.port
 

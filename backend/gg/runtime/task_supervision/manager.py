@@ -18,6 +18,7 @@ from gg.runtime.ledger import (
     TaskLedger,
 )
 from gg.runtime.modal_sandbox import ModalLifecycleError, ModalSandboxLifecycle
+from gg.runtime.observability import trace_task_call
 from gg.runtime.repository_authorization import (
     RepositoryAccessError,
     RepositoryAuthorization,
@@ -33,6 +34,7 @@ from gg.sdk.task_execution import (
     CheckOutcome,
     StartTaskExecutionRequest,
     TaskExecutionPhase,
+    TaskExecutionRecord,
     TaskResultManifest,
 )
 from gg.sdk.task_supervision import TaskEventCopy
@@ -66,6 +68,7 @@ class TaskSupervisionManager:
         self._ledger = ledger
         self._lifecycle = lifecycle
         self._settings = settings
+        self._telemetry_enabled = bool(getattr(settings, "logfire_enabled", False))
         self._storage_limits = (
             StorageLimits.from_settings(settings)
             if isinstance(settings, RuntimeSettings)
@@ -501,9 +504,18 @@ class TaskSupervisionManager:
             model=task.model,
         )
         await self._authorize_execution(task, task_branch)
-        try:
-            record, _ = await client.start(
+
+        async def start_execution_call() -> tuple[TaskExecutionRecord, int]:
+            return await client.start(
                 request, github_token=await self._fresh_github_token(task)
+            )
+
+        try:
+            record, _ = await trace_task_call(
+                "runtime execution start",
+                task_id,
+                start_execution_call,
+                enabled=self._telemetry_enabled,
             )
         except RepositoryAccessError as exc:
             await asyncio.to_thread(
@@ -680,8 +692,13 @@ class TaskSupervisionManager:
                 await asyncio.to_thread(
                     self._ledger.update_supervision, task_id, tail_gap_possible=True
                 )
-        manifest = await _fetch_manifest_with_retries(
-            client, supervision.execution_id, budget=DEFAULT_CLEANUP_BUDGET
+        manifest = await trace_task_call(
+            "runtime result archival fetch",
+            task_id,
+            lambda: _fetch_manifest_with_retries(
+                client, supervision.execution_id, budget=DEFAULT_CLEANUP_BUDGET
+            ),
+            enabled=self._telemetry_enabled,
         )
         if manifest is not None and self._storage_limits is not None:
             manifest, _ = truncate_manifest(

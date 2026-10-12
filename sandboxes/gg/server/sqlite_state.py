@@ -7,6 +7,17 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from gg.server.observability import trace_sqlite_query
+
+
+class ObservedConnection(sqlite3.Connection):
+    """Trace the Connection.execute calls used throughout the sandbox."""
+
+    def execute(self, sql, parameters=(), /):
+        return trace_sqlite_query(
+            sql, lambda: sqlite3.Connection.execute(self, sql, parameters)
+        )
+
 
 SCHEMA = (
     """CREATE TABLE conversations (directory TEXT PRIMARY KEY NOT NULL,
@@ -61,7 +72,12 @@ class SandboxState:
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        connection = sqlite3.connect(
+            self.path,
+            timeout=10,
+            isolation_level=None,
+            factory=ObservedConnection,
+        )
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA busy_timeout = 10000")

@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from gg.runtime.sqlite_db import SQLiteDB
+from gg.runtime.sqlite_db import ObservedConnection, SQLiteDB
 from gg.runtime.sqlite_migrations import (
     SCHEMA_VERSION,
     InvalidDatabase,
@@ -28,7 +28,9 @@ def validate_snapshot(path: Path, *, allow_older: bool = False) -> int:
     if header[:16] != b"SQLite format 3\x00" or header[18:20] != b"\x01\x01":
         raise InvalidDatabase("snapshot has invalid or WAL-dependent header")
     connection = sqlite3.connect(
-        path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True
+        path.resolve().as_uri() + "?mode=ro&immutable=1",
+        uri=True,
+        factory=ObservedConnection,
     )
     try:
         if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
@@ -76,7 +78,9 @@ def publish_connection_snapshot(source: sqlite3.Connection, destination: Path) -
     os.close(descriptor)
     temporary = Path(filename)
     try:
-        target = sqlite3.connect(temporary, isolation_level=None)
+        target = sqlite3.connect(
+            temporary, isolation_level=None, factory=ObservedConnection
+        )
         try:
             source.backup(target)
             target.execute("PRAGMA journal_mode = DELETE")

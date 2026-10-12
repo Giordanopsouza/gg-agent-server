@@ -32,6 +32,7 @@ from gg.runtime.modal_sandbox import (
     ModalLifecycleError,
     ModalSandboxLifecycle,
 )
+from gg.runtime.observability import trace_task_call
 from gg.runtime.storage import StorageLimits, admission_pressure, run_retention_pass
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.tasks import TaskState
@@ -120,6 +121,7 @@ class TaskScheduler:
         poll_seconds: float = 1.0,
         supervision: TaskSupervisionManager | None = None,
         storage_limits: StorageLimits | None = None,
+        telemetry_enabled: bool = False,
     ) -> None:
         if not 1 <= capacity <= 10:
             raise ValueError("scheduler capacity must be between 1 and 10")
@@ -130,6 +132,7 @@ class TaskScheduler:
         self._poll_seconds = poll_seconds
         self._supervision = supervision
         self._storage_limits = storage_limits
+        self._telemetry_enabled = telemetry_enabled
         self._lock = DeploymentLock(lock_path)
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
@@ -447,7 +450,12 @@ class TaskScheduler:
         if isinstance(self._ledger, TaskLedger):
             await self._ledger.ensure_durable()
         try:
-            snapshot = await self._lifecycle.create(task_id)
+            snapshot = await trace_task_call(
+                "runtime sandbox creation",
+                task_id,
+                lambda: self._lifecycle.create(task_id),
+                enabled=self._telemetry_enabled,
+            )
         except CredentialUnavailableError as exc:
             await asyncio.to_thread(
                 self._ledger.finish_task,

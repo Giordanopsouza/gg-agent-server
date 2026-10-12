@@ -9,7 +9,9 @@ import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import UUID
 
+import logfire
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,6 +28,7 @@ from gg.runtime.google_auth import GoogleAuth, google_auth_router
 from gg.runtime.ledger import TaskLedger
 from gg.runtime.local_sessions import LocalSessions, durable
 from gg.runtime.modal_sandbox import ModalSandboxLifecycle, lifecycle_from_settings
+from gg.runtime.observability import instrument_runtime_http
 from gg.runtime.openrouter_vault import (
     OpenRouterKeyVerifier,
     SQLiteOpenRouterVault,
@@ -172,6 +175,7 @@ def create_app(
             poll_seconds=settings.dispatch_poll_seconds,
             supervision=supervision,
             storage_limits=limits,
+            telemetry_enabled=settings.logfire_enabled,
         )
         app.state.task_ledger = ledger
         app.state.checkpoints = checkpoints
@@ -238,6 +242,8 @@ def create_app(
                 ledger.close()
 
     app = FastAPI(title="gg-runtime", lifespan=lifespan)
+    if settings.logfire_enabled:
+        instrument_runtime_http(app)
     if settings.web_dist_path:
         if not settings.web_origin:
             raise ValueError("web_origin is required when serving React")
@@ -358,6 +364,25 @@ def create_app(
             content,
             media_type="application/vnd.sqlite3",
             headers={"X-Runtime-Revision": str(revision), "Cache-Control": "no-store"},
+        )
+
+    @app.post("/internal/logfire/{path:path}")
+    async def sandbox_logfire_relay(path: str, request: Request):
+        task_id = request.headers.get("X-GG-Task-ID", "")
+        session_key = request.headers.get("X-Session-API-Key", "")
+        try:
+            UUID(task_id)
+        except ValueError:
+            raise HTTPException(status_code=401) from None
+        creation = await asyncio.to_thread(ledger.get_sandbox_creation, task_id)
+        if creation is None or not secrets.compare_digest(
+            session_key, creation.session_api_key
+        ):
+            raise HTTPException(status_code=401)
+        if not settings.logfire_enabled or path != "v1/traces":
+            raise HTTPException(status_code=404)
+        return await logfire.forward_export_request_starlette(
+            request, max_body_size=1024 * 1024
         )
 
     app.include_router(task_router, dependencies=[Depends(task_access)])

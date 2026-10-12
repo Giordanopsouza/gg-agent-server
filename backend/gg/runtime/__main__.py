@@ -8,10 +8,12 @@ import uvicorn
 
 from gg.runtime.app import create_app
 from gg.runtime.config import load_settings
+from gg.runtime.observability import configure_runtime_observability
 
 
 def main() -> None:
     settings = load_settings()
+    configure_runtime_observability(settings)
     parser = argparse.ArgumentParser(description="gg runtime control plane")
     parser.add_argument("--host", default=settings.host)
     parser.add_argument("--port", type=int, default=settings.port)
