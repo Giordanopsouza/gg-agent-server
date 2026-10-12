@@ -29,6 +29,10 @@ async def test_runtime_http_trace_keeps_only_route_status_and_method(
     def item(item_id: str) -> dict[str, str]:
         return {"item_id": item_id}
 
+    @app.get("/tasks")
+    def polling() -> dict[str, str]:
+        return {"status": "ok"}
+
     instrument_runtime_http(app)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -37,12 +41,15 @@ async def test_runtime_http_trace_keeps_only_route_status_and_method(
             "/items/private-path?code=private-query",
             headers={"Authorization": "Bearer private-header"},
         )
+        polled = await client.get("/tasks")
 
     assert response.status_code == 200
+    assert polled.status_code == 200
     spans = capfire.exporter.exported_spans_as_dict()
     request_span = next(
         span for span in spans if span["name"] == "runtime HTTP request"
     )
+    assert sum(span["name"] == "runtime HTTP request" for span in spans) == 1
     assert request_span["attributes"]["http_method"] == "GET"
     assert request_span["attributes"]["http_route"] == "/items/{item_id}"
     assert request_span["attributes"]["http_status_code"] == 200

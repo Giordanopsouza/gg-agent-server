@@ -6,6 +6,7 @@ which can contain OAuth codes or task prompts. Keep the HTTP boundary explicit.
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Awaitable, Callable
 
@@ -42,7 +43,10 @@ def trace_sqlite_query[T](sql: str, execute: Callable[[], T]) -> T:
     }:
         operation = "OTHER"
     caller = sys._getframe(2)
-    location = f"{caller.f_globals.get('__name__', 'unknown')}:{caller.f_lineno}"
+    module = caller.f_globals.get("__name__", "unknown")
+    if module in {"gg.runtime.sqlite_db", "gg.runtime.sqlite_migrations"}:
+        return execute()
+    location = f"{module}:{caller.f_lineno}"
     failure: BaseException | None = None
     result: T | None = None
     with logfire.span(
@@ -102,7 +106,17 @@ def instrument_runtime_http(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def trace_request(request: Request, call_next) -> Response:
-        if request.url.path in {"/health", "/ready"}:
+        path = request.url.path
+        polling = request.method == "GET" and (
+            path in {"/auth/session", "/tasks", "/tasks/dispatch/status"}
+            or re.fullmatch(r"/tasks/[0-9a-fA-F-]{36}(?:/(?:events|result))?", path)
+            is not None
+        )
+        if (
+            path in {"/health", "/ready"}
+            or path.startswith("/internal/logfire/")
+            or polling
+        ):
             return await call_next(request)
 
         error: Exception | None = None

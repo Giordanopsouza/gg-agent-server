@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -45,7 +46,10 @@ def trace_sqlite_query[T](sql: str, execute: Callable[[], T]) -> T:
     }:
         operation = "OTHER"
     caller = sys._getframe(2)
-    location = f"{caller.f_globals.get('__name__', 'unknown')}:{caller.f_lineno}"
+    module = caller.f_globals.get("__name__", "unknown")
+    if operation == "PRAGMA":
+        return execute()
+    location = f"{module}:{caller.f_lineno}"
     failure: BaseException | None = None
     result: T | None = None
     with logfire.span(
@@ -96,7 +100,11 @@ def instrument_server_http(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def trace_request(request: Request, call_next) -> Response:
-        if request.url.path in {"/health", "/ready"}:
+        path = request.url.path
+        polling = request.method == "GET" and re.fullmatch(
+            r"/api/task-executions/[0-9a-fA-F-]{36}(?:/manifest)?", path
+        )
+        if path in {"/health", "/ready"} or polling:
             return await call_next(request)
         carrier = {
             name: request.headers[name]

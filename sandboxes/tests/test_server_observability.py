@@ -26,6 +26,10 @@ async def test_server_http_trace_propagates_parent_without_request_content(
     def task(task_id: str) -> dict[str, str]:
         return {"task_id": task_id}
 
+    @app.get("/api/task-executions/{execution_id}")
+    def polling(execution_id: str) -> dict[str, str]:
+        return {"execution_id": execution_id}
+
     instrument_server_http(app)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://sandbox"
@@ -36,11 +40,17 @@ async def test_server_http_trace_propagates_parent_without_request_content(
             response = await client.get(
                 "/tasks/private-path?code=private-query", headers=headers
             )
+            polled = await client.get(
+                "/api/task-executions/632925df-0f19-4309-ad2d-5ba915ad6348",
+                headers=headers,
+            )
 
     assert response.status_code == 200
+    assert polled.status_code == 200
     spans = capfire.exporter.exported_spans_as_dict()
     parent = next(span for span in spans if span["name"] == "runtime request")
     child = next(span for span in spans if span["name"] == "server HTTP request")
+    assert sum(span["name"] == "server HTTP request" for span in spans) == 1
     assert child["context"]["trace_id"] == parent["context"]["trace_id"]
     assert child["attributes"]["http_route"] == "/tasks/{task_id}"
     assert child["attributes"]["http_status_code"] == 200
