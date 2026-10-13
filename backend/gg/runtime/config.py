@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from cryptography.fernet import Fernet
 from pydantic import (
@@ -46,6 +47,8 @@ class RuntimeSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     api_key: str
+    wpp_api_token: str | None = Field(default=None, repr=False)
+    wpp_owner_id: UUID | None = None
     google_client_id: str | None = None
     google_client_secret: str | None = None
     web_cookie_key: str | None = None
@@ -103,6 +106,25 @@ class RuntimeSettings(BaseModel):
         default=DEFAULT_MAX_TOTAL_EVIDENCE_BYTES, ge=1024
     )
     min_free_disk_bytes: int = Field(default=DEFAULT_MIN_FREE_DISK_BYTES, ge=0)
+
+    @model_validator(mode="after")
+    def validate_wpp_binding(self):
+        if (self.wpp_api_token is None) != (self.wpp_owner_id is None):
+            raise ValueError(
+                "GG_WPP_API_TOKEN and GG_WPP_OWNER_ID must be configured together"
+            )
+        if self.wpp_api_token is not None:
+            if (
+                not self.wpp_api_token
+                or self.wpp_api_token != self.wpp_api_token.strip()
+                or any(ord(char) < 33 or ord(char) > 126 for char in self.wpp_api_token)
+            ):
+                raise ValueError(
+                    "GG_WPP_API_TOKEN must use visible ASCII without whitespace"
+                )
+            if self.wpp_api_token == self.api_key:
+                raise ValueError("GG_WPP_API_TOKEN must differ from the operator key")
+        return self
 
     @field_validator("api_key")
     @classmethod
@@ -263,6 +285,8 @@ def load_settings() -> RuntimeSettings:
 
     return RuntimeSettings(
         api_key=api_key,
+        wpp_api_token=os.getenv("GG_WPP_API_TOKEN"),
+        wpp_owner_id=os.getenv("GG_WPP_OWNER_ID"),
         google_client_id=_optional_secret(os.getenv("GG_GOOGLE_CLIENT_ID")),
         google_client_secret=_optional_secret(os.getenv("GG_GOOGLE_CLIENT_SECRET")),
         web_cookie_key=_optional_secret(os.getenv("GG_WEB_COOKIE_KEY")),

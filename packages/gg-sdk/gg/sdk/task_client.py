@@ -61,16 +61,23 @@ class TaskClient:
         client: httpx.Client | None = None,
     ) -> None:
         self.settings = settings
+        auth_header, credential = (
+            ("Authorization", f"Bearer {settings.api_token}")
+            if settings.api_token is not None
+            else (RUNTIME_API_KEY_HEADER, settings.api_key)
+        )
         if client is None:
             self._client = httpx.Client(
                 base_url=settings.api_url,
-                headers={RUNTIME_API_KEY_HEADER: settings.api_key},
+                headers={auth_header: credential},
                 timeout=settings.timeout,
             )
             self._owns_client = True
         else:
             self._client = client
-            self._client.headers.setdefault(RUNTIME_API_KEY_HEADER, settings.api_key)
+            self._client.headers.pop("Authorization", None)
+            self._client.headers.pop(RUNTIME_API_KEY_HEADER, None)
+            self._client.headers[auth_header] = credential
             self._owns_client = False
 
     def close(self) -> None:
@@ -246,9 +253,11 @@ class TaskEventSubscription:
                     self._task_id,
                     after=self._cursor,
                 ),
-                additional_headers={
-                    RUNTIME_API_KEY_HEADER: self._client.settings.api_key
-                },
+                additional_headers=(
+                    {"Authorization": f"Bearer {self._client.settings.api_token}"}
+                    if self._client.settings.api_token is not None
+                    else {RUNTIME_API_KEY_HEADER: self._client.settings.api_key}
+                ),
                 open_timeout=self._client.settings.timeout,
                 close_timeout=5,
             )

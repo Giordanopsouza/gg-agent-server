@@ -6,7 +6,7 @@ import os
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 DEFAULT_RUNTIME_HOST = "127.0.0.1"
@@ -19,17 +19,26 @@ class TaskClientSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     api_url: str
-    api_key: str
+    api_key: str | None = Field(default=None, repr=False)
+    api_token: str | None = Field(default=None, repr=False)
     timeout: float = 30.0
 
-    @field_validator("api_key")
+    @field_validator("api_key", "api_token")
     @classmethod
-    def validate_api_key(cls, value: str) -> str:
+    def validate_api_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if not value or value != value.strip():
             raise ValueError(
                 "api_key must be non-empty and cannot contain surrounding whitespace"
             )
         return value
+
+    @model_validator(mode="after")
+    def require_credential(self):
+        if self.api_key is None and self.api_token is None:
+            raise ValueError("GG_TASK_API_TOKEN or GG_RUNTIME_API_KEY is required")
+        return self
 
     @field_validator("api_url")
     @classmethod
@@ -49,8 +58,9 @@ class TaskClientSettings(BaseModel):
 
 def load_task_client_settings() -> TaskClientSettings:
     """Read task client configuration from the process environment."""
-    api_key = os.getenv("GG_RUNTIME_API_KEY")
-    if api_key is None or not api_key.strip():
+    api_token = os.getenv("GG_TASK_API_TOKEN")
+    api_key = None if api_token is not None else os.getenv("GG_RUNTIME_API_KEY")
+    if api_token is None and (api_key is None or not api_key.strip()):
         raise ValueError("GG_RUNTIME_API_KEY must be set to a non-empty value")
 
     explicit = os.getenv("GG_TASK_API_URL")
@@ -66,7 +76,9 @@ def load_task_client_settings() -> TaskClientSettings:
     timeout_raw = os.getenv("GG_TASK_CLIENT_TIMEOUT")
     timeout = float(timeout_raw) if timeout_raw is not None else 30.0
 
-    return TaskClientSettings(api_url=api_url, api_key=api_key, timeout=timeout)
+    return TaskClientSettings(
+        api_url=api_url, api_key=api_key, api_token=api_token, timeout=timeout
+    )
 
 
 def _is_loopback_host(hostname: str | None) -> bool:

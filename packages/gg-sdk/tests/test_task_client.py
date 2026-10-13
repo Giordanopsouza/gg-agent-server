@@ -226,3 +226,37 @@ def test_get_message_receipt() -> None:
         loaded = client.get_message_receipt("task-1", "m1")
 
     assert loaded.status is MessageDeliveryStatus.DELIVERED
+
+
+def test_bearer_auth_for_http_and_event_socket(monkeypatch):
+    settings = TaskClientSettings(
+        api_url="https://runtime.test", api_token="wpp-secret", api_key="stale-operator"
+    )
+
+    def handle(request):
+        assert request.headers["Authorization"] == "Bearer wpp-secret"
+        assert "X-API-Key" not in request.headers
+        return httpx.Response(200, json=[])
+
+    http_client = httpx.Client(
+        base_url=settings.api_url,
+        headers={"X-API-Key": "stale-operator"},
+        transport=httpx.MockTransport(handle),
+    )
+    client = TaskClient(settings, client=http_client)
+    assert client.list_tasks() == []
+    captured = {}
+
+    class Connection:
+        def close(self):
+            pass
+
+    def fake_connect(url, **kwargs):
+        captured.update(kwargs)
+        return Connection()
+
+    monkeypatch.setattr(task_client_module, "connect", fake_connect)
+    with client.subscribe_events("task-1"):
+        pass
+    assert captured["additional_headers"] == {"Authorization": "Bearer wpp-secret"}
+    http_client.close()
