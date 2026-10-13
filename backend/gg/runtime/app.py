@@ -149,6 +149,20 @@ def create_app(
                 client_id=settings.github_app_client_id,
                 private_key=settings.github_app_private_key,
             )
+        if settings.wpp_owner_id is not None:
+            if not isinstance(ledger, TaskLedger):
+                raise ValueError("WPP owner requires a SQLite ledger")
+            with ledger.db.read() as connection:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM local_users WHERE id = ?",
+                        (str(settings.wpp_owner_id),),
+                    ).fetchone()
+                    is None
+                ):
+                    raise ValueError(
+                        "GG_WPP_OWNER_ID does not identify an existing account"
+                    )
         auth_provider = web_auth or GoogleAuth(settings, web_sessions)
         verifier = openrouter_verifier or OpenRouterKeyVerifier()
         lifecycle = modal_lifecycle or lifecycle_from_settings(
@@ -257,7 +271,7 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(settings.cors_origins),
             allow_methods=["GET", "POST", "PUT", "DELETE"],
-            allow_headers=["X-API-Key", "Content-Type"],
+            allow_headers=["X-API-Key", "Authorization", "Content-Type"],
         )
 
     @app.exception_handler(sqlite3.Error)

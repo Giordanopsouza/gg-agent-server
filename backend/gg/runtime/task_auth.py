@@ -8,7 +8,27 @@ from fastapi import HTTPException, Request, Response, WebSocket, status
 from gg.runtime.web_auth import SESSION_COOKIE, _require_origin, authenticated_web_user
 
 
+async def bearer_owner(request: Request | WebSocket) -> UUID:
+    settings = request.app.state.settings
+    scheme, separator, token = request.headers.get("authorization", "").partition(" ")
+    if (
+        request.headers.get("x-api-key") is not None
+        or scheme.lower() != "bearer"
+        or not separator
+        or not token.isascii()
+        or not settings.wpp_api_token
+        or not secrets.compare_digest(token, settings.wpp_api_token)
+    ):
+        raise HTTPException(status_code=401, detail="invalid WPP authorization")
+    return settings.wpp_owner_id
+
+
 async def task_access(request: Request, response: Response) -> None:
+    if request.headers.get("authorization") is not None:
+        if request.headers.get("x-api-key") is not None:
+            raise HTTPException(status_code=401, detail="ambiguous authentication")
+        request.state.owner_id = await bearer_owner(request)
+        return
     settings = request.app.state.settings
     supplied_key = request.headers.get("x-api-key")
     if supplied_key is not None:
@@ -26,6 +46,10 @@ async def task_access(request: Request, response: Response) -> None:
 
 
 async def socket_owner(websocket: WebSocket) -> UUID | None:
+    if websocket.headers.get("authorization") is not None:
+        if websocket.headers.get("x-api-key") is not None:
+            raise HTTPException(status_code=401, detail="ambiguous authentication")
+        return await bearer_owner(websocket)
     settings = websocket.app.state.settings
     supplied_key = websocket.headers.get("x-api-key")
     if supplied_key is not None:

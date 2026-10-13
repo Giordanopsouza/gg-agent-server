@@ -29,3 +29,19 @@ def test_explicit_task_api_url_overrides_host(monkeypatch: pytest.MonkeyPatch) -
     settings = load_task_client_settings()
 
     assert settings.api_url == "https://tasks.example"
+
+
+def test_bearer_takes_precedence_over_operator_key(monkeypatch):
+    monkeypatch.setenv("GG_TASK_API_TOKEN", "wpp-secret")
+    monkeypatch.setenv("GG_RUNTIME_API_KEY", "operator-secret")
+    settings = load_task_client_settings()
+    assert settings.api_token == "wpp-secret"
+    assert settings.api_key is None
+    assert "wpp-secret" not in repr(settings)
+
+
+def test_empty_bearer_does_not_fall_back(monkeypatch):
+    monkeypatch.setenv("GG_TASK_API_TOKEN", "")
+    monkeypatch.setenv("GG_RUNTIME_API_KEY", "operator-secret")
+    with pytest.raises(ValueError):
+        load_task_client_settings()

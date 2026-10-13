@@ -10,10 +10,11 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from httpx import ASGITransport
 
 from gg.runtime import RuntimeSettings, create_app
-from gg.runtime.ledger import SandboxProviderState, TaskLedger
+from gg.runtime.ledger import ReservationPhase, SandboxProviderState, TaskLedger
 from gg.runtime.modal_sandbox import SandboxConnection, SandboxSnapshot
 from gg.runtime.task_supervision.manager import TaskSupervisionManager
 from gg.sdk.domain import Event, EventKind, MessageDeliveryStatus, MessageReceipt
@@ -25,7 +26,7 @@ from gg.sdk.task_execution import (
     TaskExecutionRecord,
     TaskResultManifest,
 )
-from gg.sdk.tasks import TaskState
+from gg.sdk.tasks import CreateTaskRequest, TaskState
 from test_support.sqlite_ledger import new_ledger
 
 
@@ -514,3 +515,53 @@ async def test_cancel_queued_task_is_idempotent(tmp_path) -> None:
     assert second.status_code == 200
     assert first.json()["state"] == "cancelled"
     assert second.json()["state"] == "cancelled"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "detail,permanent",
+    [
+        ("github clone token is not configured", True),
+        ("service warming up", False),
+        ({"message": "warming up"}, False),
+    ],
+)
+async def test_execution_start_failure_does_not_poll_absent_execution(
+    tmp_path, detail, permanent
+):
+    agent = FastAPI()
+
+    @agent.post("/api/task-executions/start")
+    async def unavailable():
+        return JSONResponse({"detail": detail}, status_code=503)
+
+    ledger = new_ledger()
+    lifecycle = ConnectableFakeLifecycle(ledger=ledger, agent_app=agent)
+    settings = RuntimeSettings(
+        api_key="control-secret",
+        task_dispatch_enabled=False,
+        dispatch_lock_path=str(tmp_path / "lock"),
+    )
+    app = create_app(settings, task_ledger=ledger, modal_lifecycle=lifecycle)
+    async with app.router.lifespan_context(app):
+        task, _ = app.state.task_service.submit(
+            CreateTaskRequest(prompt="work", idempotency_key="start-failure")
+        )
+        ledger.reserve_next(capacity=1)
+        await lifecycle.create(task.id)
+        ledger.update_reservation(
+            task.id, phase=ReservationPhase.RUNNING, task_state=TaskState.RUNNING
+        )
+        await app.state.task_supervision._drive_running(task.id)
+        assert ledger.get(task.id).state is (
+            TaskState.FAILED if permanent else TaskState.RUNNING
+        )
+        if permanent:
+            assert ledger.get(task.id).outcome_detail == detail
+            assert ledger.get_reservation(task.id) is None
+            assert lifecycle.terminate_calls == [task.id]
+        else:
+            assert ledger.get_reservation(task.id).condition.startswith(
+                "execution start failed"
+            )
+            assert lifecycle.terminate_calls == []

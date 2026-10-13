@@ -484,6 +484,11 @@ class TaskSupervisionManager:
             if reservation is not None
             else datetime.now(UTC) + duration
         )
+        if datetime.now(UTC) >= deadline_at:
+            await self._fail_execution_start(
+                task_id, "execution start deadline exceeded"
+            )
+            return None
         task_branch = f"{TASK_BRANCH_PREFIX}/{task_id}"
         await asyncio.to_thread(
             self._ledger.begin_supervision,
@@ -518,27 +523,34 @@ class TaskSupervisionManager:
                 enabled=self._telemetry_enabled,
             )
         except RepositoryAccessError as exc:
-            await asyncio.to_thread(
-                self._ledger.finish_task,
-                task_id,
-                state=TaskState.FAILED,
-                outcome_detail=str(exc),
-            )
-            await asyncio.to_thread(
-                self._ledger.update_reservation,
-                task_id,
-                phase=ReservationPhase.TERMINATION_PENDING,
-                condition=str(exc),
-            )
+            await self._fail_execution_start(task_id, str(exc))
             return None
         except httpx.HTTPError as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                try:
+                    detail = exc.response.json().get("detail")
+                except (ValueError, AttributeError):
+                    detail = None
+                if (
+                    exc.response.status_code == 503
+                    and isinstance(detail, str)
+                    and detail
+                    in {
+                        "github clone token is not configured",
+                        "OPENROUTER_API_KEY is required for Pi",
+                    }
+                ):
+                    await self._fail_execution_start(task_id, detail)
+                    return None
             await asyncio.to_thread(
                 self._ledger.update_reservation,
                 task_id,
                 phase=ReservationPhase.RUNNING,
                 condition=f"execution start failed: {exc}",
             )
-            return await asyncio.to_thread(self._ledger.get_supervision, task_id)
+            # No execution identity has been acknowledged yet. Retry start using
+            # the same key instead of polling a nonexistent execution (404).
+            return None
         await asyncio.to_thread(
             self._ledger.update_supervision,
             task_id,
@@ -780,6 +792,22 @@ class TaskSupervisionManager:
             await asyncio.to_thread(
                 self._ledger.save_task_message_receipt, task_id, settled
             )
+
+    async def _fail_execution_start(self, task_id: str, detail: str) -> None:
+        await asyncio.to_thread(
+            self._ledger.finish_task,
+            task_id,
+            state=TaskState.FAILED,
+            outcome_detail=detail,
+        )
+        await asyncio.to_thread(
+            self._ledger.update_reservation,
+            task_id,
+            phase=ReservationPhase.TERMINATION_PENDING,
+            condition=detail,
+        )
+        await self._ledger.ensure_durable()
+        await self._attempt_cleanup(task_id)
 
     async def _attempt_cleanup(self, task_id: str) -> None:
         try:
