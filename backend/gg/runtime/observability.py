@@ -8,21 +8,23 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from collections.abc import Awaitable, Callable
 
 import logfire
 from fastapi import FastAPI, Request, Response
-from opentelemetry import trace
 
 from gg.runtime.config import RuntimeSettings
 
 
 _sqlite_enabled = False
+SQLITE_SLOW_SECONDS = 0.1
+HTTP_SLOW_SECONDS = 1.0
 
 
 def trace_sqlite_query[T](sql: str, execute: Callable[[], T]) -> T:
     """Measure one query by call site without exporting SQL or bound values."""
-    if not _sqlite_enabled or not trace.get_current_span().is_recording():
+    if not _sqlite_enabled:
         return execute()
     first = sql.lstrip().split(None, 1)
     operation = first[0].upper() if first else "OTHER"
@@ -47,19 +49,27 @@ def trace_sqlite_query[T](sql: str, execute: Callable[[], T]) -> T:
     if module in {"gg.runtime.sqlite_db", "gg.runtime.sqlite_migrations"}:
         return execute()
     location = f"{module}:{caller.f_lineno}"
-    failure: BaseException | None = None
-    result: T | None = None
-    with logfire.span(
-        "sqlite query", db_operation=operation, code_location=location
-    ) as span:
-        try:
-            result = execute()
-        except BaseException as exc:
-            span.set_attribute("error_type", type(exc).__name__)
-            failure = exc
-    if failure is not None:
-        raise failure.with_traceback(failure.__traceback__)
-    return result  # type: ignore[return-value]
+    started = time.perf_counter()
+    try:
+        result = execute()
+    except BaseException as exc:
+        logfire.error(
+            "sqlite query failed",
+            db_operation=operation,
+            code_location=location,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            error_type=type(exc).__name__,
+        )
+        raise
+    duration = time.perf_counter() - started
+    if duration >= SQLITE_SLOW_SECONDS:
+        logfire.warn(
+            "sqlite query slow",
+            db_operation=operation,
+            code_location=location,
+            duration_ms=duration * 1000,
+        )
+    return result
 
 
 async def trace_task_call[T](
@@ -97,6 +107,13 @@ def configure_runtime_observability(settings: RuntimeSettings) -> None:
         distributed_tracing=False,
         sampling=logfire.SamplingOptions(head=settings.logfire_sample_rate),
     )
+    # Some launchers auto-instrument FastAPI. Our explicit HTTP boundary below
+    # owns operational errors without framework internals or request contents.
+    logfire.suppress_scopes(
+        "fastapi",
+        "opentelemetry.instrumentation.fastapi",
+        "opentelemetry.instrumentation.asgi",
+    )
     global _sqlite_enabled
     _sqlite_enabled = True
 
@@ -117,7 +134,7 @@ def instrument_runtime_http(app: FastAPI) -> None:
             or path.startswith("/internal/logfire/")
             or polling
         ):
-            return await call_next(request)
+            return await _trace_quiet_request(request, call_next)
 
         error: Exception | None = None
         response: Response | None = None
@@ -136,3 +153,34 @@ def instrument_runtime_http(app: FastAPI) -> None:
             raise error
         assert response is not None
         return response
+
+
+async def _trace_quiet_request(request: Request, call_next) -> Response:
+    """Keep only failures and slow responses for repetitive internal traffic."""
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        route = request.scope.get("route")
+        logfire.error(
+            "HTTP background request failed",
+            http_method=request.method,
+            http_route=route.path if route is not None else None,
+            error_type=type(exc).__name__,
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
+        raise
+    duration = time.perf_counter() - started
+    if response.status_code >= 400 or duration >= HTTP_SLOW_SECONDS:
+        route = request.scope.get("route")
+        logfire.log(
+            "error" if response.status_code >= 500 else "warn",
+            "HTTP background request abnormal",
+            attributes={
+                "http_method": request.method,
+                "http_route": route.path if route is not None else None,
+                "http_status_code": response.status_code,
+                "duration_ms": duration * 1000,
+            },
+        )
+    return response

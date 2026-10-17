@@ -280,10 +280,10 @@ def test_pi_telemetry_excludes_prompt_tool_payload_and_token(
 
     spans = capfire.exporter.exported_spans_as_dict()
     root = next(span for span in spans if span["name"] == "pi RPC run")
-    tool = next(span for span in spans if span["name"] == "pi tool execution")
     assert root["attributes"]["task_id"] == "task-123"
-    assert tool["attributes"]["tool"] == "write"
-    assert tool["attributes"]["is_error"] is False
+    assert root["attributes"]["tool_count"] == 1
+    assert root["attributes"]["tool_error_count"] == 0
+    assert not any(span["name"] == "pi tool execution" for span in spans)
     for secret in (
         "private-prompt-text",
         "test-openrouter-secret",
@@ -762,3 +762,57 @@ def _assert_persisted_error(
     assert events[-2].payload["type"] == error_type
     assert forbidden not in json.dumps(events[-2].payload)
     assert events[-1].payload == {"status": ConversationStatus.ERROR}
+
+
+@pytest.mark.parametrize(
+    "is_error,duration", [(False, 0.01), (False, 2.0), (True, 0.01)]
+)
+def test_tool_filter_preserves_events_and_summarizes_all_calls(
+    capfire: CaptureLogfire,
+    monkeypatch: pytest.MonkeyPatch,
+    is_error: bool,
+    duration: float,
+) -> None:
+    from types import SimpleNamespace
+
+    agent = PiRpcAgent()
+    ticks = iter((0.0, duration))
+    monkeypatch.setattr(
+        pi_agent, "time", SimpleNamespace(monotonic=lambda: next(ticks))
+    )
+    events = []
+    token = task_context.set(("task-123", "conversation-123"))
+    try:
+        agent._translate_event(
+            {
+                "type": "tool_execution_start",
+                "toolCallId": "1",
+                "toolName": "bash",
+                "args": {"command": "private-command"},
+            },
+            emit=lambda *event: events.append(event),
+            api_key="secret",
+        )
+        agent._translate_event(
+            {
+                "type": "tool_execution_end",
+                "toolCallId": "1",
+                "toolName": "bash",
+                "isError": is_error,
+                "result": {"output": "private-output"},
+            },
+            emit=lambda *event: events.append(event),
+            api_key="secret",
+        )
+    finally:
+        task_context.reset(token)
+    assert len(events) == 2
+    assert agent._tool_count == 1
+    assert agent._tool_error_count == int(is_error)
+    assert agent._tool_duration_ms == duration * 1000
+    records = capfire.exporter.exported_spans_as_dict()
+    assert len(records) == int(is_error or duration >= 1)
+    if records:
+        assert records[0]["attributes"]["is_error"] is is_error
+    assert "private-command" not in repr(records)
+    assert "private-output" not in repr(records)
