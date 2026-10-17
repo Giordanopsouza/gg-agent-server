@@ -112,6 +112,9 @@ class PiRpcAgent:
         self._settling_listener: Callable[[], None] | None = None
         self._cancel_requested = threading.Event()
         self._tool_started: dict[str, float] = {}
+        self._tool_count = 0
+        self._tool_error_count = 0
+        self._tool_duration_ms = 0.0
 
     def set_settling_listener(self, listener: Callable[[], None] | None) -> None:
         with self._state_lock:
@@ -269,6 +272,9 @@ class PiRpcAgent:
             if context is None:
                 consume()
             else:
+                self._tool_count = 0
+                self._tool_error_count = 0
+                self._tool_duration_ms = 0.0
                 failure: BaseException | None = None
                 with logfire.span(
                     "pi RPC run",
@@ -281,6 +287,10 @@ class PiRpcAgent:
                     except BaseException as exc:
                         span.set_attribute("error_type", type(exc).__name__)
                         failure = exc
+                    finally:
+                        span.set_attribute("tool_count", self._tool_count)
+                        span.set_attribute("tool_error_count", self._tool_error_count)
+                        span.set_attribute("tool_duration_ms", self._tool_duration_ms)
                 if failure is not None:
                     raise failure.with_traceback(failure.__traceback__)
         except AgentTimeoutError:
@@ -420,19 +430,27 @@ class PiRpcAgent:
                 tool_name = self._string_field(message, "toolName")
                 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}", tool_name):
                     tool_name = "unknown"
-                logfire.info(
-                    "pi tool execution",
-                    task_id=context[0],
-                    conversation_id=context[1],
-                    model=self.settings.model,
-                    tool=tool_name,
-                    is_error=is_error,
-                    duration_ms=(
-                        round((time.monotonic() - started) * 1000, 2)
-                        if started is not None
-                        else None
-                    ),
+                duration_ms = (
+                    round((time.monotonic() - started) * 1000, 2)
+                    if started is not None
+                    else None
                 )
+                self._tool_count += 1
+                self._tool_error_count += int(is_error)
+                self._tool_duration_ms += duration_ms or 0.0
+                if is_error or duration_ms is None or duration_ms >= 1000:
+                    logfire.log(
+                        "error" if is_error else "info",
+                        "pi tool execution",
+                        attributes={
+                            "task_id": context[0],
+                            "conversation_id": context[1],
+                            "model": self.settings.model,
+                            "tool": tool_name,
+                            "is_error": is_error,
+                            "duration_ms": duration_ms,
+                        },
+                    )
             emit(
                 EventKind.OBSERVATION,
                 {
